@@ -1,0 +1,51 @@
+{
+  "name": "vjtools",
+  "version": "1.0.0",
+  "description": "桌面端项目启动控制台",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,green \"pnpm renderer:dev\" \"pnpm wait:renderer && electron . --inspect\"",
+    "wait:renderer": "wait-on tcp:5173",
+    "build": "pnpm renderer:build && electron-builder",
+    "build:mac": "pnpm renderer:build && electron-builder --mac",
+    "renderer:dev": "pnpm --dir renderer dev",
+    "renderer:build": "pnpm --dir renderer build"
+  },
+  "keywords": [],
+  "author": "xieyuteng",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "electron": "40.6.1",
+    "electron-builder": "26.8.1",
+    "wait-on": "^8.0.5"
+  },
+  "dependencies": {},
+  "build": {
+    "appId": "com.xieyuteng.vjtools",
+    "productName": "vjtools",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "renderer/dist/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "title": "vjtools"
+    }
+  }
+}

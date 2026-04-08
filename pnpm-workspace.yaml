@@ -1,0 +1,6 @@
+packages:
+  - "renderer"
+
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
