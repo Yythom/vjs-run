@@ -34,6 +34,12 @@ body {
   -webkit-app-region: no-drag;
 }
 
+[data-sonner-toaster] {
+  -webkit-app-region: no-drag;
+  z-index: 99999 !important;
+  pointer-events: auto !important;
+}
+
 .sidebar-scroll::-webkit-scrollbar {
   width: 4px;
 }

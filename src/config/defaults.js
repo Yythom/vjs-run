@@ -18,6 +18,9 @@ export const DEFAULT_CONFIG = {
 
   // mock 相关
   mockSpecPath: "",
+  // swagger 源服务器地址（如 http://xxx/t2）。在设置页点击「生成 OpenAPI JSON」
+  // 时，从该服务器拉取 swagger 文档写入 mockSpecPath
+  mockSwaggerServer: "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com",
   mockHost: "127.0.0.1",
   mockPort: 3002,
   mockServiceAddress: "",
@@ -26,6 +29,7 @@ export const DEFAULT_CONFIG = {
   mockRulesFile: path.join(BUILTIN_MOCK_ASSETS_DIR, "mock-rules.json"),
   mockBackendBaseUrl: "",
   mockAll: false,
+  mockVjToken: "",
 
   // UI 偏好
   sidebarWidth: 248,

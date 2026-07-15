@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { createPortal } from "react-dom";
 import { Route, Routes, useLocation } from "react-router";
 import { Toaster } from "sonner";
 import TitleBar from "./components/title-bar";
@@ -37,7 +38,7 @@ function MainRoutes() {
       <Route index element={<ProjectDashboard />} />
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
-      
+
       {/* 页面化的工具与配置页 */}
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/env-check" element={<EnvCheckPage />} />
@@ -91,15 +92,38 @@ export default function AppShell() {
         <ModalRoutes />
       </Suspense>
 
-      <Toaster
-        position="bottom-right"
-        richColors
-        closeButton
-        duration={3000}
-        toastOptions={{
-          style: { fontFamily: "inherit", fontSize: 13 },
-        }}
-      />
+      {createPortal(
+        <Toaster
+          position="top-center"
+          richColors
+          closeButton
+          duration={200000}
+          visibleToasts={1}
+          // style={{
+          //   zIndex: 99999,
+          //   WebkitAppRegion: "no-drag",
+          //   pointerEvents: "auto",
+          // }}
+          toastOptions={{
+            style: {
+              fontFamily: "inherit",
+              fontSize: "12px",
+              padding: "8px 28px 8px 12px",
+              minHeight: "40px",
+              position: "relative",
+            },
+            closeButton: {
+              position: "absolute",
+              top: "50%",
+              right: "8px",
+              transform: "translateY(-50%)",
+              pointerEvents: "auto",
+              zIndex: 99,
+            },
+          }}
+        />,
+        document.body,
+      )}
     </div>
   );
 }

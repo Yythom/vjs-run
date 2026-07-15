@@ -97,6 +97,7 @@ export function normalizeConfig(raw = {}) {
   return {
     frontendProjectGroups,
     mockSpecPath: String(raw.mockSpecPath || "").trim(),
+    mockSwaggerServer: String(raw.mockSwaggerServer || "").trim(),
     mockHost: raw.mockHost || DEFAULT_CONFIG.mockHost,
     mockPort: Number(raw.mockPort || DEFAULT_CONFIG.mockPort),
     mockServiceAddress:
@@ -111,6 +112,7 @@ export function normalizeConfig(raw = {}) {
     ),
     mockAll:
       raw.mockAll === undefined ? DEFAULT_CONFIG.mockAll : Boolean(raw.mockAll),
+    mockVjToken: String(raw.mockVjToken || "").trim(),
     sidebarWidth: normalizeSidebarWidth(raw.sidebarWidth),
     watchedPorts,
   };

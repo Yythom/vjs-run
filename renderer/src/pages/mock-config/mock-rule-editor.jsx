@@ -5,7 +5,9 @@ import { z } from "zod";
 import clsx from "clsx";
 import JsonEditor from "../../components/json-editor";
 import RecommendMockModal from "./recommend-mock-modal";
+import BackendCurlModal from "./backend-curl-modal";
 import { METHODS, prettyJson } from "./utils";
+import useModalNav from "../../hooks/use-modal-nav";
 
 const ruleSchema = z.object({
   enabled: z.boolean(),
@@ -98,6 +100,7 @@ export default function MockRuleEditor({
   route,
   hasSavedRule,
   mockBaseUrl,
+  backendBaseUrl,
   pendingCount,
   onSubmit,
   onDelete,
@@ -109,7 +112,6 @@ export default function MockRuleEditor({
     control,
     handleSubmit,
     setValue,
-    getValues,
     reset,
     watch,
     formState: { errors, isSubmitting },
@@ -127,6 +129,8 @@ export default function MockRuleEditor({
   }
 
   const [recommendOpen, setRecommendOpen] = useState(false);
+  const [backendCurlOpen, setBackendCurlOpen] = useState(false);
+  const openModal = useModalNav();
   const path = watch("path");
   const method = watch("method");
 
@@ -134,15 +138,7 @@ export default function MockRuleEditor({
     await onSubmit(valuesToRule(values));
   });
 
-  const handleFormat = () => {
-    const current = getValues("responseText");
-    try {
-      const formatted = JSON.stringify(JSON.parse(current || "{}"), null, 2);
-      setValue("responseText", formatted, { shouldDirty: true });
-    } catch {
-      // 校验错误由 zod resolver 在提交时报告；这里格式化失败保持原样
-    }
-  };
+
 
   const openRecommend = () => {
     if (!path.trim()) return;
@@ -231,11 +227,14 @@ export default function MockRuleEditor({
               </button>
               <button
                 type="button"
-                onClick={handleFormat}
-                className="px-2 py-1 rounded-md border text-[11px] bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900"
+                onClick={() => setBackendCurlOpen(true)}
+                disabled={!route || !path.trim()}
+                title="使用推荐数据向配置的后端代理地址执行 curl"
+                className="px-2 py-1 rounded-md border text-[11px] bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                格式化
+                后端调试
               </button>
+
               <div className="ml-auto flex gap-2">
                 <button
                   type="button"
@@ -307,6 +306,19 @@ export default function MockRuleEditor({
         onClose={() => setRecommendOpen(false)}
         onApply={applyRecommend}
       />
+      {route && (
+        <BackendCurlModal
+          open={backendCurlOpen}
+          method={(method || route.method).toUpperCase()}
+          path={path.trim()}
+          backendBaseUrl={backendBaseUrl}
+          onClose={() => setBackendCurlOpen(false)}
+          onViewLogs={() => {
+            setBackendCurlOpen(false);
+            openModal("/mock-service");
+          }}
+        />
+      )}
     </>
   );
 }

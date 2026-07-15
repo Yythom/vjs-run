@@ -40,18 +40,45 @@ export default function Modal({
         />
         <Dialog.Content
           aria-describedby={undefined}
+          onPointerDownOutside={(e) => {
+            const target = e.target;
+            if (target && target.closest("[data-sonner-toaster]")) {
+              e.preventDefault();
+            }
+          }}
+          onInteractOutside={(e) => {
+            const target = e.target;
+            if (target && target.closest("[data-sonner-toaster]")) {
+              e.preventDefault();
+            }
+          }}
           className={clsx(
             "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-panel border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden focus:outline-none",
             className,
           )}
           onClick={(e) => e.stopPropagation()}
         >
-          {/* a11y 必备标题：Radix 要求 Dialog 必须有 Title，不传会 warning */}
-          {srOnly ? (
-            <Dialog.Title className="sr-only">{title}</Dialog.Title>
+          {/* 统一的 Modal 头部：标题与关闭按钮在一行 */}
+          {!srOnly ? (
+            <div className="shrink-0 flex items-center justify-between px-5 py-3.5 border-b border-border bg-slate-50/50">
+              <Dialog.Title className="text-sm font-semibold text-slate-800">
+                {title}
+              </Dialog.Title>
+              {onClose && (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="text-slate-400 hover:text-slate-700 transition-colors text-base leading-none cursor-pointer w-6 h-6 rounded-full hover:bg-slate-200/60 flex items-center justify-center"
+                  aria-label="关闭弹窗"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
           ) : (
-            <Dialog.Title>{title}</Dialog.Title>
+            <Dialog.Title className="sr-only">{title}</Dialog.Title>
           )}
+
           {children}
         </Dialog.Content>
       </Dialog.Portal>

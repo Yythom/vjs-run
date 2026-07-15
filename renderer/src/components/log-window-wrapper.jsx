@@ -54,6 +54,7 @@ export default function LogWindowWrapper({
         open
         onClose={handleClose}
         title={title}
+        srOnly={false}
         className={modalClassName}
       >
         <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">

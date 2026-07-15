@@ -4,9 +4,11 @@ import { loadConfig, saveConfig } from "../utils/config-api";
 const DEFAULT_APP_CONFIG = {
   frontendProjectGroups: [],
   mockSpecPath: "",
+  mockSwaggerServer: "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com",
   mockHost: "127.0.0.1",
   mockPort: 3002,
   mockServiceAddress: "",
+  mockVjToken: "",
   sidebarWidth: 248,
   watchedPorts: [3000, 3001, 5173, 3002],
 };

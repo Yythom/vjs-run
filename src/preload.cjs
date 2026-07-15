@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   stopMock: () => ipcRenderer.invoke("stop-mock"),
 
+  // 从 swagger 源服务器生成 OpenAPI JSON 到 mockSpecPath 目录（独立操作）
+  generateMockSpec: () => ipcRenderer.invoke("generate-mock-spec"),
+
   getMockRoutes: () => ipcRenderer.invoke("get-mock-routes"),
 
   getMockRules: () => ipcRenderer.invoke("get-mock-rules"),
@@ -47,6 +50,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 根据 swagger schema 生成一份推荐 mock JSON（不写盘，仅返回供用户复制）
   previewMockResponse: ({ method, path }) =>
     ipcRenderer.invoke("preview-mock-response", { method, path }),
+
+  // 向设置页配置的后端地址执行当前 OpenAPI 接口的 curl 调试请求
+  executeMockBackendCurl: ({ method, path, params, body }) =>
+    ipcRenderer.invoke("execute-mock-backend-curl", { method, path, params, body }),
 
   // 请求历史：全量拉取 / 清空
   getMockHistory: () => ipcRenderer.invoke("get-mock-history"),

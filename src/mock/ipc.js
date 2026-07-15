@@ -3,9 +3,11 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { shell } from "electron";
 import { ipcSafe } from "../ipc/safe.js";
 import { getConfig } from "../config/store.js";
+import { sendLog } from "../ui-channel.js";
 import {
   buildRoutes,
   loadMockRules,
@@ -16,6 +18,7 @@ import { mockFromSchema } from "./data.js";
 import {
   MOCK_ID,
   ensureMockRulesDir,
+  generateMockSpecs,
   getMockRouteMetas,
   normalizeRulesForSave,
   startSwaggerMock,
@@ -65,6 +68,54 @@ function findRouteForPreview(routes, method, targetPath) {
   );
 }
 
+function runCurl(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    child.stdout.on("data", (chunk) => { output += chunk; });
+    child.stderr.on("data", (chunk) => { output += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(output);
+      else reject(new Error(output || `curl exited with code ${code}`));
+    });
+  });
+}
+
+function getBackendUrl(baseUrl, requestPath, params = {}) {
+  const base = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const path = String(requestPath || "").trim();
+  if (!base) throw new Error("未配置后端代理地址，请先在服务配置中填写");
+  if (!/^https?:\/\//i.test(base)) throw new Error("后端代理地址必须以 http:// 或 https:// 开头");
+  if (!path.startsWith("/")) throw new Error("path 必须以 / 开头");
+  if (!params || Array.isArray(params) || typeof params !== "object") {
+    throw new Error("Query Params 必须是对象");
+  }
+  const url = new URL(`${base}${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    const values = Array.isArray(value) ? value : [value];
+    for (const item of values) {
+      if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+    }
+  }
+  return url.toString();
+}
+
+function getRecommendedQueryParams(route) {
+  return (route.operation.parameters || []).reduce((params, parameter) => {
+    if (parameter?.in !== "query" || !parameter.name) return params;
+    const example =
+      parameter.example ??
+      Object.values(parameter.examples || {})[0]?.value ??
+      mockFromSchema(parameter.schema || {}, route.spec, {
+        fieldName: parameter.name,
+      });
+    if (example !== undefined) params[parameter.name] = example;
+    return params;
+  }, {});
+}
+
 export function registerMockIpc() {
   ipcSafe("start-mock", async () => {
     const config = getConfig();
@@ -77,6 +128,38 @@ export function registerMockIpc() {
   });
 
   ipcSafe("stop-mock", () => stopMockService(MOCK_ID));
+
+  // 独立的「生成 OpenAPI JSON」操作：从 swagger 源服务器拉文档写入 mockSpecPath
+  ipcSafe("generate-mock-spec", () => generateMockSpecs(MOCK_ID));
+
+  ipcSafe("execute-mock-backend-curl", async (_, payload = {}) => {
+    const method = String(payload.method || "GET").toUpperCase();
+    const requestPath = String(payload.path || "").trim();
+    const body = String(payload.body || "");
+    const config = getConfig();
+    const url = getBackendUrl(config.mockBackendBaseUrl, requestPath, payload.params);
+    const args = ["--silent", "--show-error", "--max-time", "30", "-X", method, url];
+    if (!["GET", "HEAD"].includes(method) && body) {
+      JSON.parse(body);
+      args.push("-H", "Content-Type: application/json", "--data-binary", body);
+    }
+
+    const vjToken = String(config.mockVjToken || "").trim();
+    if (vjToken) {
+      args.push("-H", `Authorization: ${vjToken}`);
+      args.push("-H", `Cookie: VJTOKEN=${vjToken}`);
+    }
+
+    sendLog(MOCK_ID, `\x1b[35m▶ curl ${method} ${url}\x1b[0m\n`);
+    try {
+      const output = await runCurl(args);
+      sendLog(MOCK_ID, `\x1b[32m✔ curl 完成\x1b[0m\n${output}\n`);
+      return { output };
+    } catch (err) {
+      sendLog(MOCK_ID, `\x1b[31m✗ curl 失败: ${err.message}\x1b[0m\n`);
+      throw err;
+    }
+  });
 
   ipcSafe(
     "get-mock-routes",
@@ -192,6 +275,7 @@ export function registerMockIpc() {
       : sample;
     return {
       json,
+      queryParams: getRecommendedQueryParams(route),
       method: route.method.toUpperCase(),
       path: route.fullPath,
       status: responseKey,

@@ -34,6 +34,12 @@ process.on("unhandledRejection", (reason) =>
   console.error("[unhandledRejection]", reason),
 );
 
+// e2e 测试隔离：指定后 userData（config.json、mock-assets 等）落到独立目录，
+// 不污染真实配置。必须在 app.whenReady 之前设置。
+if (process.env.VJTOOLS_USER_DATA_DIR) {
+  app.setPath("userData", process.env.VJTOOLS_USER_DATA_DIR);
+}
+
 // ─── 启动前注册 ──────────────────────────────────────────────────────────────
 // contextMenu 和 IPC handler 都是「注册式」API：只挂监听，被触发时才执行，
 // 此时 store 已经初始化好（IPC 触发必在 whenReady 之后，因为窗口要先出来）。

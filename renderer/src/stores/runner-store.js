@@ -89,6 +89,29 @@ export const useRunnerStore = create((set, get) => ({
     );
   },
 
+  /** 独立操作：从 swagger 源服务器生成 OpenAPI JSON 到 mockSpecPath 目录 */
+  generatingMockSpec: false,
+  generateMockSpec: async () => {
+    if (get().generatingMockSpec) return;
+    set({ generatingMockSpec: true });
+    try {
+      const result = await window.electronAPI.generateMockSpec();
+      if (result.success) {
+        const failedNote = result.failed?.length
+          ? `（失败: ${result.failed.map((f) => f.type).join(", ")}）`
+          : "";
+        showToast(
+          `OpenAPI JSON 已生成: ${(result.generated || []).join(", ")}${failedNote}`,
+          result.failed?.length ? "warning" : "success",
+        );
+      } else {
+        showToast(`生成失败: ${result.error}`, "error");
+      }
+    } finally {
+      set({ generatingMockSpec: false });
+    }
+  },
+
   refreshProjects: async () => {
     const projectData = await window.electronAPI.getProjects();
     const nextProjects = projectData || [];
@@ -151,4 +174,7 @@ export const stopProject = (id) => useRunnerStore.getState().stopProject(id);
 export const runDebugCommand = (id) => useRunnerStore.getState().runDebugCommand(id);
 export const startMock = () => useRunnerStore.getState().startMock();
 export const stopMock = () => useRunnerStore.getState().stopMock();
+export const generateMockSpec = () => useRunnerStore.getState().generateMockSpec();
+export const useGeneratingMockSpec = () =>
+  useRunnerStore((s) => s.generatingMockSpec);
 export const refreshProjects = () => useRunnerStore.getState().refreshProjects();

@@ -16,13 +16,22 @@ function userDataDir() {
   return app.getPath("userData");
 }
 
-// Chromium 自己的缓存目录：删除后会自动重建，清理安全。
-const CACHE_DIRS = [
+// Chromium 及应用的相关缓存项（目录或文件）：删除后会自动重建或仅影响临时状态，清理安全。
+const CACHE_ITEMS = [
   "Cache",
   "Code Cache",
   "GPUCache",
   "DawnWebGPUCache",
   "DawnGraphiteCache",
+  "Shared Dictionary",
+  "blob_storage",
+  "Local Storage",
+  "Session Storage",
+  "Cookies",
+  "Cookies-journal",
+  "Network Persistent State",
+  "DIPS",
+  "DIPS-wal",
 ];
 
 function dirSize(dir) {
@@ -44,9 +53,21 @@ function dirSize(dir) {
   return total;
 }
 
+function getItemSize(name) {
+  const fullPath = path.join(userDataDir(), name);
+  try {
+    const stat = fs.statSync(fullPath);
+    if (stat.isDirectory()) {
+      return dirSize(fullPath);
+    }
+    return stat.size;
+  } catch {
+    return 0;
+  }
+}
+
 function appCacheBytes() {
-  const base = userDataDir();
-  return CACHE_DIRS.reduce((sum, d) => sum + dirSize(path.join(base, d)), 0);
+  return CACHE_ITEMS.reduce((sum, name) => sum + getItemSize(name), 0);
 }
 
 function mockAssetsBytes() {
@@ -57,12 +78,36 @@ async function clearAppCache() {
   // 清理前的体积作为「释放量」估值：clearCache 是异步删盘，事后立刻量大小不准
   const before = appCacheBytes();
   const ses = session.defaultSession;
+  
+  // 1. 清理 Chromium 的网络 HTTP 缓存和 V8 代码缓存
   await ses.clearCache();
   try {
     await ses.clearCodeCaches({ urls: [] });
   } catch {
     // 个别 Electron 版本无此 API，HTTP 缓存已清即可
   }
+
+  // 2. 清理 Chromium 存储数据（LocalStorage、SessionStorage、Cookies、IndexedDB 等）
+  try {
+    await ses.clearStorageData();
+  } catch {
+    // 忽略异常继续
+  }
+
+  // 3. 针对某些本地文件在运行期间可能被锁的，在安全可删的缓存文件上尝试进行物理强制删除，进一步释盘
+  const forceDeleteList = [
+    "DIPS",
+    "DIPS-wal",
+    "Cookies-journal",
+  ];
+  for (const name of forceDeleteList) {
+    try {
+      fs.rmSync(path.join(userDataDir(), name), { force: true });
+    } catch {
+      // 忽略锁文件报错
+    }
+  }
+
   return before;
 }
 

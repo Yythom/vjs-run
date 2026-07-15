@@ -77,7 +77,6 @@ export default function ProjectConsole() {
 
         return (
           <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
-            {/* 项目 Tab 切换栏 */}
             <div className="shrink-0 h-9 bg-slate-100/60 border-b border-border flex items-center px-2.5 overflow-x-auto select-none gap-1">
               {openedIds.map((tabId) => {
                 const tabProj = projects.find((p) => p.id === tabId);
@@ -97,7 +96,7 @@ export default function ProjectConsole() {
               })}
 
               {/* 右侧窗口与关闭动作按钮 */}
-              {wrapperIsModal && (
+              {wrapperIsModal ? (
                 <button
                   type="button"
                   onClick={handleOpenWindow}
@@ -106,24 +105,23 @@ export default function ProjectConsole() {
                 >
                   🖥️ 新开窗口
                 </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleClose}
+                  className="ml-auto mr-1.5 text-slate-400 hover:text-slate-700 text-xs font-semibold leading-none py-1.5 px-2.5 rounded-md hover:bg-slate-200/50 transition-colors shrink-0 cursor-pointer"
+                  aria-label="关闭日志控制台"
+                >
+                  ✕ 关闭
+                </button>
               )}
-              <button
-                type="button"
-                onClick={handleClose}
-                className={clsx(
-                  "text-slate-400 hover:text-slate-700 text-xs font-semibold leading-none py-1.5 px-2.5 rounded-md hover:bg-slate-200/50 transition-colors shrink-0 cursor-pointer",
-                  !wrapperIsModal ? "ml-auto mr-1.5" : "mr-1.5"
-                )}
-                aria-label="关闭日志控制台"
-              >
-                ✕ 关闭
-              </button>
             </div>
 
             {/* 下方的详情面板 */}
             <DetailPanel
               paneKey={id}
               detail={detail}
+              isModal={wrapperIsModal}
               primaryAction={
                 isActive
                   ? { label: "⏹ 停止", variant: "stop", onClick: () => stopProject(id) }

@@ -328,6 +328,7 @@ export default function MockConfigPage() {
           route={selectedItem?.route}
           hasSavedRule={hasSavedRule}
           mockBaseUrl={mockBaseUrl}
+          backendBaseUrl={config?.mockBackendBaseUrl}
           pendingCount={pending.pendingCount}
           onSubmit={saveRule}
           onDelete={deleteRule}
