@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "renderer",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "renderer", "dev"],
+      "port": 5100
+    }
+  ]
+}

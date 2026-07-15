@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 @theme {
-  --color-base: #0f172a;
-  --color-panel: #1e293b;
-  --color-card: #273449;
-  --color-hover: #2f4060;
-  --color-border: #334155;
+  --color-base: #ffffff;
+  --color-panel: #f8fafc;
+  --color-card: #f1f5f9;
+  --color-hover: #e2e8f0;
+  --color-border: #e2e8f0;
   --font-mono:
     "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
 }
@@ -41,7 +41,7 @@ body {
   background: transparent;
 }
 .sidebar-scroll::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #cbd5e1;
   border-radius: 2px;
 }
 
@@ -52,7 +52,7 @@ body {
   background: transparent;
 }
 #log-output::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #cbd5e1;
   border-radius: 3px;
 }
 
@@ -87,53 +87,54 @@ body {
   animation: slideIn 0.18s ease;
 }
 
+/* 浅底终端：所有 ANSI 颜色调深保证可读，white/bright-white 翻到深灰避免消失 */
 .ansi-black {
-  color: #1e293b;
+  color: #0f172a;
 }
 .ansi-red {
-  color: #f87171;
+  color: #dc2626;
 }
 .ansi-green {
-  color: #4ade80;
+  color: #16a34a;
 }
 .ansi-yellow {
-  color: #fbbf24;
+  color: #ca8a04;
 }
 .ansi-blue {
-  color: #60a5fa;
+  color: #2563eb;
 }
 .ansi-magenta {
-  color: #c084fc;
+  color: #9333ea;
 }
 .ansi-cyan {
-  color: #38bdf8;
+  color: #0891b2;
 }
 .ansi-white {
-  color: #e2e8f0;
-}
-.ansi-bright-black {
   color: #475569;
 }
+.ansi-bright-black {
+  color: #334155;
+}
 .ansi-bright-red {
-  color: #fca5a5;
+  color: #ef4444;
 }
 .ansi-bright-green {
-  color: #86efac;
+  color: #22c55e;
 }
 .ansi-bright-yellow {
-  color: #fde68a;
+  color: #eab308;
 }
 .ansi-bright-blue {
-  color: #93c5fd;
+  color: #3b82f6;
 }
 .ansi-bright-magenta {
-  color: #d8b4fe;
+  color: #a855f7;
 }
 .ansi-bright-cyan {
-  color: #67e8f9;
+  color: #06b6d4;
 }
 .ansi-bright-white {
-  color: #f8fafc;
+  color: #1e293b;
 }
 .ansi-bold {
   font-weight: 700;
@@ -188,41 +189,38 @@ body {
   opacity: 1;
 }
 .project-item.selected .project-name {
-  color: #38bdf8;
-}
-.project-item.proxy-selected .project-name {
-  color: #a78bfa;
+  color: #0284c7;
 }
 
 .status-badge.running {
-  background: rgba(74, 222, 128, 0.12);
-  color: #4ade80;
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
 }
 .status-badge.starting {
-  background: rgba(251, 191, 36, 0.12);
-  color: #fbbf24;
+  background: rgba(234, 179, 8, 0.18);
+  color: #a16207;
 }
 .status-badge.error {
-  background: rgba(248, 113, 113, 0.12);
-  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+  color: #b91c1c;
 }
 .status-badge.stopped {
-  background: rgba(100, 116, 139, 0.12);
-  color: #64748b;
+  background: rgba(100, 116, 139, 0.15);
+  color: #475569;
 }
-.status-badge.proxy-running {
-  background: rgba(167, 139, 250, 0.12);
-  color: #a78bfa;
+.status-badge.mock-running {
+  background: rgba(139, 92, 246, 0.15);
+  color: #6d28d9;
 }
 
-.proxy-env-badge.active {
-  background: rgba(167, 139, 250, 0.12);
-  border-color: rgba(167, 139, 250, 0.4);
-  color: #a78bfa;
+.mock-env-badge.active {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.45);
+  color: #6d28d9;
 }
 
 .env-chip.selected {
-  background: rgba(167, 139, 250, 0.15);
-  border-color: rgba(167, 139, 250, 0.5);
-  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.5);
+  color: #6d28d9;
 }

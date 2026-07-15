@@ -1,0 +1,48 @@
+name: Build macOS installer
+
+# 在 macOS runner 上打 dmg。本项目无原生二进制依赖，
+# electron-builder 可在 arm64 runner 上同时产出 arm64 / x64 两个 dmg
+# （架构在 package.json 的 build.mac.target 里配置）。
+on:
+  # 手动触发：Actions 页面点 "Run workflow"
+  workflow_dispatch:
+  # 打 tag（如 v1.0.0）时自动出包
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # --publish never：CI 上 electron-builder 检测到 tag 会隐式尝试发布
+      # 到 GitHub Releases，没有 GH_TOKEN 会直接报错；这里只出包不发布。
+      - name: Build macOS dmg
+        run: pnpm build:mac --publish never
+
+      - name: Upload dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: vjtools-mac-dmg
+          path: |
+            dist/*.dmg
+            dist/*.dmg.blockmap
+          if-no-files-found: error

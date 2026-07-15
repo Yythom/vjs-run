@@ -2,26 +2,40 @@
   "name": "vjtools",
   "version": "1.0.0",
   "description": "桌面端项目启动控制台",
+  "type": "module",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron .",
-    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,green \"pnpm renderer:dev\" \"pnpm wait:renderer && electron . --inspect\"",
-    "wait:renderer": "wait-on tcp:5173",
+    "start": "pnpm renderer:build && electron .",
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,green \"pnpm renderer:dev\" \"pnpm wait:renderer && VJTOOLS_RENDERER_DEV=1 electron . --inspect\"",
+    "wait:renderer": "wait-on tcp:5100",
     "build": "pnpm renderer:build && electron-builder",
     "build:mac": "pnpm renderer:build && electron-builder --mac",
     "renderer:dev": "pnpm --dir renderer dev",
-    "renderer:build": "pnpm --dir renderer build"
+    "renderer:build": "pnpm --dir renderer build",
+    "lint": "eslint \"src/**/*.{js,cjs}\"",
+    "lint:all": "pnpm lint && pnpm --dir renderer lint"
   },
   "keywords": [],
   "author": "xieyuteng",
   "license": "ISC",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "concurrently": "^9.2.1",
     "electron": "40.6.1",
     "electron-builder": "26.8.1",
+    "eslint": "^10.4.0",
     "wait-on": "^8.0.5"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@uiw/codemirror-theme-github": "^4.25.10",
+    "chokidar": "^5.0.0",
+    "cookie": "^1.1.1",
+    "cors": "^2.8.6",
+    "electron-context-menu": "^4.1.2",
+    "electron-store": "^8.2.0",
+    "electron-window-state": "^5.0.3",
+    "openapi-sampler": "^1.7.3"
+  },
   "build": {
     "appId": "com.xieyuteng.vjtools",
     "productName": "vjtools",
