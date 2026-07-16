@@ -5,7 +5,7 @@
 //   - dev 模式下跳过（autoUpdater.checkForUpdates 会抛错，因为没有 app-update.yml）。
 //   - 所有升级状态通过 IPC 推送给 renderer，由 renderer 展示 toast / 进度。
 
-import { app } from "electron";
+import { app, shell } from "electron";
 import pkg from "electron-updater";
 const { autoUpdater } = pkg;
 import { sendToAllWindows } from "../ui-channel.js";
@@ -74,10 +74,14 @@ export function checkForUpdates() {
   return autoUpdater.checkForUpdates();
 }
 
+// 针对未签名 macOS 应用：不走热更新，直接调用系统默认浏览器打开 GitHub 下载页面
 export function downloadUpdate() {
-  return autoUpdater.downloadUpdate();
+  // 也可以根据 package.json 中的配置动态获取，这里直接使用 GitHub Releases 地址
+  shell.openExternal("https://github.com/Yythom/vjs-run/releases");
+  return Promise.resolve(null);
 }
 
 export function quitAndInstall() {
-  autoUpdater.quitAndInstall();
+  // 未签名应用无需 quitAndInstall
 }
+

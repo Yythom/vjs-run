@@ -37,8 +37,11 @@ export default function SettingsModal() {
           toast.info(`发现新版本 v${data.version}`, {
             duration: Infinity,
             action: {
-              label: "下载更新",
-              onClick: () => window.electronAPI.downloadUpdate(),
+              label: "去下载",
+              onClick: (e) => {
+                window.electronAPI.downloadUpdate();
+                toast.dismiss(e.target);
+              },
             },
           });
           setChecking(false);
@@ -49,13 +52,7 @@ export default function SettingsModal() {
           setChecking(false);
           break;
         case "downloaded":
-          toast.success(`v${data.version} 下载完成`, {
-            duration: Infinity,
-            action: {
-              label: "立即重启",
-              onClick: () => window.electronAPI.quitAndInstall(),
-            },
-          });
+          // 浏览器下载模式下主进程不会触发 downloaded 事件，此处保留为空或移除
           setChecking(false);
           break;
         case "error":
