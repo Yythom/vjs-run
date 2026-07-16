@@ -19,7 +19,7 @@ export function removeWindow(win) {
   windows.delete(win);
 }
 
-function send(channel, payload) {
+export function sendToAllWindows(channel, payload) {
   for (const win of windows) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
@@ -35,19 +35,19 @@ export function sendLog(projectId, data) {
   } else {
     appendLog(projectId, data);
   }
-  send("process-log", { projectId, data });
+  sendToAllWindows("process-log", { projectId, data });
 }
 
 export function sendStatus(projectId, status) {
-  send("process-status", { projectId, status });
+  sendToAllWindows("process-status", { projectId, status });
 }
 
 // Mock server 每处理完一个请求推一条结构化记录（请求历史面板实时更新）
 export function sendMockRequest(entry) {
-  send("mock-request", entry);
+  sendToAllWindows("mock-request", entry);
 }
 
 // 录制状态变化（开始/停止/新录到一条）推给渲染层
 export function sendMockRecording(status) {
-  send("mock-recording", status);
+  sendToAllWindows("mock-recording", status);
 }

@@ -180,4 +180,29 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("mock-recording", handler);
     return () => ipcRenderer.removeListener("mock-recording", handler);
   },
+
+  // ── 自动升级 ──────────────────────────────────────────────────────────────────
+
+  // 手动检查更新
+  checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+
+  // 用户确认后开始下载
+  downloadUpdate: () => ipcRenderer.invoke("download-update"),
+
+  // 下载完成后退出并安装
+  quitAndInstall: () => ipcRenderer.invoke("quit-and-install"),
+
+  // 监听升级状态推送（checking / available / not-available / downloaded / error）
+  onUpdateStatus: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("update-status", handler);
+    return () => ipcRenderer.removeListener("update-status", handler);
+  },
+
+  // 监听下载进度推送（percent / bytesPerSecond / transferred / total）
+  onUpdateProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("update-progress", handler);
+    return () => ipcRenderer.removeListener("update-progress", handler);
+  },
 });

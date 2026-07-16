@@ -7,6 +7,7 @@ import { registerMockIpc } from "../mock/ipc.js";
 import { registerCleanIpc } from "./clean.js";
 import { registerDiagnosticsIpc } from "./diagnostics.js";
 import { registerCleanupIpc } from "./cleanup.js";
+import { registerUpdaterIpc } from "./updater.js";
 
 export function registerAllIpc() {
   registerConfigIpc();
@@ -15,4 +16,5 @@ export function registerAllIpc() {
   registerCleanIpc();
   registerDiagnosticsIpc();
   registerCleanupIpc();
+  registerUpdaterIpc();
 }

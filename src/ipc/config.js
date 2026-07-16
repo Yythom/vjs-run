@@ -1,7 +1,7 @@
 // 配置读写 IPC：get-config 直接吐 live config，set-config 合并保存。
 // set-config 还兼任：改了 mock 关键字段时自动重启 mock 服务。
 
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import { ipcSafe } from "./safe.js";
 import { getConfig, saveConfig } from "../config/store.js";
 import { sendLog } from "../ui-channel.js";
@@ -24,7 +24,10 @@ const MOCK_FIELDS_REQUIRING_RESTART = [
 ];
 
 export function registerConfigIpc() {
-  ipcMain.handle("get-config", () => getConfig());
+  ipcMain.handle("get-config", () => ({
+    ...getConfig(),
+    _appVersion: app.getVersion(),
+  }));
 
   ipcSafe("set-config", async (_, partial) => {
     if (partial.frontendProjectGroups) {

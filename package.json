@@ -1,6 +1,6 @@
 {
   "name": "vjtools",
-  "version": "1.0.0",
+  "version": "0.0.4",
   "description": "桌面端项目启动控制台",
   "type": "module",
   "main": "src/main.js",
@@ -10,6 +10,7 @@
     "wait:renderer": "wait-on tcp:5100",
     "build": "pnpm renderer:build && electron-builder",
     "build:mac": "pnpm renderer:build && electron-builder --mac",
+    "release:mac": "npm version patch --no-git-tag-version && pnpm renderer:build && electron-builder --mac --publish always",
     "renderer:dev": "pnpm --dir renderer dev",
     "renderer:build": "pnpm --dir renderer build",
     "lint": "eslint \"src/**/*.{js,cjs}\"",
@@ -33,6 +34,7 @@
     "cors": "^2.8.6",
     "electron-context-menu": "^4.1.2",
     "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.9",
     "electron-window-state": "^5.0.3",
     "jieba-wasm": "^2.4.0",
     "openapi-sampler": "^1.7.3"
@@ -47,14 +49,24 @@
       "src/**/*",
       "renderer/dist/**/*"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "Yythom",
+      "repo": "vjs-run"
+    },
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
           ]
         }
       ]
