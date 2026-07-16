@@ -37,14 +37,17 @@ export default function SettingsModal() {
           toast.info(`发现新版本 v${data.version}`, {
             duration: Infinity,
             action: {
-              label: "去下载",
-              onClick: (e) => {
+              label: "下载更新",
+              onClick: () => {
                 window.electronAPI.downloadUpdate();
-                toast.dismiss(e.target);
               },
             },
           });
           setChecking(false);
+          break;
+        case "downloading":
+          toast.dismiss(toastIdRef.current);
+          toastIdRef.current = toast.loading("正在下载更新… 0%");
           break;
         case "not-available":
           toast.dismiss(toastIdRef.current);
@@ -52,7 +55,8 @@ export default function SettingsModal() {
           setChecking(false);
           break;
         case "downloaded":
-          // 浏览器下载模式下主进程不会触发 downloaded 事件，此处保留为空或移除
+          toast.dismiss(toastIdRef.current);
+          toast.success("下载完成！已自动为您打开安装包，请拖动覆盖安装。");
           setChecking(false);
           break;
         case "error":
