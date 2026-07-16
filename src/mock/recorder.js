@@ -26,7 +26,7 @@ function sanitizeSceneName(rawName) {
   return name;
 }
 
-function sceneFilePath(scenesDir, name) {
+export function sceneFilePath(scenesDir, name) {
   return path.join(scenesDir, `${sanitizeSceneName(name)}.json`);
 }
 

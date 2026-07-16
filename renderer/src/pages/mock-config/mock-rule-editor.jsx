@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -101,11 +101,9 @@ export default function MockRuleEditor({
   hasSavedRule,
   mockBaseUrl,
   backendBaseUrl,
-  pendingCount,
   onSubmit,
   onDelete,
-  onSavePending,
-  onDiscardPending,
+  onDirtyChange,
 }) {
   const {
     register,
@@ -114,7 +112,7 @@ export default function MockRuleEditor({
     setValue,
     reset,
     watch,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, isDirty },
   } = useForm({
     resolver: zodResolver(ruleSchema),
     defaultValues: ruleToValues(rule, route),
@@ -127,6 +125,13 @@ export default function MockRuleEditor({
     setPrevRule(rule);
     reset(ruleToValues(rule, route));
   }
+
+  // 把「表单有未保存改动」上报给父组件，用于切换选中项时拦截丢失。
+  // 卸载时补一次 false，避免残留的 dirty 状态误拦下一次切换。
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const [recommendOpen, setRecommendOpen] = useState(false);
   const [backendCurlOpen, setBackendCurlOpen] = useState(false);
@@ -271,31 +276,8 @@ export default function MockRuleEditor({
 
         <div className="shrink-0 border-t border-border px-4 py-3 flex items-center gap-2">
           <span className="text-[11px] text-slate-500">
-            {hasSavedRule ? "已保存" : "未保存"}
+            {!hasSavedRule ? "未保存" : isDirty ? "有未保存改动" : "已保存"}
           </span>
-
-          {pendingCount > 0 && (
-            <>
-              <span className="text-slate-300">·</span>
-              <span className="text-[11px] text-amber-700 font-medium">
-                {pendingCount} 项开关待保存
-              </span>
-              <button
-                type="button"
-                onClick={onDiscardPending}
-                className="px-2.5 py-1 rounded-md border text-[11px] font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900"
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                onClick={onSavePending}
-                className="px-2.5 py-1 rounded-md border text-[11px] font-medium bg-amber-400/15 text-amber-700 border-amber-400/40 hover:bg-amber-400/25"
-              >
-                保存待变更
-              </button>
-            </>
-          )}
         </div>
       </form>
 

@@ -1,7 +1,7 @@
 import { useDeferredValue, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
-import { isRuleEffective, ruleKey } from "./utils";
+import { isRuleEffective } from "./utils";
 
 // 每个 RuleListItem 估算高度（px）。带按钮的项约 78，简项约 56，给个中位偏大值
 // 减少二次测量。virtualizer 会按实际渲染的尺寸自动校准。
@@ -12,7 +12,6 @@ function RuleListItem({
   selected,
   toggleBusy,
   displayEnabled,
-  isPending,
   onSelect,
   onToggleEnabled,
   onDelete,
@@ -61,11 +60,6 @@ function RuleListItem({
         <span className="text-xs text-slate-900 font-medium truncate">
           {item.path}
         </span>
-        {isPending && (
-          <span className="ml-auto text-[10px] text-amber-700 font-medium">
-            待保存
-          </span>
-        )}
       </div>
       {item.summary && (
         <div className="text-[11px] text-slate-500 mt-0.5 truncate">
@@ -106,9 +100,8 @@ export default function MockRuleList({
   loading,
   saving,
   selectedKey,
-  pendingEnabled,
   onSelectItem,
-  onTogglePendingEnabled,
+  onToggleEnabled,
   onDeleteRule,
 }) {
   const [query, setQuery] = useState("");
@@ -195,9 +188,8 @@ export default function MockRuleList({
         loading={loading}
         saving={saving}
         selectedKey={selectedKey}
-        pendingEnabled={pendingEnabled}
         onSelectItem={onSelectItem}
-        onTogglePendingEnabled={onTogglePendingEnabled}
+        onToggleEnabled={onToggleEnabled}
         onDeleteRule={onDeleteRule}
       />
     </aside>
@@ -213,9 +205,8 @@ function VirtualizedItems({
   loading,
   saving,
   selectedKey,
-  pendingEnabled,
   onSelectItem,
-  onTogglePendingEnabled,
+  onToggleEnabled,
   onDeleteRule,
 }) {
   const scrollRef = useRef(null);
@@ -228,7 +219,9 @@ function VirtualizedItems({
     getItemKey: (index) => items[index].key,
   });
 
-  if (loading) {
+  // 仅首屏（尚无数据）显示整屏「加载中」；开关 / 保存后的 reload 不闪整屏，
+  // 保留列表，避免每次即时保存都把列表清空重绘。
+  if (loading && items.length === 0) {
     return (
       <div className="flex-1 overflow-y-auto p-2">
         <div className="p-4 text-xs text-slate-500">加载中…</div>
@@ -254,11 +247,7 @@ function VirtualizedItems({
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const item = items[virtualRow.index];
-          const k = item.rule ? ruleKey(item.rule) : null;
-          const isPending = k !== null && k in pendingEnabled;
-          const displayEnabled = isPending
-            ? pendingEnabled[k]
-            : item.rule && item.rule.enabled !== false;
+          const displayEnabled = item.rule && item.rule.enabled !== false;
 
           return (
             <div
@@ -279,9 +268,8 @@ function VirtualizedItems({
                 selected={item.key === selectedKey}
                 toggleBusy={saving}
                 displayEnabled={displayEnabled}
-                isPending={isPending}
                 onSelect={onSelectItem}
-                onToggleEnabled={onTogglePendingEnabled}
+                onToggleEnabled={onToggleEnabled}
                 onDelete={onDeleteRule}
               />
             </div>

@@ -97,7 +97,7 @@ export default function AppShell() {
           position="top-center"
           richColors
           closeButton
-          duration={200000}
+          duration={2000}
           visibleToasts={1}
           // style={{
           //   zIndex: 99999,

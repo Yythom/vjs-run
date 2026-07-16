@@ -68,7 +68,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   stopMockRecording: () => ipcRenderer.invoke("stop-mock-recording"),
 
-  // 场景：命名的规则文件快照，可保存 / 应用 / 删除
+  // 场景：命名的规则文件快照，可保存 / 应用 / 编辑 / 删除
   listMockScenes: () => ipcRenderer.invoke("list-mock-scenes"),
 
   saveMockScene: (name) => ipcRenderer.invoke("save-mock-scene", { name }),
@@ -77,8 +77,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   deleteMockScene: (name) => ipcRenderer.invoke("delete-mock-scene", { name }),
 
-  // 用系统默认应用打开 mock-rules.json
-  openMockRulesFile: () => ipcRenderer.invoke("open-mock-rules-file"),
+  getMockSceneRules: (name) =>
+    ipcRenderer.invoke("get-mock-scene-rules", { name }),
+
+  saveMockSceneRules: (name, rules) =>
+    ipcRenderer.invoke("save-mock-scene-rules", { name, rules }),
+
+  // 用系统默认应用打开 mock-rules.json；传场景名则打开对应场景文件
+  openMockRulesFile: (scene) =>
+    ipcRenderer.invoke("open-mock-rules-file", { scene }),
 
   // 清理 monorepo：删除指定仓库下的 node_modules / dist / .turbo / build 目录
   cleanMonorepo: (repoKey) => ipcRenderer.invoke("clean-monorepo", { repoKey }),

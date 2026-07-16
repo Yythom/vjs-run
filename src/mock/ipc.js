@@ -12,6 +12,7 @@ import {
   buildRoutes,
   loadMockRules,
   loadOpenApiSources,
+  normalizeMockRule,
   wrapSampleInEnvelope,
 } from "./server.js";
 import { mockFromSchema } from "./data.js";
@@ -30,6 +31,7 @@ import {
   getRecordingStatus,
   listScenes,
   readSceneRules,
+  sceneFilePath,
   startRecording,
   stopRecording,
   writeSceneRules,
@@ -224,6 +226,29 @@ export function registerMockIpc() {
     deleteScene(getScenesDir(), payload.name);
   });
 
+  // 读场景规则：mock 配置页进入「场景编辑模式」时加载，不影响活动规则
+  ipcSafe(
+    "get-mock-scene-rules",
+    (_, payload = {}) => ({
+      rules: readSceneRules(getScenesDir(), payload.name).map(normalizeMockRule),
+      file: sceneFilePath(getScenesDir(), payload.name),
+    }),
+    { rules: [] },
+  );
+
+  // 覆盖写场景规则：场景编辑模式下的保存目标是场景文件本身
+  ipcSafe("save-mock-scene-rules", (_, payload = {}) => {
+    const recording = getRecordingStatus();
+    if (recording.enabled && recording.sceneName === payload.name) {
+      throw new Error(
+        `场景「${payload.name}」正在录制中，请先停止录制再编辑`,
+      );
+    }
+    const rules = normalizeRulesForSave(payload.rules || []);
+    const name = writeSceneRules(getScenesDir(), payload.name, rules);
+    return { rules, name, file: sceneFilePath(getScenesDir(), name) };
+  });
+
   // 根据 OpenAPI schema 推荐一份 mock JSON（不写盘，仅返回供用户复制）。
   // 入参 { method, path }：path 必须是接入了 service prefix 的完整 path
   // （和列表里展示的一致，例如 /vjg/ads/actions/click）。
@@ -294,16 +319,26 @@ export function registerMockIpc() {
     clearMockHistory();
   });
 
-  // 用系统默认应用打开 mock-rules.json（方便直接用编辑器改）
-  ipcSafe("open-mock-rules-file", async () => {
-    const config = getConfig();
-    ensureMockRulesDir();
-    if (!fs.existsSync(config.mockRulesFile)) {
-      fs.writeFileSync(config.mockRulesFile, "[]\n");
+  // 用系统默认应用打开 mock-rules.json（方便直接用编辑器改）；
+  // 传 { scene } 时打开对应场景文件
+  ipcSafe("open-mock-rules-file", async (_, payload = {}) => {
+    let file;
+    if (payload.scene) {
+      file = sceneFilePath(getScenesDir(), payload.scene);
+      if (!fs.existsSync(file)) {
+        throw new Error(`场景文件不存在: ${file}`);
+      }
+    } else {
+      const config = getConfig();
+      ensureMockRulesDir();
+      if (!fs.existsSync(config.mockRulesFile)) {
+        fs.writeFileSync(config.mockRulesFile, "[]\n");
+      }
+      file = config.mockRulesFile;
     }
     // shell.openPath 失败返回非空错误字符串
-    const err = await shell.openPath(config.mockRulesFile);
+    const err = await shell.openPath(file);
     if (err) throw new Error(err);
-    return { file: config.mockRulesFile };
+    return { file };
   });
 }
