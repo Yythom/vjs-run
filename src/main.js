@@ -23,6 +23,7 @@ import { MOCK_ID, stopMockService } from "./mock/service.js";
 import { registerAllIpc } from "./ipc/index.js";
 import { buildSpawnEnv } from "./shell-env.js";
 import { stopAllProcesses } from "./process-manager.js";
+import { stopOwnServer } from "./ai/ollama.js";
 
 // ─── 全局兜底 ────────────────────────────────────────────────────────────────
 // 任何异步路径上未处理的错误都不要让 main 进程整体崩掉。
@@ -110,6 +111,7 @@ app
 // 所有窗口关闭时：非 macOS 直接退出；macOS 保留进程（Dock 点击可重新打开）
 app.on("window-all-closed", () => {
   stopAllProcesses();
+  stopOwnServer();
   // stopMockService 返回 Promise，必须捕获 reject 避免 unhandledRejection 在退出时冒出来
   stopMockService(MOCK_ID).catch((err) => console.error("[stopMock]", err));
   if (process.platform !== "darwin") app.quit();
@@ -123,5 +125,6 @@ app.on("activate", () => {
 // 应用退出前确保所有子进程都被终止，避免孤儿进程
 app.on("before-quit", () => {
   stopAllProcesses();
+  stopOwnServer();
   stopMockService(MOCK_ID).catch((err) => console.error("[stopMock]", err));
 });

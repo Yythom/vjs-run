@@ -1,6 +1,6 @@
 {
   "name": "vjtools",
-  "version": "0.0.5",
+  "version": "0.0.2",
   "description": "桌面端项目启动控制台",
   "type": "module",
   "main": "src/main.js",

@@ -87,6 +87,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openMockRulesFile: (scene) =>
     ipcRenderer.invoke("open-mock-rules-file", { scene }),
 
+  // Ollama 服务管理
+  getOllamaStatus: () => ipcRenderer.invoke("get-ollama-status"),
+  startOllamaService: () => ipcRenderer.invoke("start-ollama-service"),
+  stopOllamaService: () => ipcRenderer.invoke("stop-ollama-service"),
+  pullOllamaModel: (modelName) => ipcRenderer.invoke("pull-ollama-model", { modelName }),
+
   // 清理 monorepo：删除指定仓库下的 node_modules / dist / .turbo / build 目录
   cleanMonorepo: (repoKey) => ipcRenderer.invoke("clean-monorepo", { repoKey }),
 
@@ -186,6 +192,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const handler = (_, data) => callback(data);
     ipcRenderer.on("mock-recording", handler);
     return () => ipcRenderer.removeListener("mock-recording", handler);
+  },
+
+  onOllamaProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("ollama-progress", handler);
+    return () => ipcRenderer.removeListener("ollama-progress", handler);
   },
 
   // ── 自动升级 ──────────────────────────────────────────────────────────────────

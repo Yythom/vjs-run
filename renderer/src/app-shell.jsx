@@ -23,6 +23,7 @@ import SettingsPage from "./modals/settings-modal";
 import EnvCheckPage from "./modals/env-check-modal";
 import PortCheckerPage from "./modals/port-checker-modal";
 import CleanupPage from "./modals/cleanup-modal";
+import AiModels from "./pages/ai";
 
 /**
  * 主区域路由（layout 之下的右侧面板）。
@@ -44,6 +45,7 @@ function MainRoutes() {
       <Route path="/env-check" element={<EnvCheckPage />} />
       <Route path="/port-checker" element={<PortCheckerPage />} />
       <Route path="/cleanup" element={<CleanupPage />} />
+      <Route path="/ai-models" element={<AiModels />} />
 
       {/* 直接刷新到 modal route 时主区域 fallback 到 ProjectDashboard */}
       <Route path="*" element={<ProjectDashboard />} />

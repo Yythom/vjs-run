@@ -36,4 +36,8 @@ export const DEFAULT_CONFIG = {
 
   // 端口占用查看器默认监听的端口
   watchedPorts: [3000, 3001, 5173, 3002],
+
+  // Ollama 相关配置
+  ollamaVersion: "latest",
+  aiBaseUrl: "http://127.0.0.1:11434",
 };

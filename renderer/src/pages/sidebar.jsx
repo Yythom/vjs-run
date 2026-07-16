@@ -183,6 +183,12 @@ export default function Sidebar() {
           path="/settings"
           activePath={activePath}
         />
+        <NavigationMenuItem
+          icon="🤖"
+          label="AI 引擎"
+          path="/ai-models"
+          activePath={activePath}
+        />
 
         {/* 运维工具区 */}
         <div className="flex items-center gap-1.5 px-4 py-1.5 text-[10px] font-bold tracking-widest uppercase text-slate-400 shrink-0 select-none mt-2">

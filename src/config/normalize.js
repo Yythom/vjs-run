@@ -115,5 +115,9 @@ export function normalizeConfig(raw = {}) {
     mockVjToken: String(raw.mockVjToken || "").trim(),
     sidebarWidth: normalizeSidebarWidth(raw.sidebarWidth),
     watchedPorts,
+
+    // Ollama 相关配置
+    ollamaVersion: String(raw.ollamaVersion === undefined ? DEFAULT_CONFIG.ollamaVersion : raw.ollamaVersion).trim(),
+    aiBaseUrl: String(raw.aiBaseUrl === undefined ? DEFAULT_CONFIG.aiBaseUrl : raw.aiBaseUrl).trim(),
   };
 }
