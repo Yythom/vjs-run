@@ -274,22 +274,6 @@ export default function SettingsModal() {
             </label>
           </div>
         </div>
-
-        {/* 卡片 3：版本与更新 */}
-        <div className="p-4 border border-border rounded-xl bg-card flex flex-col gap-3">
-          <h3 className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 pb-2 border-b border-border">
-            <span>🔄</span> 版本与更新
-          </h3>
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-slate-500">
-              当前版本：v{cfg._appVersion || "unknown"}
-            </span>
-            <UpdateChecker className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-emerald-500/10 text-emerald-700 border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-default">
-              🔄 检查更新
-            </UpdateChecker>
-          </div>
-        </div>
-
       </div>
     </PageShell>
   );

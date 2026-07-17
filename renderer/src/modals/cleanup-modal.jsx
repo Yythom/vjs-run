@@ -19,6 +19,18 @@ const OPTIONS = [
     sizeKey: "dmgInstallersBytes",
   },
   {
+    id: "crashReports",
+    label: "崩溃报告与日志",
+    desc: "清除应用崩溃时自动生成的诊断报告与日志文件",
+    sizeKey: "crashReportsBytes",
+  },
+  {
+    id: "webviewStorage",
+    label: "浏览器缓存扩展项",
+    desc: "清除 SharedStorage、Trust Tokens 和安全证书状态等扩展缓存",
+    sizeKey: "webviewStorageBytes",
+  },
+  {
     id: "allLogs",
     label: "所有面板日志",
     desc: "清空全部项目 / Mock 的终端输出（仅内存）",

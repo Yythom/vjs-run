@@ -161,6 +161,60 @@ function clearDmgInstallers() {
   return reclaimed;
 }
 
+function crashReportsDir() {
+  try {
+    return app.getPath("crashDumps");
+  } catch {
+    return path.join(userDataDir(), "Crashpad");
+  }
+}
+
+function crashReportsBytes() {
+  return dirSize(crashReportsDir());
+}
+
+function clearCrashReports() {
+  const dir = crashReportsDir();
+  try {
+    const before = dirSize(dir);
+    fs.rmSync(dir, { recursive: true, force: true });
+    return before;
+  } catch {
+    return 0;
+  }
+}
+
+const WEBVIEW_STORAGE_ITEMS = [
+  "SharedStorage",
+  "Trust Tokens",
+  "Trust Tokens-journal",
+  "TransportSecurity",
+];
+
+function webviewStorageBytes() {
+  return WEBVIEW_STORAGE_ITEMS.reduce((sum, name) => {
+    const fullPath = path.join(userDataDir(), name);
+    try {
+      const stat = fs.statSync(fullPath);
+      return sum + (stat.isDirectory() ? dirSize(fullPath) : stat.size);
+    } catch {
+      return sum;
+    }
+  }, 0);
+}
+
+function clearWebviewStorage() {
+  const before = webviewStorageBytes();
+  for (const name of WEBVIEW_STORAGE_ITEMS) {
+    try {
+      fs.rmSync(path.join(userDataDir(), name), { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+  return before;
+}
+
 export function registerCleanupIpc() {
   // 返回各可清理项的当前体积，供弹窗展示
   ipcSafe("get-cleanup-info", () => ({
@@ -168,6 +222,8 @@ export function registerCleanupIpc() {
       appCacheBytes: appCacheBytes(),
       mockAssetsBytes: mockAssetsBytes(),
       dmgInstallersBytes: dmgInstallersBytes(),
+      crashReportsBytes: crashReportsBytes(),
+      webviewStorageBytes: webviewStorageBytes(),
     },
   }));
 
@@ -195,6 +251,26 @@ export function registerCleanupIpc() {
         results.dmgInstallers = { ok: true, reclaimedBytes: bytes };
       } catch (err) {
         results.dmgInstallers = { ok: false, error: err.message };
+      }
+    }
+
+    if (set.has("crashReports")) {
+      try {
+        const bytes = clearCrashReports();
+        reclaimedBytes += bytes;
+        results.crashReports = { ok: true, reclaimedBytes: bytes };
+      } catch (err) {
+        results.crashReports = { ok: false, error: err.message };
+      }
+    }
+
+    if (set.has("webviewStorage")) {
+      try {
+        const bytes = clearWebviewStorage();
+        reclaimedBytes += bytes;
+        results.webviewStorage = { ok: true, reclaimedBytes: bytes };
+      } catch (err) {
+        results.webviewStorage = { ok: false, error: err.message };
       }
     }
 
