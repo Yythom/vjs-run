@@ -6,7 +6,7 @@ import useResource from "../hooks/use-resource";
 import { showToast } from "../utils/toast";
 import { useAppConfig, updateAppConfig } from "../stores/app-config-store";
 
-export default function PortCheckerModal() {
+export default function PortCheckerPage() {
   const config = useAppConfig();
   const watchedPorts = config.watchedPorts || DEFAULT_WATCHED_PORTS;
   const [customPort, setCustomPort] = useState("");

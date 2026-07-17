@@ -391,8 +391,31 @@ export default function MockConfigPage() {
     setEditingScene(null);
   };
 
-  // 场景编辑本身逐条即时落盘，退出前只需守卫编辑器里未保存的改动。
-  const finishSceneEdit = () => guardSwitch(exitSceneEdit);
+  // 场景编辑本身逐条即时落盘，退出前只需守卫编辑器里未保存的改动。改完常见的下一步
+  // 是「就用这套规则」，所以退出时顺带给一个应用场景的入口，省得再去场景菜单点一次。
+  const finishSceneEdit = () =>
+    guardSwitch(async () => {
+      const sceneName = editingScene;
+      const choice = await confirm({
+        title: "结束场景编辑",
+        message: `场景「${sceneName}」的改动已经保存。要顺便把它应用为当前生效的规则吗？`,
+        confirmText: "应用并结束",
+        altText: "只结束编辑",
+      });
+      if (!choice) return;
+      if (choice === "alt") {
+        exitSceneEdit();
+        return;
+      }
+      const result = await window.electronAPI.applyMockScene(sceneName);
+      if (!result?.success) {
+        showToast(`应用失败: ${result?.error || "未知错误"}`, "error");
+        return;
+      }
+      // exitSceneEdit 会把 editingScene 清空，useMockData 依赖它自动重拉活动规则
+      exitSceneEdit();
+      showToast(`已应用场景「${sceneName}」`, "success");
+    });
 
   const ruleMap = new Map(rules.map((rule) => [ruleKey(rule), rule]));
   const lookupRule = (method, path) =>

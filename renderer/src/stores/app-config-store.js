@@ -35,7 +35,7 @@ export const useAppConfigStore = create((set) => ({
     return resolved;
   },
 
-  /** 兼容 SettingsModal 保存后直接覆盖整段 config 的旧用法。 */
+  /** 兼容 SettingsPage 保存后直接覆盖整段 config 的旧用法。 */
   replace: (nextConfig) => set({ appConfig: nextConfig || DEFAULT_APP_CONFIG }),
 }));
 

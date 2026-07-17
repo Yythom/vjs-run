@@ -68,7 +68,7 @@ function formatBytes(n) {
   return `${v.toFixed(1)} ${units[i]}`;
 }
 
-export default function CleanupModal() {
+export default function CleanupPage() {
   const [info, setInfo] = useState(null);
   const [selected, setSelected] = useState({}); // id → bool，默认全不勾
   const [running, setRunning] = useState(false);

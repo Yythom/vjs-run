@@ -2,12 +2,10 @@ import { useState } from "react";
 import PageShell from "../components/page-shell";
 import { updateAppConfig, useAppConfigStore } from "../stores/app-config-store";
 import { generateMockSpec, useGeneratingMockSpec } from "../stores/runner-store";
-import useModalNav, { useCloseModal } from "../hooks/use-modal-nav";
+import useModalNav from "../hooks/use-modal-nav";
 import { showToast } from "../utils/toast";
-import UpdateChecker from "../components/update-checker";
 
-export default function SettingsModal() {
-  const close = useCloseModal();
+export default function SettingsPage() {
   const openModal = useModalNav();
 
   // 配置已经在 store 里（app 启动时 init 拉过一次），直接同步取一次作为初始值。
@@ -101,7 +99,6 @@ export default function SettingsModal() {
         mockAll,
       });
       showToast("配置已保存，下次启动项目时生效", "success");
-      close();
     } catch (error) {
       showToast(`保存失败: ${error?.message || String(error)}`, "error");
     } finally {
@@ -114,24 +111,14 @@ export default function SettingsModal() {
       title="服务配置"
       subtitle="配置 Swagger Mock 服务的主机、端口及后端代理地址"
       actions={
-        <>
-          <button
-            type="button"
-            onClick={close}
-            disabled={saving}
-            className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-white text-slate-600 border-border hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving}
-            className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-40"
-          >
-            {saving ? "保存中..." : "保存"}
-          </button>
-        </>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-40"
+        >
+          {saving ? "保存中..." : "保存"}
+        </button>
       }
     >
       <div className="flex flex-col gap-4">

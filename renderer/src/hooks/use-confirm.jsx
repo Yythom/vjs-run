@@ -12,6 +12,9 @@ import Modal from "../components/modal";
  *   if (!ok) return;
  *
  * confirm(opts) 返回 Promise<boolean>：点确定 → true，点取消 / ESC / 点遮罩 → false。
+ *
+ * 传了 altText 时会多出一个次要动作按钮，点它 resolve 成 "alt"（注意是 truthy，
+ * 用到 altText 的调用方要显式比较返回值，不能只判断真假）。
  */
 export default function useConfirm() {
   const [options, setOptions] = useState(null);
@@ -36,6 +39,7 @@ export default function useConfirm() {
     message = "",
     confirmText = "确定",
     cancelText = "取消",
+    altText = "",
     danger = false,
   } = options || {};
 
@@ -58,6 +62,15 @@ export default function useConfirm() {
         >
           {cancelText}
         </button>
+        {altText && (
+          <button
+            type="button"
+            onClick={() => settle("alt")}
+            className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900"
+          >
+            {altText}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => settle(true)}

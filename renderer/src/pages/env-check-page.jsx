@@ -12,7 +12,7 @@ const ENV_ICONS = {
   pm2: "⚙️",
 };
 
-export default function EnvCheckModal() {
+export default function EnvCheckPage() {
   const [copiedId, setCopiedId] = useState(null);
 
   const {

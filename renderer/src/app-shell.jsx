@@ -15,14 +15,12 @@ import ProjectDashboard from "./pages/project-dashboard";
 import MockServiceDetail from "./pages/mock-service-detail";
 import MockConfigPage from "./pages/mock-config/mock-config-page";
 import MockHistoryPage from "./pages/mock-history";
+import SettingsPage from "./pages/settings-page";
+import EnvCheckPage from "./pages/env-check-page";
+import PortCheckerPage from "./pages/port-checker-page";
+import CleanupPage from "./pages/cleanup-page";
 import RepoEditorModal from "./modals/repo-editor-modal";
 import CleanModal from "./modals/clean-modal";
-
-// ─── 页面化组件 ───────────────────────────────────────────────────────────────
-import SettingsPage from "./modals/settings-modal";
-import EnvCheckPage from "./modals/env-check-modal";
-import PortCheckerPage from "./modals/port-checker-modal";
-import CleanupPage from "./modals/cleanup-modal";
 
 /**
  * 主区域路由（layout 之下的右侧面板）。
@@ -39,7 +37,7 @@ function MainRoutes() {
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
 
-      {/* 页面化的工具与配置页 */}
+      {/* 工具与配置页 */}
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/env-check" element={<EnvCheckPage />} />
       <Route path="/port-checker" element={<PortCheckerPage />} />
