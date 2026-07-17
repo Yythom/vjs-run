@@ -17,7 +17,7 @@
 // 用法：
 //   node scripts/mock-rule.mjs list
 //   node scripts/mock-rule.mjs get --method GET --path /api/user/profile
-//   echo '{"rc":0,"data":{...}}' | node scripts/mock-rule.mjs set --method GET --path /api/user/profile [--status 200] [--disabled]
+//   echo '{"rc":0,"data":{...}}' | node scripts/mock-rule.mjs set --method GET --path /api/user/profile [--status 200] [--delay 500] [--disabled]
 //   node scripts/mock-rule.mjs enable  --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs disable --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
@@ -110,6 +110,12 @@ function normalizeRule(rule) {
     if (!Number.isInteger(status)) fail(`status 必须是整数：${rule.status}`);
     out.status = status;
   }
+  if (rule.delay !== undefined && rule.delay !== "") {
+    if (typeof rule.delay === "boolean") fail("--delay 需要一个毫秒数，如 --delay 500");
+    const delay = Number(rule.delay);
+    if (!Number.isInteger(delay) || delay < 0) fail(`delay 必须是大于等于 0 的整数：${rule.delay}`);
+    out.delay = delay;
+  }
   if (rule.response !== undefined) out.response = rule.response;
   return out;
 }
@@ -184,8 +190,9 @@ switch (command) {
     for (const r of rules) {
       const flag = r.enabled === false ? "○" : "●";
       const status = r.status ? ` [${r.status}]` : "";
+      const delay = r.delay ? ` +${r.delay}ms` : "";
       console.log(
-        `${flag} ${String(r.method || "*").toUpperCase().padEnd(6)} ${r.path}${status}`,
+        `${flag} ${String(r.method || "*").toUpperCase().padEnd(6)} ${r.path}${status}${delay}`,
       );
     }
     break;
@@ -260,6 +267,8 @@ switch (command) {
       response: response !== undefined ? response : existing.response,
       // status：--status 优先；否则保留原有
       status: flags.status !== undefined ? flags.status : existing.status,
+      // delay：--delay 优先；否则保留原有（响应延迟，毫秒）
+      delay: flags.delay !== undefined ? flags.delay : existing.delay,
       // enabled：--disabled/--enabled 显式覆盖；否则保留原有（新建默认启用）
       enabled: flags.disabled
         ? false
@@ -313,7 +322,7 @@ switch (command) {
         "",
         "  list    [--scene <名>]              列出规则（带 --scene 列场景内规则）",
         "  get     --path <p> [--method <m>] [--scene <名>]   查看单条规则",
-        "  set     --path <p> [--method GET] [--status 200] [--disabled] [--scene <名>]  < response.json",
+        "  set     --path <p> [--method GET] [--status 200] [--delay 500] [--disabled] [--scene <名>]  < response.json",
         "                                      新增/覆盖规则；response 从 stdin 读 JSON",
         "  enable  --path <p> [--method <m>] [--scene <名>]   启用规则",
         "  disable --path <p> [--method <m>] [--scene <名>]   禁用规则",
