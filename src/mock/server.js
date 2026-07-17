@@ -140,18 +140,18 @@ function createMockServer({
       const currentRoutes = runtimeState.routes;
 
       if (requestUrl.pathname === "/__mock/routes") {
-        sendJson(res, 200, currentRoutes.map(routeToMeta));
+        sendJsonPretty(res, 200, currentRoutes.map(routeToMeta));
         return;
       }
 
       if (requestUrl.pathname === "/__mock/rules") {
-        sendJson(res, 200, loadMockRules(runtimeConfig.mockRulesFile));
+        sendJsonPretty(res, 200, loadMockRules(runtimeConfig.mockRulesFile));
         return;
       }
 
       if (requestUrl.pathname === "/__mock/search") {
         const q = requestUrl.searchParams.get("q") || "";
-        sendJson(res, 200, searchRoutes(currentRoutes, q));
+        sendJsonPretty(res, 200, searchRoutes(currentRoutes, q));
         return;
       }
 
@@ -161,7 +161,7 @@ function createMockServer({
       }
 
       if (requestUrl.pathname === "/__mock/health") {
-        sendJson(res, 200, {
+        sendJsonPretty(res, 200, {
           ok: true,
           files: currentSources.length,
           routes: currentRoutes.length,
@@ -199,7 +199,7 @@ function createMockServer({
           });
           await sleep(requestControls.delay);
           const status = Number(customRule.status) || 200;
-          sendJson(res, status, customRule.response);
+          const responseText = sendJson(res, status, customRule.response);
           logRequest(
             "MOCK:rule-custom",
             req.method,
@@ -209,7 +209,7 @@ function createMockServer({
             runtimeConfig.onLog,
             buildRequestLogDetails({ requestUrl, body }),
           );
-          const cappedResponse = capForRecord(customRule.response);
+          const cappedResponse = capForRecord(customRule.response, responseText);
           record({
             kind: "mock",
             source: "rule-custom",
@@ -354,7 +354,7 @@ function createMockServer({
               ? `file:${overridePayload.filePath}`
               : "openapi-sample";
 
-      sendPayload(res, response.status, payload, contentType);
+      const responseText = sendPayload(res, response.status, payload, contentType);
       logRequest(
         `MOCK:${mockSource}`,
         req.method,
@@ -369,7 +369,7 @@ function createMockServer({
         }),
       );
       {
-        const cappedResponse = capForRecord(payload);
+        const cappedResponse = capForRecord(payload, responseText);
         record({
           kind: "mock",
           source: mockSource,
@@ -386,6 +386,13 @@ function createMockServer({
       }
     } catch (error) {
       logRequest("ERROR", req.method, 500, 0, req.url || "/", runtimeConfig.onLog);
+      // 响应已经发出去一部分时再 writeHead 会抛 ERR_HTTP_HEADERS_SENT，把真正的
+      // 错误盖掉；这种情况只能收尾，500 body 已经没地方写了。
+      if (res.writableEnded) return;
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
       sendJson(res, 500, {
         error: "Mock server error",
         message: error instanceof Error ? error.message : String(error),
@@ -1167,10 +1174,15 @@ async function proxyRequest(
 // （truncated 的记录在 UI 上禁用「生成规则」）。
 const MAX_RECORD_BODY_CHARS = 512_000;
 
-function capForRecord(value) {
+/**
+ * @param {*} value - 待记录的 body
+ * @param {string} [serialized] - value 的 JSON 文本，调用方若已序列化过（发送响应时）
+ *   可传入复用，省掉这里再 stringify 一遍。省略时内部自行序列化。
+ */
+function capForRecord(value, serialized) {
   if (value === undefined) return { value: undefined, truncated: false };
   try {
-    const text = JSON.stringify(value);
+    const text = serialized === undefined ? JSON.stringify(value) : serialized;
     if (typeof text === "string" && text.length > MAX_RECORD_BODY_CHARS) {
       return { value: undefined, truncated: true };
     }
@@ -1342,19 +1354,32 @@ function numberOrDefault(value, fallback) {
   return Number.isFinite(number) && number >= 0 ? number : fallback;
 }
 
+// 返回实际发出的 JSON 文本，调用方可交给 capForRecord 复用，避免为量长度再序列化一次。
+// 非 JSON 响应返回 undefined。
 function sendPayload(res, status, payload, contentType) {
   if (contentType.includes("json")) {
-    sendJson(res, status, payload);
-    return;
+    return sendJson(res, status, payload);
   }
 
   res.writeHead(status, {
     "content-type": contentType,
   });
   res.end(String(payload ?? ""));
+  return undefined;
 }
 
+// 业务响应走紧凑序列化：给前端代码消费，缩进只是白费带宽和 CPU。
+// 给人看的 /__mock/* 调试接口用 sendJsonPretty。
 function sendJson(res, status, payload) {
+  const text = JSON.stringify(payload);
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+  });
+  res.end(text);
+  return text;
+}
+
+function sendJsonPretty(res, status, payload) {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
   });
