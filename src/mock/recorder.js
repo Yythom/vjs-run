@@ -18,7 +18,7 @@ import { sendMockRecording } from "../ui-channel.js";
 
 let session = null; // { sceneName, file, rules: Map<key, rule>, startedAt }
 
-function sanitizeSceneName(rawName) {
+export function sanitizeSceneName(rawName) {
   const name = String(rawName || "")
     .replace(/[/\\:*?"<>|]/g, "")
     .trim();
@@ -167,4 +167,20 @@ export function deleteScene(scenesDir, name) {
     throw new Error(`场景「${sceneName}」正在录制中，请先停止录制`);
   }
   fs.rmSync(sceneFilePath(scenesDir, sceneName), { force: true });
+}
+
+// 重命名场景（改文件名）。录制中禁止；源不存在或目标同名（非自身）报错。
+export function renameScene(scenesDir, oldName, newName) {
+  const from = sanitizeSceneName(oldName);
+  const to = sanitizeSceneName(newName);
+  if (session && session.sceneName === from) {
+    throw new Error(`场景「${from}」正在录制中，请先停止录制`);
+  }
+  const fromFile = sceneFilePath(scenesDir, from);
+  if (!fs.existsSync(fromFile)) throw new Error(`场景不存在：${from}`);
+  if (to === from) return to;
+  const toFile = sceneFilePath(scenesDir, to);
+  if (fs.existsSync(toFile)) throw new Error(`场景已存在：${to}`);
+  fs.renameSync(fromFile, toFile);
+  return to;
 }

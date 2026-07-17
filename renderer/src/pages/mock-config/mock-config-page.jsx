@@ -7,6 +7,7 @@ import { ruleKey } from "./utils";
 import { useAppConfig } from "../../stores/app-config-store";
 import { showToast } from "../../utils/toast";
 import useConfirm from "../../hooks/use-confirm";
+import Modal from "../../components/modal";
 
 const CUSTOM_NEW_KEY = "__custom_new__";
 // 从请求历史「生成 mock 规则」跳转过来时的草稿选中项
@@ -22,6 +23,8 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
   const [scenes, setScenes] = useState([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [renaming, setRenaming] = useState(null); // 正在改名的场景名
+  const [renameValue, setRenameValue] = useState("");
 
   const refresh = async () => {
     try {
@@ -66,7 +69,10 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
       return;
     }
     setName("");
-    showToast(`已保存场景「${result.name}」（${result.count} 条规则）`, "success");
+    showToast(
+      `已保存场景「${result.name}」（${result.count} 条规则）`,
+      "success",
+    );
     refresh();
   };
 
@@ -92,92 +98,248 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
     onEdit(sceneName);
   };
 
+  const exportScene = async (sceneName) => {
+    setBusy(true);
+    const result = await window.electronAPI.exportMockScene(sceneName);
+    setBusy(false);
+    if (!result?.success) {
+      showToast(`导出失败: ${result?.error || "未知错误"}`, "error");
+      return;
+    }
+    if (result.canceled) return;
+    showToast(`已导出场景「${sceneName}」到 ${result.file}`, "success");
+  };
+
+  const importScene = async () => {
+    setBusy(true);
+    const result = await window.electronAPI.importMockScene();
+    setBusy(false);
+    if (!result?.success) {
+      showToast(`导入失败: ${result?.error || "未知错误"}`, "error");
+      return;
+    }
+    if (result.canceled) return;
+    showToast(
+      `已导入场景「${result.name}」（${result.count} 条规则）`,
+      "success",
+    );
+    refresh();
+  };
+
+  const startRename = (sceneName) => {
+    setRenaming(sceneName);
+    setRenameValue(sceneName);
+  };
+
+  const cancelRename = () => {
+    setRenaming(null);
+    setRenameValue("");
+  };
+
+  const submitRename = async () => {
+    const from = renaming;
+    const to = renameValue.trim();
+    if (!to || to === from) {
+      cancelRename();
+      return;
+    }
+    const result = await window.electronAPI.renameMockScene(from, to);
+    if (!result?.success) {
+      showToast(`重命名失败: ${result?.error || "未知错误"}`, "error");
+      return;
+    }
+    cancelRename();
+    showToast(`已重命名为「${result.name}」`, "success");
+    refresh();
+  };
+
   return (
-    <div className="relative">
+    <>
       <button
         type="button"
         onClick={toggle}
         title="规则场景：保存 / 应用 / 编辑整套规则快照"
         className="px-3 py-1 rounded-md border text-xs font-medium whitespace-nowrap bg-violet-400/10 text-violet-700 border-violet-400/35 hover:bg-violet-400/20"
       >
-        场景 ▾
+        场景
       </button>
-      {open && (
-        <>
-          {/* 透明遮罩：点外面关闭 */}
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1.5 w-80 z-50 bg-card border border-border rounded-lg shadow-lg p-2">
-            <div className="max-h-64 overflow-y-auto">
-              {scenes.length === 0 && (
-                <div className="px-2 py-3 text-[11px] text-slate-400">
-                  还没有场景。可以把当前规则存为场景，或在请求历史页录制。
-                </div>
-              )}
-              {scenes.map((scene) => (
-                <div
-                  key={scene.name}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-hover"
-                >
+
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        title="规则场景"
+        srOnly={false}
+        className="w-[500px]"
+        headerAction={
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await window.electronAPI.openMockRulesFolder({ openScenesDir: true });
+              } catch (err) {
+                showToast(`打开文件夹失败: ${err?.message || "未知错误"}`, "error");
+              }
+            }}
+            title="打开场景配置文件夹目录"
+            className="text-slate-400 hover:text-slate-700 transition-colors text-xs leading-none cursor-pointer p-1.5 rounded hover:bg-slate-200/60 flex items-center gap-1 font-medium mr-1"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+              className="w-4 h-4"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-19.5 0A2.25 2.25 0 0 0 2.25 15v3.75A2.25 2.25 0 0 0 4.5 21h15a2.25 2.25 0 0 0 2.25-2.25V15a2.25 2.25 0 0 0-2.25-2.25m-19.5 0h19.5M2.25 9.75V7.125A2.25 2.25 0 0 1 4.5 5h3.75a3 3 0 0 1 2.25 1L12 8.25h6.75A2.25 2.25 0 0 1 21 10.5V12"
+              />
+            </svg>
+            打开目录
+          </button>
+        }
+      >
+        <div className="max-h-80 overflow-y-auto p-4 flex flex-col gap-2">
+          {scenes.length === 0 && (
+            <div className="px-2 py-8 text-center text-xs text-slate-400">
+              还没有场景。可以把当前规则存为场景，或在请求历史页录制。
+            </div>
+          )}
+          {scenes.map((scene) => (
+            <div
+              key={scene.name}
+              className="flex items-center gap-2 px-3 py-2 rounded-md border border-border/50 hover:bg-hover hover:border-border transition-all"
+            >
+              {renaming === scene.name ? (
+                <>
+                  <input
+                    autoFocus
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submitRename();
+                      if (e.key === "Escape") cancelRename();
+                    }}
+                    placeholder="新场景名…"
+                    className="flex-1 min-w-0 bg-panel border border-border rounded-md px-2 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={submitRename}
+                    disabled={!renameValue.trim()}
+                    className="px-2.5 py-1.5 rounded-md border text-xs font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40"
+                  >
+                    确定
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelRename}
+                    className="px-2.5 py-1.5 rounded-md border text-xs font-medium bg-slate-400/10 text-slate-600 border-slate-400/30 hover:bg-slate-400/20"
+                  >
+                    取消
+                  </button>
+                </>
+              ) : (
+                <>
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs text-slate-900 truncate">
-                      {scene.name}
+                    <div className="text-xs font-medium text-slate-900 flex items-center gap-1.5 truncate">
+                      <span className="truncate">{scene.name}</span>
+                      <button
+                        type="button"
+                        disabled={scene.name === editingScene}
+                        onClick={() => startRename(scene.name)}
+                        title={
+                          scene.name === editingScene
+                            ? "请先结束编辑再改名"
+                            : "重命名场景"
+                        }
+                        className="text-[10px] text-slate-400 hover:text-slate-600 underline decoration-dotted disabled:opacity-40 disabled:no-underline"
+                      >
+                        重命名
+                      </button>
+
                       {scene.name === editingScene && (
-                        <span className="ml-1.5 text-[10px] text-violet-600">
+                        <span className="px-1 py-0.5 rounded text-[9px] font-semibold bg-violet-100 text-violet-700">
                           编辑中
                         </span>
                       )}
                     </div>
-                    <div className="text-[10.5px] text-slate-500">
+
+                    <div className="text-[10.5px] text-slate-500 mt-0.5">
                       {scene.ruleCount} 条规则
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => applyScene(scene.name)}
-                    className="px-2 py-1 rounded-md border text-[11px] font-medium bg-sky-400/10 text-sky-700 border-sky-400/35 hover:bg-sky-400/20 disabled:opacity-40"
-                  >
-                    应用
-                  </button>
-                  <button
-                    type="button"
-                    disabled={scene.name === editingScene}
-                    onClick={() => editScene(scene.name)}
-                    className="px-2 py-1 rounded-md border text-[11px] font-medium bg-violet-400/10 text-violet-700 border-violet-400/35 hover:bg-violet-400/20 disabled:opacity-40"
-                  >
-                    编辑
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => removeScene(scene.name)}
-                    className="px-2 py-1 rounded-md border text-[11px] font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20"
-                  >
-                    删
-                  </button>
-                </div>
-              ))}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => applyScene(scene.name)}
+                      className="px-2.5 py-1 rounded-md border text-xs font-medium bg-sky-400/10 text-sky-700 border-sky-400/35 hover:bg-sky-400/20 disabled:opacity-40"
+                    >
+                      应用
+                    </button>
+                    <button
+                      type="button"
+                      disabled={scene.name === editingScene}
+                      onClick={() => editScene(scene.name)}
+                      className="px-2.5 py-1 rounded-md border text-xs font-medium bg-violet-400/10 text-violet-700 border-violet-400/35 hover:bg-violet-400/20 disabled:opacity-40"
+                    >
+                      编辑
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => exportScene(scene.name)}
+                      title="导出为 JSON 文件"
+                      className="px-2.5 py-1 rounded-md border text-xs font-medium bg-amber-400/10 text-amber-700 border-amber-400/35 hover:bg-amber-400/20 disabled:opacity-40"
+                    >
+                      导出
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeScene(scene.name)}
+                      className="px-2.5 py-1 rounded-md border text-xs font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
-            <div className="mt-2 pt-2 border-t border-border flex items-center gap-1.5">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && saveScene()}
-                placeholder="把当前规则存为场景…"
-                className="flex-1 bg-panel border border-border rounded-md px-2.5 py-1 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
-              />
-              <button
-                type="button"
-                onClick={saveScene}
-                disabled={!name.trim()}
-                className="px-2.5 py-1 rounded-md border text-xs font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40"
-              >
-                保存
-              </button>
-            </div>
+          ))}
+        </div>
+        <div className="px-5 py-4 border-t border-border bg-slate-50/50 flex flex-col gap-2 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveScene()}
+              placeholder="把当前规则存为场景…"
+              className="flex-1 bg-panel border border-border rounded-md px-2.5 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
+            />
+            <button
+              type="button"
+              onClick={saveScene}
+              disabled={!name.trim()}
+              className="px-3 py-1.5 rounded-md border text-xs font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40"
+            >
+              保存
+            </button>
           </div>
-        </>
-      )}
-    </div>
+          <button
+            type="button"
+            onClick={importScene}
+            disabled={busy}
+            title="从 JSON 文件导入为新场景（同名自动去重）"
+            className="w-full px-3 py-1.5 rounded-md border text-xs font-medium bg-sky-400/10 text-sky-700 border-sky-400/35 hover:bg-sky-400/20 disabled:opacity-40"
+          >
+            从文件导入场景…
+          </button>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -359,6 +521,15 @@ export default function MockConfigPage() {
     }
   };
 
+  const openRulesFolder = async () => {
+    const result = await window.electronAPI.openMockRulesFolder(
+      editingScene || undefined,
+    );
+    if (!result?.success) {
+      showToast(`打开文件夹失败: ${result?.error || "未知错误"}`, "error");
+    }
+  };
+
   const mockBaseUrl = `http://${config?.mockHost || "127.0.0.1"}:${
     config?.mockPort || 3002
   }`;
@@ -375,9 +546,14 @@ export default function MockConfigPage() {
               </span>
             )}
           </div>
-          <div className="text-[11px] text-slate-500 truncate" title={rulesFile}>
+          <button
+            type="button"
+            onClick={openRulesFolder}
+            className="text-[11px] text-slate-500 hover:text-sky-600 hover:underline cursor-pointer truncate block text-left w-full outline-none"
+            title={`点击打开本地文件夹：\n${rulesFile || "mock-rules.json"}`}
+          >
             {rulesFile || "mock-rules.json"}
-          </div>
+          </button>
         </div>
         {/* whitespace-nowrap 会被按钮继承，header 变挤时按钮文字不竖排 */}
         <div className="ml-auto shrink-0 flex items-center gap-2 whitespace-nowrap">

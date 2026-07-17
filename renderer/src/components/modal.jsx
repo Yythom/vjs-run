@@ -26,6 +26,7 @@ export default function Modal({
   title,
   srOnly = true,
   className = "",
+  headerAction,
   children,
 }) {
   return (
@@ -64,16 +65,19 @@ export default function Modal({
               <Dialog.Title className="text-sm font-semibold text-slate-800">
                 {title}
               </Dialog.Title>
-              {onClose && (
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="text-slate-400 hover:text-slate-700 transition-colors text-base leading-none cursor-pointer w-6 h-6 rounded-full hover:bg-slate-200/60 flex items-center justify-center"
-                  aria-label="关闭弹窗"
-                >
-                  ✕
-                </button>
-              )}
+              <div className="flex items-center gap-1.5">
+                {headerAction}
+                {onClose && (
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="text-slate-400 hover:text-slate-700 transition-colors text-base leading-none cursor-pointer w-6 h-6 rounded-full hover:bg-slate-200/60 flex items-center justify-center"
+                    aria-label="关闭弹窗"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <Dialog.Title className="sr-only">{title}</Dialog.Title>

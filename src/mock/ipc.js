@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { shell } from "electron";
+import { BrowserWindow, dialog, shell } from "electron";
 import { ipcSafe } from "../ipc/safe.js";
 import { getConfig } from "../config/store.js";
 import { sendLog } from "../ui-channel.js";
@@ -31,6 +31,8 @@ import {
   getRecordingStatus,
   listScenes,
   readSceneRules,
+  renameScene,
+  sanitizeSceneName,
   sceneFilePath,
   startRecording,
   stopRecording,
@@ -40,6 +42,23 @@ import {
 // 场景文件与 mock-rules.json 同目录，放 scenes/ 子目录下
 function getScenesDir() {
   return path.join(path.dirname(getConfig().mockRulesFile), "scenes");
+}
+
+// 导入时避免覆盖已有场景：同名则追加 (2)(3)… 直到不冲突。
+// rawBase 先按场景名规则清洗；清洗后为空（文件名全是非法字符）时回退到「导入场景」。
+function uniqueSceneName(scenesDir, rawBase) {
+  let base;
+  try {
+    base = sanitizeSceneName(rawBase);
+  } catch {
+    base = "导入场景";
+  }
+  const taken = new Set(listScenes(scenesDir).map((s) => s.name));
+  if (!taken.has(base)) return base;
+  for (let i = 2; ; i++) {
+    const candidate = `${base} (${i})`;
+    if (!taken.has(candidate)) return candidate;
+  }
 }
 
 // 覆盖写活动规则文件；loadMockRules 的 mtime 缓存会自动感知，运行中的 mock 无需重启
@@ -242,6 +261,60 @@ export function registerMockIpc() {
     deleteScene(getScenesDir(), payload.name);
   });
 
+  // 重命名场景（改文件名）；同名冲突 / 录制中会抛错
+  ipcSafe("rename-mock-scene", (_, payload = {}) => {
+    const name = renameScene(getScenesDir(), payload.oldName, payload.newName);
+    return { name };
+  });
+
+  // 导出场景：弹系统保存对话框，把 scenes/<名>.json 写到用户选择的位置
+  ipcSafe("export-mock-scene", async (_, payload = {}) => {
+    const src = sceneFilePath(getScenesDir(), payload.name);
+    if (!fs.existsSync(src)) {
+      throw new Error(`场景文件不存在: ${src}`);
+    }
+    const { canceled, filePath } = await dialog.showSaveDialog(
+      BrowserWindow.getFocusedWindow(),
+      {
+        title: "导出场景",
+        defaultPath: `${payload.name}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      },
+    );
+    if (canceled || !filePath) return { canceled: true };
+    fs.copyFileSync(src, filePath);
+    return { canceled: false, file: filePath };
+  });
+
+  // 导入场景：弹系统打开对话框选一个 JSON，校验为规则数组后写成新场景（同名自动去重）
+  ipcSafe("import-mock-scene", async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(
+      BrowserWindow.getFocusedWindow(),
+      {
+        title: "导入场景",
+        properties: ["openFile"],
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      },
+    );
+    if (canceled || !filePaths?.length) return { canceled: true };
+
+    const srcFile = filePaths[0];
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(srcFile, "utf8"));
+    } catch (err) {
+      throw new Error(`不是合法 JSON: ${err.message}`, { cause: err });
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error("场景文件顶层必须是规则数组");
+    }
+    const rules = normalizeRulesForSave(parsed);
+    const base = path.basename(srcFile).replace(/\.json$/i, "");
+    const name = uniqueSceneName(getScenesDir(), base);
+    writeSceneRules(getScenesDir(), name, rules);
+    return { canceled: false, name, count: rules.length };
+  });
+
   // 读场景规则：mock 配置页进入「场景编辑模式」时加载，不影响活动规则
   ipcSafe(
     "get-mock-scene-rules",
@@ -355,6 +428,36 @@ export function registerMockIpc() {
     // shell.openPath 失败返回非空错误字符串
     const err = await shell.openPath(file);
     if (err) throw new Error(err);
+    return { file };
+  });
+
+  // 打开包含 mock-rules.json 或场景文件的文件夹，并选中该文件；或者直接打开场景配置的文件夹目录
+  ipcSafe("open-mock-rules-folder", async (_, payload = {}) => {
+    if (payload.openScenesDir) {
+      const scenesDir = getScenesDir();
+      if (!fs.existsSync(scenesDir)) {
+        fs.mkdirSync(scenesDir, { recursive: true });
+      }
+      const err = await shell.openPath(scenesDir);
+      if (err) throw new Error(err);
+      return { file: scenesDir };
+    }
+
+    let file;
+    if (payload.scene) {
+      file = sceneFilePath(getScenesDir(), payload.scene);
+      if (!fs.existsSync(file)) {
+        throw new Error(`场景文件不存在: ${file}`);
+      }
+    } else {
+      const config = getConfig();
+      ensureMockRulesDir();
+      if (!fs.existsSync(config.mockRulesFile)) {
+        fs.writeFileSync(config.mockRulesFile, "[]\n");
+      }
+      file = config.mockRulesFile;
+    }
+    shell.showItemInFolder(file);
     return { file };
   });
 }
