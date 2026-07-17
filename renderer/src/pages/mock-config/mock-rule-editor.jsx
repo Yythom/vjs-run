@@ -22,6 +22,13 @@ const ruleSchema = z.object({
     },
     { message: "HTTP status 必须是整数" },
   ),
+  delay: z.string().refine(
+    (v) => {
+      const trimmed = v.trim();
+      return trimmed === "" || (Number.isInteger(Number(trimmed)) && Number(trimmed) >= 0);
+    },
+    { message: "延时必须是大于等于 0 的整数" },
+  ),
   responseText: z.string().refine(
     (v) => {
       if (!v.trim()) return true;
@@ -43,6 +50,7 @@ function ruleToValues(rule, route) {
       method: route?.method || "GET",
       path: route?.path || "",
       status: "",
+      delay: "",
       responseText: prettyJson({
         rc: 0,
         code: "SUCCESS",
@@ -56,6 +64,7 @@ function ruleToValues(rule, route) {
     method: (rule.method || route?.method || "*").toUpperCase(),
     path: rule.path || route?.path || "",
     status: rule.status === undefined ? "" : String(rule.status),
+    delay: rule.delay === undefined ? "" : String(rule.delay),
     responseText: prettyJson(rule.response),
   };
 }
@@ -64,6 +73,7 @@ function valuesToRule(values) {
   const path = values.path.trim();
   const method = (values.method || "*").toUpperCase();
   const status = values.status.trim();
+  const delay = values.delay.trim();
   const responseText = values.responseText.trim();
   const response = responseText ? JSON.parse(responseText) : undefined;
 
@@ -72,6 +82,7 @@ function valuesToRule(values) {
     method,
     path,
     ...(status ? { status: Number(status) } : {}),
+    ...(delay ? { delay: Number(delay) } : {}),
     ...(response !== undefined ? { response } : {}),
   };
 }
@@ -164,11 +175,11 @@ export default function MockRuleEditor({
         onSubmit={submit}
         className="min-w-0 min-h-0 flex flex-col overflow-hidden"
       >
-        <div className="p-4 border-b border-border grid grid-cols-[110px_1fr_110px] gap-3">
+        <div className="p-4 border-b border-border grid grid-cols-[110px_1fr_90px_100px] gap-3">
           <FieldShell label="Method">
             <select
               {...register("method")}
-              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 outline-none focus:border-slate-500"
+              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 outline-none focus:border-slate-500 w-full"
             >
               {METHODS.map((m) => (
                 <option key={m} value={m}>
@@ -181,14 +192,21 @@ export default function MockRuleEditor({
             <input
               {...register("path")}
               placeholder="/api/example"
-              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
+              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 w-full"
             />
           </FieldShell>
           <FieldShell label="Status" error={errors.status?.message}>
             <input
               {...register("status")}
               placeholder="200"
-              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
+              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 w-full"
+            />
+          </FieldShell>
+          <FieldShell label="Delay (ms)" error={errors.delay?.message}>
+            <input
+              {...register("delay")}
+              placeholder="0"
+              className="bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 w-full"
             />
           </FieldShell>
         </div>

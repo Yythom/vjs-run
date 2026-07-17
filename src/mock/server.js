@@ -194,7 +194,7 @@ function createMockServer({
           const rawBody = await readRawBody(req);
           const body = parseRequestBody(rawBody);
           const requestControls = getRequestControls(req, requestUrl, {
-            delay,
+            delay: typeof customRule.delay === "number" ? customRule.delay : delay,
             forcedStatus,
           });
           await sleep(requestControls.delay);
@@ -258,18 +258,18 @@ function createMockServer({
         return;
       }
 
-      const rawBody = await readRawBody(req);
-      const body = parseRequestBody(rawBody);
-      const requestControls = getRequestControls(req, requestUrl, {
-        delay,
-        forcedStatus,
-      });
       const overridePayload = loadMockOverride(route, runtimeConfig.mockDataDir);
       const mockRule = findMockRule(
         runtimeConfig.mockRulesFile,
         req.method || "GET",
         requestUrl.pathname,
       );
+      const requestControls = getRequestControls(req, requestUrl, {
+        delay: mockRule && typeof mockRule.delay === "number" ? mockRule.delay : delay,
+        forcedStatus,
+      });
+      const rawBody = await readRawBody(req);
+      const body = parseRequestBody(rawBody);
 
       if (
         !shouldUseMock({
@@ -970,6 +970,7 @@ function normalizeMockRule(rule) {
     path: rule.path,
     response: rule.response,
     status: rule.status,
+    delay: rule.delay,
     enabled: rule.enabled !== false,
   };
 }

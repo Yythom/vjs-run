@@ -226,11 +226,19 @@ export function normalizeRulesForSave(rules = []) {
     if (status !== undefined && !Number.isInteger(status)) {
       throw new Error(`第 ${index + 1} 条规则的 status 必须是整数`);
     }
+    const delay =
+      normalized.delay !== undefined && normalized.delay !== ""
+        ? Number(normalized.delay)
+        : undefined;
+    if (delay !== undefined && (!Number.isInteger(delay) || delay < 0)) {
+      throw new Error(`第 ${index + 1} 条规则的 delay 必须是大于等于 0 的整数`);
+    }
     return {
       enabled: normalized.enabled !== false,
       method: (normalized.method || "*").toUpperCase(),
       path: normalized.path,
       ...(status !== undefined ? { status } : {}),
+      ...(delay !== undefined ? { delay } : {}),
       ...(normalized.response !== undefined ? { response: normalized.response } : {}),
     };
   });
