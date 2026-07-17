@@ -95,26 +95,14 @@ export default function AppShell() {
           position="bottom-left"
           richColors
           closeButton
-          duration={2000}
-          visibleToasts={1}
-          // style={{
-          //   zIndex: 99999,
-          //   WebkitAppRegion: "no-drag",
-          //   pointerEvents: "auto",
-          // }}
+          duration={1500}
           toastOptions={{
             style: {
-              fontFamily: "inherit",
               fontSize: "12px",
+              width:"250px",
               padding: "8px 28px 8px 12px",
-              minHeight: "40px",
-              position: "relative",
             },
             closeButton: {
-              position: "absolute",
-              top: "50%",
-              right: "8px",
-              transform: "translateY(-50%)",
               pointerEvents: "auto",
               zIndex: 99,
             },
