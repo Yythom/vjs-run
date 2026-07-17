@@ -123,12 +123,51 @@ function resetMockData() {
   ensureUserMockAssets(); // 重新种子化为内置默认规则
 }
 
+function getDmgInstallers() {
+  const downloadsDir = app.getPath("downloads");
+  try {
+    const files = fs.readdirSync(downloadsDir);
+    return files
+      .filter((file) => /^vjtools.*\.dmg$/i.test(file))
+      .map((file) => path.join(downloadsDir, file));
+  } catch {
+    return [];
+  }
+}
+
+function dmgInstallersBytes() {
+  const paths = getDmgInstallers();
+  return paths.reduce((sum, filepath) => {
+    try {
+      return sum + fs.statSync(filepath).size;
+    } catch {
+      return sum;
+    }
+  }, 0);
+}
+
+function clearDmgInstallers() {
+  const paths = getDmgInstallers();
+  let reclaimed = 0;
+  for (const filepath of paths) {
+    try {
+      const size = fs.statSync(filepath).size;
+      fs.rmSync(filepath, { force: true });
+      reclaimed += size;
+    } catch {
+      // ignore
+    }
+  }
+  return reclaimed;
+}
+
 export function registerCleanupIpc() {
   // 返回各可清理项的当前体积，供弹窗展示
   ipcSafe("get-cleanup-info", () => ({
     info: {
       appCacheBytes: appCacheBytes(),
       mockAssetsBytes: mockAssetsBytes(),
+      dmgInstallersBytes: dmgInstallersBytes(),
     },
   }));
 
@@ -146,6 +185,16 @@ export function registerCleanupIpc() {
         results.appCache = { ok: true, reclaimedBytes: bytes };
       } catch (err) {
         results.appCache = { ok: false, error: err.message };
+      }
+    }
+
+    if (set.has("dmgInstallers")) {
+      try {
+        const bytes = clearDmgInstallers();
+        reclaimedBytes += bytes;
+        results.dmgInstallers = { ok: true, reclaimedBytes: bytes };
+      } catch (err) {
+        results.dmgInstallers = { ok: false, error: err.message };
       }
     }
 

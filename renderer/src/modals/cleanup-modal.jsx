@@ -13,6 +13,12 @@ const OPTIONS = [
     sizeKey: "appCacheBytes",
   },
   {
+    id: "dmgInstallers",
+    label: "已下载安装包",
+    desc: "删除系统下载目录中已下载的 vjtools 安装包 (.dmg)",
+    sizeKey: "dmgInstallersBytes",
+  },
+  {
     id: "allLogs",
     label: "所有面板日志",
     desc: "清空全部项目 / Mock 的终端输出（仅内存）",
