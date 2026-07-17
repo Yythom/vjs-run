@@ -96,6 +96,27 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 
 规则文件默认在 `~/Library/Application Support/vjtools/mock-assets/mock-rules.json`,写盘后 mock server 的 watcher 会自动热载,无需重启。
 
+### 场景(scenes)
+
+把一次联调要 mock 的一组接口收敛成一个命名「场景」(`scenes/<名>.json`,结构与活动规则一致),之后在软件 mock 配置页里「应用」即可一键切换。加 `--scene <名>` 时所有命令改为操作场景文件,**不碰活动规则**:
+
+```bash
+# 列出所有场景
+node scripts/mock-rule.mjs scenes
+
+# 新建空场景(同名报错)
+node scripts/mock-rule.mjs new-scene --scene 登录联调
+
+# 往场景里加/改接口
+echo '{"rc":0,"code":"SUCCESS","data":{"token":"abc"}}' \
+  | node scripts/mock-rule.mjs set --scene 登录联调 --method POST --path /api/login --status 200
+
+# 查看场景内容
+node scripts/mock-rule.mjs list --scene 登录联调
+```
+
+场景文件落在 `~/Library/Application Support/vjtools/mock-assets/scenes/` 下。注意:场景**只是快照**,需要在软件里「应用」后才覆盖活动规则生效。
+
 ## License
 
 ISC

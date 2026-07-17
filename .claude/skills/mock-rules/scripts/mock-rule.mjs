@@ -10,6 +10,10 @@
 //
 // mock server 的 chokidar watcher 会在写盘后自动热载，无需重启。
 //
+// 场景（scene）：软件里「命名的规则文件快照」，存放在 mock-rules.json 同目录的
+//   scenes/<场景名>.json，结构与 mock-rules.json 完全一致（规则数组）。带 --scene <名>
+//   时所有命令改为操作该场景文件，不碰活动规则；软件里「应用」该场景后才覆盖活动规则生效。
+//
 // 用法：
 //   node scripts/mock-rule.mjs list
 //   node scripts/mock-rule.mjs get --method GET --path /api/user/profile
@@ -17,6 +21,10 @@
 //   node scripts/mock-rule.mjs enable  --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs disable --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
+//   node scripts/mock-rule.mjs scenes                          # 列出所有场景
+//   node scripts/mock-rule.mjs new-scene --scene 登录联调       # 新建空场景（同名报错）
+//   echo '{...}' | node scripts/mock-rule.mjs set --scene 登录联调 --path /api/login  # 往场景里加接口
+//   node scripts/mock-rule.mjs list --scene 登录联调            # 查看场景内容
 //
 // set 按 method+path 幂等定位：命中则覆盖，未命中则追加，绝不动其它规则。
 
@@ -36,6 +44,31 @@ function resolveRulesFile(explicit) {
 
   const userData = process.env.VJTOOLS_USER_DATA_DIR || defaultUserData();
   return path.join(userData, "mock-assets", "mock-rules.json");
+}
+
+// 场景目录：与活动 mock-rules.json 同目录下的 scenes/（等价 ipc.js 的 getScenesDir）
+function scenesDir() {
+  return path.join(path.dirname(resolveRulesFile(flags.file)), "scenes");
+}
+
+// 场景名清洗，等价 recorder.js 的 sanitizeSceneName：去非法字符、trim、非空、≤60。
+function sanitizeSceneName(rawName) {
+  if (rawName === true || rawName === undefined) fail("--scene 需要一个场景名");
+  const name = String(rawName).replace(/[/\\:*?"<>|]/g, "").trim();
+  if (!name) fail("场景名不能为空（或仅含非法字符）");
+  if (name.length > 60) fail("场景名过长（最多 60 字符）");
+  return name;
+}
+
+function sceneFilePath(name) {
+  return path.join(scenesDir(), `${sanitizeSceneName(name)}.json`);
+}
+
+// 本次命令实际操作的目标文件：带 --scene 时指向场景文件，否则活动规则文件。
+function resolveTargetFile() {
+  return flags.scene !== undefined
+    ? sceneFilePath(flags.scene)
+    : resolveRulesFile(flags.file);
 }
 
 // ─── 读写 ────────────────────────────────────────────────────────────────────
@@ -126,7 +159,12 @@ function fail(msg) {
 
 const [, , command, ...rest] = process.argv;
 const flags = parseFlags(rest);
-const file = resolveRulesFile(flags.file);
+const isScene = flags.scene !== undefined;
+const file = resolveTargetFile();
+// 目标提示：场景文件需在软件里「应用」才生效，活动规则则 watcher 自动热载。
+const applyHint = isScene
+  ? "（场景文件，需在软件里「应用」该场景后才生效）"
+  : "（mock server 将自动热载）";
 
 function requireTarget() {
   const method = String(flags.method || "*").toUpperCase();
@@ -150,6 +188,44 @@ switch (command) {
         `${flag} ${String(r.method || "*").toUpperCase().padEnd(6)} ${r.path}${status}`,
       );
     }
+    break;
+  }
+
+  case "scenes": {
+    const dir = scenesDir();
+    const names = fs.existsSync(dir)
+      ? fs.readdirSync(dir).filter((f) => f.endsWith(".json"))
+      : [];
+    if (!names.length) {
+      console.log(`(无场景) ${dir}`);
+      break;
+    }
+    console.log(`# ${dir}`);
+    for (const f of names) {
+      let count = 0;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"));
+        count = Array.isArray(parsed) ? parsed.length : 0;
+      } catch {
+        // 损坏的场景文件按 0 条展示
+      }
+      console.log(`  ${f.replace(/\.json$/, "").padEnd(24)} ${count} 条`);
+    }
+    break;
+  }
+
+  case "new-scene": {
+    const name = sanitizeSceneName(flags.scene);
+    const target = sceneFilePath(name);
+    if (fs.existsSync(target)) {
+      fail(
+        `场景已存在：${name}\n  换个名字，或直接用 set --scene ${name} --path <P> 往里加接口`,
+      );
+    }
+    saveRules(target, []);
+    console.log(`✔ 已创建空场景：${name}`);
+    console.log(`  → ${target}`);
+    console.log(`  用 set --scene ${name} --path <P> 往里加接口；完成后在软件里「应用」该场景`);
     break;
   }
 
@@ -201,7 +277,7 @@ switch (command) {
       saveRules(file, rules);
       console.log(`✔ 已新增：${method} ${rulePath}`);
     }
-    console.log(`  → ${file}（mock server 将自动热载）`);
+    console.log(`  → ${file}${applyHint}`);
     break;
   }
 
@@ -233,18 +309,23 @@ switch (command) {
   default:
     console.log(
       [
-        "mock-rule — 安全增删改运行时 mock 规则",
+        "mock-rule — 安全增删改运行时 mock 规则 / 场景",
         "",
-        "  list                                列出所有规则",
-        "  get     --path <p> [--method <m>]   查看单条规则",
-        "  set     --path <p> [--method GET] [--status 200] [--disabled]  < response.json",
+        "  list    [--scene <名>]              列出规则（带 --scene 列场景内规则）",
+        "  get     --path <p> [--method <m>] [--scene <名>]   查看单条规则",
+        "  set     --path <p> [--method GET] [--status 200] [--disabled] [--scene <名>]  < response.json",
         "                                      新增/覆盖规则；response 从 stdin 读 JSON",
-        "  enable  --path <p> [--method <m>]   启用规则",
-        "  disable --path <p> [--method <m>]   禁用规则",
-        "  rm      --path <p> [--method <m>]   删除规则",
+        "  enable  --path <p> [--method <m>] [--scene <名>]   启用规则",
+        "  disable --path <p> [--method <m>] [--scene <名>]   禁用规则",
+        "  rm      --path <p> [--method <m>] [--scene <名>]   删除规则",
         "",
-        "  --method 缺省为 *（匹配所有方法）；--file 可覆盖规则文件路径",
-        `  当前规则文件：${file}`,
+        "  scenes                              列出所有场景",
+        "  new-scene --scene <名>              新建空场景（同名报错）",
+        "",
+        "  --scene <名> 时所有命令改为操作 scenes/<名>.json（不碰活动规则）",
+        "  --method 缺省为 *（匹配所有方法）；--file 可覆盖活动规则文件路径",
+        `  当前活动规则文件：${resolveRulesFile(flags.file)}`,
+        `  场景目录：${scenesDir()}`,
       ].join("\n"),
     );
     if (command && command !== "help" && command !== "--help") process.exit(1);
