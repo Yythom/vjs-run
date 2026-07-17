@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import PageShell from "../components/page-shell";
 import { updateAppConfig, useAppConfigStore } from "../stores/app-config-store";
 import { generateMockSpec, useGeneratingMockSpec } from "../stores/runner-store";
 import useModalNav, { useCloseModal } from "../hooks/use-modal-nav";
-import { showToast, toast } from "../utils/toast";
+import { showToast } from "../utils/toast";
+import UpdateChecker from "../components/update-checker";
 
 export default function SettingsModal() {
   const close = useCloseModal();
@@ -22,76 +23,7 @@ export default function SettingsModal() {
   const [saving, setSaving] = useState(false);
   const generating = useGeneratingMockSpec();
 
-  // ── 自动升级 ──────────────────────────────────────────────────────────────────
-  const [checking, setChecking] = useState(false);
-  const toastIdRef = useRef(null);
 
-  useEffect(() => {
-    const offStatus = window.electronAPI.onUpdateStatus((data) => {
-      switch (data.status) {
-        case "checking":
-          toastIdRef.current = toast.loading("正在检查更新…");
-          break;
-        case "available":
-          toast.dismiss(toastIdRef.current);
-          toast.info(`发现新版本 v${data.version}`, {
-            duration: Infinity,
-            action: {
-              label: "下载更新",
-              onClick: () => {
-                window.electronAPI.downloadUpdate();
-              },
-            },
-          });
-          setChecking(false);
-          break;
-        case "downloading":
-          toast.dismiss(toastIdRef.current);
-          toastIdRef.current = toast.loading("正在下载更新… 0%");
-          break;
-        case "not-available":
-          toast.dismiss(toastIdRef.current);
-          showToast("当前已是最新版本 ✓", "success");
-          setChecking(false);
-          break;
-        case "downloaded":
-          toast.dismiss(toastIdRef.current);
-          toast.success("下载完成！已自动为您打开安装包，请拖动覆盖安装。");
-          setChecking(false);
-          break;
-        case "error":
-          toast.dismiss(toastIdRef.current);
-          showToast(`检查更新失败: ${data.message}`, "error");
-          setChecking(false);
-          break;
-        case "dev-skip":
-          toast.dismiss(toastIdRef.current);
-          showToast("开发模式下不支持自动更新", "warning");
-          setChecking(false);
-          break;
-      }
-    });
-
-    const offProgress = window.electronAPI.onUpdateProgress((data) => {
-      const pct = Math.round(data.percent);
-      if (toastIdRef.current) {
-        toast.loading(`正在下载更新… ${pct}%`, { id: toastIdRef.current });
-      } else {
-        toastIdRef.current = toast.loading(`正在下载更新… ${pct}%`);
-      }
-    });
-
-    return () => {
-      offStatus();
-      offProgress();
-    };
-  }, []);
-
-  const handleCheckUpdate = () => {
-    if (checking) return;
-    setChecking(true);
-    window.electronAPI.checkForUpdates();
-  };
 
   // 独立操作：先把表单里的目录 + 源服务器地址落盘（生成逻辑读的是已保存配置），再触发生成
   const handleGenerate = async () => {
@@ -352,16 +284,12 @@ export default function SettingsModal() {
             <span className="text-xs text-slate-500">
               当前版本：v{cfg._appVersion || "unknown"}
             </span>
-            <button
-              type="button"
-              onClick={handleCheckUpdate}
-              disabled={checking}
-              className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-emerald-500/10 text-emerald-700 border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-default"
-            >
-              {checking ? "检查中…" : "🔄 检查更新"}
-            </button>
+            <UpdateChecker className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-emerald-500/10 text-emerald-700 border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50 disabled:cursor-default">
+              🔄 检查更新
+            </UpdateChecker>
           </div>
         </div>
+
       </div>
     </PageShell>
   );

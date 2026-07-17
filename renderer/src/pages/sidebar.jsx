@@ -9,6 +9,7 @@ import {
 import { useStatus } from "../stores/status-store";
 import { MOCK_ID } from "../constants";
 import { showToast } from "../utils/toast";
+import UpdateChecker from "../components/update-checker";
 
 import useModalNav from "../hooks/use-modal-nav";
 
@@ -112,6 +113,8 @@ export default function Sidebar() {
   const [resizing, setResizing] = useState(false);
   const asideRef = useRef(null);
 
+
+
   const persistWidth = async (nextWidth) => {
     try {
       await updateAppConfig({ sidebarWidth: nextWidth });
@@ -214,6 +217,14 @@ export default function Sidebar() {
           path="/cleanup"
           activePath={activePath}
         />
+      </div>
+
+      {/* 底部版本与更新 */}
+      <div className="p-2 px-4 border-t border-border bg-slate-50/30 flex items-center justify-between shrink-0 select-none">
+        <span className="text-[10.5px] font-medium text-slate-400">
+          版本：v{appConfig?._appVersion || "0.0.1"}
+        </span>
+        <UpdateChecker />
       </div>
 
       <div
