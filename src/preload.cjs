@@ -77,6 +77,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   saveMockScene: (name) => ipcRenderer.invoke("save-mock-scene", { name }),
 
+  // 把一批规则写进场景：mode="create" 建新场景，mode="merge" 按 method+path 覆盖已有场景
+  addRulesToMockScene: (name, rules, mode) =>
+    ipcRenderer.invoke("add-rules-to-mock-scene", { name, rules, mode }),
+
   applyMockScene: (name) => ipcRenderer.invoke("apply-mock-scene", { name }),
 
   deleteMockScene: (name) => ipcRenderer.invoke("delete-mock-scene", { name }),

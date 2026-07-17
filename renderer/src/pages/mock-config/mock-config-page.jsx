@@ -470,6 +470,45 @@ export default function MockConfigPage() {
     showToast(nextEnabled ? "已启用" : "已停用", "success");
   };
 
+  // 批量操作作用于列表里勾选的规则（targetRules），返回是否已落盘。
+  const bulkSetEnabled = async (targetRules, nextEnabled) => {
+    if (targetRules.length === 0) return false;
+    const targetKeys = new Set(targetRules.map(ruleKey));
+    const nextRules = rules.map((rule) =>
+      targetKeys.has(ruleKey(rule)) ? { ...rule, enabled: nextEnabled } : rule,
+    );
+    const saved = await saveRules(nextRules);
+    if (!saved) return false;
+    showToast(
+      `已${nextEnabled ? "启用" : "停用"} ${targetKeys.size} 条规则`,
+      "success",
+    );
+    return true;
+  };
+
+  const bulkDelete = async (targetRules) => {
+    if (targetRules.length === 0) return false;
+    const targetKeys = new Set(targetRules.map(ruleKey));
+    const ok = await confirm({
+      title: "清除规则",
+      message: editingScene
+        ? `将从场景「${editingScene}」删除选中的 ${targetKeys.size} 条规则，此操作不可撤销。`
+        : `将删除选中的 ${targetKeys.size} 条 mock 规则，此操作不可撤销（可先把当前规则存为场景）。`,
+      confirmText: "清除",
+      danger: true,
+    });
+    if (!ok) return false;
+    const nextRules = rules.filter((rule) => !targetKeys.has(ruleKey(rule)));
+    const saved = await saveRules(nextRules);
+    if (!saved) return false;
+    if (targetKeys.has(editingKey)) {
+      setEditorDirty(false);
+      setSelectedKey("");
+    }
+    showToast(`已清除 ${targetKeys.size} 条 mock 规则`, "success");
+    return true;
+  };
+
   const deleteRuleByKey = async (targetKey) => {
     if (!targetKey) return false;
     const nextRules = rules.filter((rule) => ruleKey(rule) !== targetKey);
@@ -612,6 +651,8 @@ export default function MockConfigPage() {
           onSelectItem={selectItem}
           onToggleEnabled={toggleRuleEnabled}
           onDeleteRule={deleteRuleFromList}
+          onBulkSetEnabled={bulkSetEnabled}
+          onBulkDelete={bulkDelete}
         />
 
         {/* key 让 Editor 在切换选中项时重挂，useForm 自然用新 defaults 初始化 */}

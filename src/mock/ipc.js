@@ -30,6 +30,7 @@ import {
   deleteScene,
   getRecordingStatus,
   listScenes,
+  mergeSceneRules,
   readSceneRules,
   renameScene,
   sanitizeSceneName,
@@ -246,6 +247,38 @@ export function registerMockIpc() {
     const rules = loadMockRules(getConfig().mockRulesFile);
     const name = writeSceneRules(getScenesDir(), payload.name, rules);
     return { name, count: rules.length };
+  });
+
+  // 把外部传入的规则写进场景（请求历史批量「存入场景」用）。
+  // mode=create：场景必须不存在，直接写；mode=merge：只动 method + path 命中的
+  // 那几条规则，场景里其余规则原样保留（见 mergeSceneRules）。
+  ipcSafe("add-rules-to-mock-scene", (_, payload = {}) => {
+    const name = sanitizeSceneName(payload.name);
+    const scenesDir = getScenesDir();
+    const mode = payload.mode === "merge" ? "merge" : "create";
+
+    const recording = getRecordingStatus();
+    if (recording.enabled && recording.sceneName === name) {
+      throw new Error(`场景「${name}」正在录制中，请先停止录制再写入`);
+    }
+
+    const incoming = normalizeRulesForSave(payload.rules || []);
+    if (!incoming.length) throw new Error("没有可写入的规则");
+
+    if (mode === "create") {
+      if (fs.existsSync(sceneFilePath(scenesDir, name))) {
+        throw new Error(`场景已存在：${name}`);
+      }
+      writeSceneRules(scenesDir, name, incoming);
+      return { name, added: incoming.length, overwritten: 0, total: incoming.length };
+    }
+
+    const { rules, added, overwritten } = mergeSceneRules(
+      readSceneRules(scenesDir, name),
+      incoming,
+    );
+    writeSceneRules(scenesDir, name, rules);
+    return { name, added, overwritten, total: rules.length };
   });
 
   // 应用场景：用场景内容覆盖活动规则文件

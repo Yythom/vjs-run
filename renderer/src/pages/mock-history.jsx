@@ -71,7 +71,7 @@ function KindBadge({ kind }) {
   );
 }
 
-function HistoryListItem({ entry, selected, onSelect }) {
+function HistoryListItem({ entry, selected, checked, onSelect, onToggleCheck }) {
   return (
     <div
       role="button"
@@ -86,6 +86,14 @@ function HistoryListItem({ entry, selected, onSelect }) {
       )}
     >
       <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={checked}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleCheck}
+          title="选中以便批量存入场景"
+          className="accent-sky-500 shrink-0"
+        />
         <KindBadge kind={entry.kind} />
         <span className="text-[10px] font-semibold text-slate-500 shrink-0 w-11">
           {entry.method}
@@ -250,6 +258,182 @@ function defaultSceneName() {
   const d = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   return `录制 ${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+// 把一条历史转成 mock 规则；响应体超限未记录的无法固化，返回 null 由调用方跳过。
+function entryToRule(entry) {
+  if (entry.responseTruncated || entry.responseBody === undefined) return null;
+  return {
+    enabled: true,
+    method: entry.method,
+    // 命中过 swagger 路由的用带 {param} 的模板，规则能覆盖同类请求
+    path: entry.matchedPath || entry.path,
+    ...(entry.status && entry.status !== 200 && entry.kind !== "miss"
+      ? { status: entry.status }
+      : {}),
+    response: entry.responseBody,
+  };
+}
+
+/**
+ * 批量「存入场景」弹窗：新建一个场景，或选一个已有场景把选中接口按
+ * method + path 覆盖进去（场景里的其它规则保留）。
+ */
+function SaveToSceneModal({ entries, onClose, onSaved }) {
+  const [mode, setMode] = useState("create");
+  const [name, setName] = useState(defaultSceneName);
+  const [scenes, setScenes] = useState([]);
+  const [target, setTarget] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // 只在挂载时拉一次场景列表（父组件按 open 条件挂载，每次打开都是新实例）
+  useEffect(() => {
+    window.electronAPI.listMockScenes().then((result) => {
+      setScenes(result?.scenes || []);
+    });
+  }, []);
+
+  const rules = entries.map(entryToRule).filter(Boolean);
+  const skipped = entries.length - rules.length;
+  const sceneName = mode === "create" ? name.trim() : target;
+  const canSave = !!sceneName && rules.length > 0 && !saving;
+
+  const save = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    const result = await window.electronAPI.addRulesToMockScene(
+      sceneName,
+      rules,
+      mode === "create" ? "create" : "merge",
+    );
+    setSaving(false);
+    if (!result?.success) {
+      showToast(`存入场景失败: ${result?.error || "未知错误"}`, "error");
+      return;
+    }
+    showToast(
+      mode === "create"
+        ? `已创建场景「${result.name}」，写入 ${result.total} 条规则`
+        : `已写入场景「${result.name}」：新增 ${result.added} 条，覆盖 ${result.overwritten} 条`,
+      "success",
+    );
+    onSaved();
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="存入场景"
+      srOnly={false}
+      className="w-[460px] max-w-[calc(100vw-2rem)]"
+    >
+      <div className="p-5 flex flex-col gap-4">
+        <div className="text-xs text-slate-500">
+          已选 <span className="font-semibold text-slate-700">{entries.length}</span> 条请求，
+          其中 <span className="font-semibold text-slate-700">{rules.length}</span> 条可固化成规则
+          {skipped > 0 && (
+            <span className="text-amber-700">（{skipped} 条响应体未记录，将跳过）</span>
+          )}
+        </div>
+
+        <div className="flex items-center rounded-md border border-border overflow-hidden self-start">
+          {[
+            { key: "create", label: "新建场景" },
+            { key: "merge", label: "写入已有场景" },
+          ].map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setMode(item.key)}
+              className={clsx(
+                "px-3 py-1 text-[11px] font-medium transition-colors",
+                mode === item.key
+                  ? "bg-sky-400/15 text-sky-700"
+                  : "bg-card text-slate-500 hover:bg-hover hover:text-slate-900",
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "create" ? (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-slate-600">场景名</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") save();
+              }}
+              placeholder="场景名"
+              className="w-full bg-card border border-border rounded-md px-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+            />
+            <span className="text-[11px] text-slate-400">
+              场景名已存在时会保存失败，改用「写入已有场景」。
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-slate-600">选择场景</label>
+            {scenes.length === 0 ? (
+              <div className="text-[11px] text-slate-400 py-2">
+                还没有任何场景，先用「新建场景」创建一个。
+              </div>
+            ) : (
+              <div className="max-h-52 overflow-y-auto flex flex-col gap-1 border border-border rounded-md p-1">
+                {scenes.map((scene) => (
+                  <label
+                    key={scene.name}
+                    className={clsx(
+                      "flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors",
+                      target === scene.name ? "bg-sky-400/[0.08]" : "hover:bg-hover",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="scene-target"
+                      checked={target === scene.name}
+                      onChange={() => setTarget(scene.name)}
+                      className="accent-sky-500"
+                    />
+                    <span className="text-xs text-slate-900 truncate">{scene.name}</span>
+                    <span className="ml-auto text-[10.5px] text-slate-400 shrink-0">
+                      {scene.ruleCount} 条
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <span className="text-[11px] text-slate-400">
+              场景里已有同 method + path 的接口就替换掉那一条，没有就新增一条；
+              其它规则原样保留。
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 flex items-center justify-end gap-2 px-5 py-3.5 border-t border-border bg-slate-50/50">
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover transition-colors"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={!canSave}
+          className="px-3 py-1.5 rounded-md border text-xs font-semibold bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          {saving ? "保存中…" : "保存"}
+        </button>
+      </div>
+    </Modal>
+  );
 }
 
 /**
@@ -510,6 +694,9 @@ export default function MockHistoryPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [filter, setFilter] = useState("all");
   const [keyword, setKeyword] = useState("");
+  // 批量勾选（存入场景用），与详情选中的 selectedId 相互独立
+  const [checkedIds, setCheckedIds] = useState([]);
+  const [savingScene, setSavingScene] = useState(false);
 
   // 打开面板时全量拉一次（历史 + 录制状态），补齐打开前 / 窗口刷新前的状态；之后靠事件推送
   const { loading } = useResource(
@@ -528,6 +715,20 @@ export default function MockHistoryPage() {
   const listed = [...filtered].reverse();
   const selected = entries.find((entry) => entry.id === selectedId) || null;
 
+  // 勾选过但已被筛掉 / 被历史上限挤掉的记录不参与批量操作
+  const checkedEntries = listed.filter((entry) => checkedIds.includes(entry.id));
+  const allChecked = listed.length > 0 && checkedEntries.length === listed.length;
+
+  const toggleCheck = (id) => {
+    setCheckedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    );
+  };
+
+  const toggleCheckAll = () => {
+    setCheckedIds(allChecked ? [] : listed.map((entry) => entry.id));
+  };
+
   const handleClear = async () => {
     const result = await clearMockHistory();
     if (!result?.success) {
@@ -535,6 +736,7 @@ export default function MockHistoryPage() {
       return;
     }
     setSelectedId(null);
+    setCheckedIds([]);
     showToast("请求历史已清空", "success");
   };
 
@@ -584,7 +786,45 @@ export default function MockHistoryPage() {
       </header>
 
       <div className="flex-1 min-h-0 grid grid-cols-[360px_1fr] overflow-hidden">
-        <div className="min-h-0 overflow-y-auto p-2 border-r border-border">
+        <div className="min-h-0 flex flex-col border-r border-border">
+          {listed.length > 0 && (
+            <div className="shrink-0 flex items-center gap-2 px-2.5 py-1.5 border-b border-border bg-card">
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={toggleCheckAll}
+                  className="accent-sky-500"
+                />
+                <span className="text-[11px] text-slate-500">全选</span>
+              </label>
+              {checkedEntries.length > 0 && (
+                <>
+                  <span className="text-[11px] text-slate-500">
+                    已选 {checkedEntries.length} 条
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCheckedIds([])}
+                    className="text-[11px] text-slate-400 hover:text-slate-700"
+                  >
+                    取消
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={() => setSavingScene(true)}
+                disabled={checkedEntries.length === 0}
+                title="把选中的接口存成新场景，或写入已有场景（只替换同名接口）"
+                className="ml-auto px-2.5 py-1 rounded-md border text-[11px] font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                📥 存入场景
+              </button>
+            </div>
+          )}
+
+          <div className="flex-1 min-h-0 overflow-y-auto p-2">
           {listed.length === 0 && (
             <div className="px-2 py-8 text-center text-xs text-slate-400">
               {loading
@@ -599,13 +839,27 @@ export default function MockHistoryPage() {
               key={entry.id}
               entry={entry}
               selected={entry.id === selectedId}
+              checked={checkedIds.includes(entry.id)}
               onSelect={() => setSelectedId(entry.id)}
+              onToggleCheck={() => toggleCheck(entry.id)}
             />
           ))}
+          </div>
         </div>
 
         <HistoryDetail entry={selected} />
       </div>
+
+      {savingScene && (
+        <SaveToSceneModal
+          entries={checkedEntries}
+          onClose={() => setSavingScene(false)}
+          onSaved={() => {
+            setSavingScene(false);
+            setCheckedIds([]);
+          }}
+        />
+      )}
     </div>
   );
 }

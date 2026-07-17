@@ -161,6 +161,31 @@ export function writeSceneRules(scenesDir, name, rules) {
   return sanitizeSceneName(name);
 }
 
+/**
+ * 把 incoming 规则逐条 upsert 进 existing：按 method + path 命中的替换成 incoming
+ * 那一条（整个规则对象换掉），没命中的追加到末尾，其余规则原样保留、顺序不变。
+ * 纯函数，不碰文件系统。
+ */
+export function mergeSceneRules(existing = [], incoming = []) {
+  const merged = [...existing];
+  const indexByKey = new Map(merged.map((rule, index) => [ruleKey(rule), index]));
+  let overwritten = 0;
+
+  for (const rule of incoming) {
+    const key = ruleKey(rule);
+    const at = indexByKey.get(key);
+    if (at === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push(rule);
+    } else {
+      merged[at] = rule;
+      overwritten += 1;
+    }
+  }
+
+  return { rules: merged, overwritten, added: incoming.length - overwritten };
+}
+
 export function deleteScene(scenesDir, name) {
   const sceneName = sanitizeSceneName(name);
   if (session && session.sceneName === sceneName) {

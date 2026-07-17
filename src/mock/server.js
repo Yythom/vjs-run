@@ -279,6 +279,35 @@ function createMockServer({
           mockRule,
         })
       ) {
+        // 没有后端可转发，又没有任何理由 mock（无启用的规则 / override / 请求控制参数）：
+        // 与其静默返回一份 swagger 生成的假数据，不如把配置问题暴露出来。
+        if (!runtimeConfig.backendBaseUrl) {
+          sendJson(res, 502, {
+            error: "No backend base URL configured and no mock rule enabled",
+            method: req.method,
+            path: requestUrl.pathname,
+          });
+          logRequest(
+            "NO-BACKEND",
+            req.method,
+            502,
+            Date.now() - requestStart,
+            requestUrl.pathname + requestUrl.search,
+            runtimeConfig.onLog,
+            buildRequestLogDetails({ requestUrl, body }),
+          );
+          record({
+            kind: "miss",
+            method: (req.method || "GET").toUpperCase(),
+            path: requestUrl.pathname,
+            query: Object.fromEntries(requestUrl.searchParams.entries()),
+            matchedPath: route.fullPath,
+            status: 502,
+            durationMs: Date.now() - requestStart,
+            requestBody: capForRecord(body).value,
+          });
+          return;
+        }
         await proxyRequest(req, res, requestUrl, runtimeConfig.backendBaseUrl, {
           rawBody,
           matchedPath: route.fullPath,
@@ -900,10 +929,12 @@ function shouldUseMock({
   overridePayload,
   mockRule,
 }) {
-  if (!runtimeConfig.backendBaseUrl || runtimeConfig.mockAll) {
+  if (runtimeConfig.mockAll) {
     return true;
   }
 
+  // 没配后端时不再无条件 mock：swagger 里有定义 ≠ 用户想要假数据。没有启用的规则
+  // 命中就让调用方报 502，避免「规则明明没启用，接口却还是走 mock」。
   return Boolean(
     mockRule ||
       overridePayload.found ||

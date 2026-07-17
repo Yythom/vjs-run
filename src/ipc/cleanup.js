@@ -123,6 +123,22 @@ function resetMockData() {
   ensureUserMockAssets(); // 重新种子化为内置默认规则
 }
 
+// 清空渲染层 localStorage（zustand persist 的 project-tabs-store、sidebar.repoCollapsed
+// 等 UI 状态）。这些不在 config.json 里，只清 config.json 的话重启后 UI 会从
+// localStorage 恢复出残留状态，让「恢复出厂」看起来没生效。
+async function clearRendererLocalStorage() {
+  await session.defaultSession.clearStorageData({ storages: ["localstorage"] });
+}
+
+// 恢复出厂后自动重启：exit(0) 强杀渲染进程，避免其退出时把内存里的 localStorage
+// 副本 flush 回盘、覆盖掉刚清空的结果。延迟一拍让 IPC 响应先回到渲染层。
+function scheduleRelaunch() {
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 500);
+}
+
 function getDmgInstallers() {
   const downloadsDir = app.getPath("downloads");
   try {
@@ -294,9 +310,15 @@ export function registerCleanupIpc() {
       }
     }
 
+    // 「恢复出厂」= 完整重置：config.json + mock 规则/场景 + 窗口位置 + 渲染层
+    // localStorage，随后自动重启，避免任何一处残留让用户以为「没生效」。
+    let relaunching = false;
     if (set.has("config")) {
       try {
         resetStore();
+        resetMockData();
+        resetWindowState();
+        await clearRendererLocalStorage();
         needsRestart = true;
         results.config = { ok: true };
       } catch (err) {
@@ -304,6 +326,12 @@ export function registerCleanupIpc() {
       }
     }
 
-    return { results, reclaimedBytes, needsRestart };
+    // config 成功即安排自动重启（放在响应返回之后触发）
+    if (results.config?.ok) {
+      relaunching = true;
+      scheduleRelaunch();
+    }
+
+    return { results, reclaimedBytes, needsRestart, relaunching };
   });
 }

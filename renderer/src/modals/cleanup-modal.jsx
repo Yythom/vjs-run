@@ -51,7 +51,7 @@ const OPTIONS = [
   {
     id: "config",
     label: "全部配置（恢复出厂）",
-    desc: "清空所有项目 / 仓库 / Mock 设置",
+    desc: "清空所有项目 / 仓库 / Mock 规则与场景 / 窗口位置及本地界面状态，完成后自动重启",
     danger: true,
   },
 ];
@@ -101,11 +101,19 @@ export default function CleanupModal() {
 
       let reclaimed = 0;
       let needsRestart = false;
+      let relaunching = false;
       if (mainTargets.length) {
         const res = await window.electronAPI.runCleanup(mainTargets);
         if (!res?.success) throw new Error(res?.error || "清理失败");
         reclaimed = res.reclaimedBytes || 0;
         needsRestart = res.needsRestart;
+        relaunching = res.relaunching;
+      }
+
+      // 恢复出厂：主进程会在稍后自动重启，此处只提示，不再拉取存储信息（进程即将退出）
+      if (relaunching) {
+        showToast("已恢复出厂设置，正在重启应用…", "success");
+        return;
       }
 
       const parts = [];
@@ -117,7 +125,7 @@ export default function CleanupModal() {
       if (needsRestart) {
         showToast("配置 / 窗口相关改动将在重启应用后完全生效", "info");
       }
-      
+
       // 清理后重新拉取存储信息
       const infoRes = await window.electronAPI.getCleanupInfo();
       if (infoRes?.success) setInfo(infoRes.info);
