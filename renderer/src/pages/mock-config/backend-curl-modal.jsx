@@ -13,11 +13,11 @@ function parseQueryParams(text) {
   return params;
 }
 
-function buildRequestUrl(backendBaseUrl, path, params) {
-  const base = String(backendBaseUrl || "")
+function buildRequestUrl(baseUrl, path, params) {
+  const base = String(baseUrl || "")
     .trim()
     .replace(/\/+$/, "");
-  if (!base) throw new Error("未配置后端代理地址，请先在服务配置中填写");
+  if (!base) throw new Error("未配置请求地址，请先在服务配置中填写");
   const url = new URL(`${base}${path}`);
   for (const [key, value] of Object.entries(params)) {
     for (const item of Array.isArray(value) ? value : [value]) {
@@ -29,14 +29,14 @@ function buildRequestUrl(backendBaseUrl, path, params) {
 }
 
 function buildCurlCommand({
-  backendBaseUrl,
+  baseUrl,
   method,
   path,
   params,
   body,
   vjToken,
 }) {
-  const url = buildRequestUrl(backendBaseUrl, path, params);
+  const url = buildRequestUrl(baseUrl, path, params);
   const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
   const args = ["curl --silent --show-error", "-X", method, quote(url)];
   if (body)
@@ -54,7 +54,7 @@ function buildCurlCommand({
 }
 
 function buildFetchCommand({
-  backendBaseUrl,
+  baseUrl,
   method,
   path,
   params,
@@ -74,19 +74,33 @@ function buildFetchCommand({
   if (Object.keys(headers).length > 0) {
     options.headers = headers;
   }
-  return `fetch(${JSON.stringify(buildRequestUrl(backendBaseUrl, path, params))}, ${JSON.stringify(options, null, 2)})\n  .then((response) => response.json())\n  .then(console.log)\n  .catch(console.error);`;
+  return `fetch(${JSON.stringify(buildRequestUrl(baseUrl, path, params))}, ${JSON.stringify(options, null, 2)})\n  .then((response) => response.json())\n  .then(console.log)\n  .catch(console.error);`;
 }
+
+// mode: "backend" 打后端代理地址；"local" 打本机已启动的 mock 服务
+const MODE_CONFIG = {
+  backend: {
+    title: "后端 curl 调试",
+    execApi: (payload) => window.electronAPI.executeMockBackendCurl(payload),
+  },
+  local: {
+    title: "本地服务请求调试",
+    execApi: (payload) => window.electronAPI.executeMockLocalCurl(payload),
+  },
+};
 
 export default function BackendCurlModal({
   open,
+  mode = "backend",
   method,
   path,
-  backendBaseUrl,
+  baseUrl,
   onClose,
   onViewLogs,
 }) {
   const config = useAppConfig();
   const vjToken = config.mockVjToken || "";
+  const modeConfig = MODE_CONFIG[mode] || MODE_CONFIG.backend;
 
   const { data, loading, error } = useResource(async () => {
     const result = await window.electronAPI.previewMockResponse({
@@ -139,7 +153,7 @@ export default function BackendCurlModal({
     setExecuting(true);
     setResultText("");
     try {
-      const result = await window.electronAPI.executeMockBackendCurl({
+      const result = await modeConfig.execApi({
         method,
         path,
         params,
@@ -164,7 +178,7 @@ export default function BackendCurlModal({
       if (requestBody) JSON.parse(requestBody);
       await navigator.clipboard.writeText(
         buildCurlCommand({
-          backendBaseUrl,
+          baseUrl,
           method,
           path,
           params,
@@ -185,7 +199,7 @@ export default function BackendCurlModal({
       if (requestBody) JSON.parse(requestBody);
       await navigator.clipboard.writeText(
         buildFetchCommand({
-          backendBaseUrl,
+          baseUrl,
           method,
           path,
           params,
@@ -202,7 +216,7 @@ export default function BackendCurlModal({
   const getActualUrl = () => {
     try {
       const parsedParams = parseQueryParams(paramsTextValue);
-      return buildRequestUrl(backendBaseUrl, path, parsedParams);
+      return buildRequestUrl(baseUrl, path, parsedParams);
     } catch (err) {
       return err.message || "Query Params JSON 格式不正确，无法生成完整 URL";
     }
@@ -215,7 +229,7 @@ export default function BackendCurlModal({
       const requestBody = hasRequestBody ? body : "";
       if (requestBody) JSON.parse(requestBody);
       return buildCurlCommand({
-        backendBaseUrl,
+        baseUrl,
         method,
         path,
         params: parsedParams,
@@ -232,7 +246,7 @@ export default function BackendCurlModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="后端 curl 调试"
+      title={modeConfig.title}
       srOnly={false}
       className="w-[760px] max-w-[92vw] max-h-[84vh]"
     >

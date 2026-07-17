@@ -55,6 +55,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   executeMockBackendCurl: ({ method, path, params, body }) =>
     ipcRenderer.invoke("execute-mock-backend-curl", { method, path, params, body }),
 
+  // 请求本机已启动的 mock 服务，验证接口在本地服务下的实际返回
+  executeMockLocalCurl: ({ method, path, params, body }) =>
+    ipcRenderer.invoke("execute-mock-local-curl", { method, path, params, body }),
+
   // 请求历史：全量拉取 / 清空
   getMockHistory: () => ipcRenderer.invoke("get-mock-history"),
 
@@ -63,8 +67,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 录制：把代理到后端的真实响应固化成 mock 场景
   getMockRecording: () => ipcRenderer.invoke("get-mock-recording"),
 
-  startMockRecording: (name) =>
-    ipcRenderer.invoke("start-mock-recording", { name }),
+  startMockRecording: (name, excludeMock = false) =>
+    ipcRenderer.invoke("start-mock-recording", { name, excludeMock }),
 
   stopMockRecording: () => ipcRenderer.invoke("stop-mock-recording"),
 

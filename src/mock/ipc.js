@@ -134,12 +134,13 @@ export function registerMockIpc() {
   // 独立的「生成 OpenAPI JSON」操作：从 swagger 源服务器拉文档写入 mockSpecPath
   ipcSafe("generate-mock-spec", () => generateMockSpecs(MOCK_ID));
 
-  ipcSafe("execute-mock-backend-curl", async (_, payload = {}) => {
+  // 通用 curl 执行：backend 打后端代理地址，local 打本机已启动的 mock 服务。
+  async function executeCurl(baseUrl, payload) {
     const method = String(payload.method || "GET").toUpperCase();
     const requestPath = String(payload.path || "").trim();
     const body = String(payload.body || "");
     const config = getConfig();
-    const url = getBackendUrl(config.mockBackendBaseUrl, requestPath, payload.params);
+    const url = getBackendUrl(baseUrl, requestPath, payload.params);
     const args = ["--silent", "--show-error", "--max-time", "30", "-X", method, url];
     if (!["GET", "HEAD"].includes(method) && body) {
       JSON.parse(body);
@@ -161,6 +162,20 @@ export function registerMockIpc() {
       sendLog(MOCK_ID, `\x1b[31m✗ curl 失败: ${err.message}\x1b[0m\n`);
       throw err;
     }
+  }
+
+  ipcSafe("execute-mock-backend-curl", (_, payload = {}) =>
+    executeCurl(getConfig().mockBackendBaseUrl, payload),
+  );
+
+  // 请求本机已启动的 mock 服务（会走 mock 规则命中 / 未命中回源），
+  // 用于验证「当前接口在本地服务下的实际返回」。
+  ipcSafe("execute-mock-local-curl", (_, payload = {}) => {
+    const config = getConfig();
+    const localBaseUrl = `http://${config.mockHost || "127.0.0.1"}:${
+      Number(config.mockPort || 3002)
+    }`;
+    return executeCurl(localBaseUrl, payload);
   });
 
   ipcSafe(
@@ -195,6 +210,7 @@ export function registerMockIpc() {
     recording: startRecording({
       sceneName: payload.name,
       scenesDir: getScenesDir(),
+      excludeMock: !!payload.excludeMock,
     }),
   }));
 

@@ -1,7 +1,8 @@
 // Mock 录制 + 场景管理。
 //
-// 录制：开启后，onRecord 管道里 kind=proxy 且 2xx JSON 的真实后端响应，
-// 按「method + 路由模板」upsert 成规则，写入 scenes/<场景名>.json。
+// 录制：开启后，onRecord 管道里 2xx JSON 的响应按「method + 路由模板」
+// upsert 成规则，写入 scenes/<场景名>.json。默认 kind=proxy（真实后端）
+// 和 kind=mock（命中现有规则/回放）都录；开启「排除 mock」后只录 proxy。
 // 活动规则文件（mock-rules.json）在录制期间不被触碰——透传继续走后端、
 // 重复请求持续刷新录制内容；想回放时把场景「应用」为活动规则即可。
 //
@@ -43,6 +44,7 @@ export function getRecordingStatus() {
     sceneName: session.sceneName,
     count: session.rules.size,
     startedAt: session.startedAt,
+    excludeMock: session.excludeMock,
   };
 }
 
@@ -50,7 +52,7 @@ function pushStatus() {
   sendMockRecording(getRecordingStatus());
 }
 
-export function startRecording({ sceneName: rawName, scenesDir }) {
+export function startRecording({ sceneName: rawName, scenesDir, excludeMock = false }) {
   const sceneName = sanitizeSceneName(rawName);
   fs.mkdirSync(scenesDir, { recursive: true });
   const file = sceneFilePath(scenesDir, sceneName);
@@ -61,7 +63,13 @@ export function startRecording({ sceneName: rawName, scenesDir }) {
     rules.set(ruleKey(rule), rule);
   }
 
-  session = { sceneName, file, rules, startedAt: Date.now() };
+  session = {
+    sceneName,
+    file,
+    rules,
+    startedAt: Date.now(),
+    excludeMock: !!excludeMock,
+  };
   pushStatus();
   return getRecordingStatus();
 }
@@ -74,14 +82,21 @@ export function stopRecording() {
 }
 
 /**
- * onRecord 管道调用：把符合条件的代理响应固化成录制场景里的规则。
- * 只收 2xx 且完整记录到的 JSON 响应；mock 命中（含回放）不会被再次录制，天然无回环。
+ * onRecord 管道调用：把符合条件的响应固化成录制场景里的规则。
+ * 只收 2xx 且完整记录到的 JSON 响应。默认 proxy + mock 都收；开启 excludeMock
+ * 后只收 proxy。mock 的响应本身就是规则里的 JSON，天然满足 JSON 条件、无回环
+ * （单次请求触发一次，录制不会反向触发新请求）。
  */
 export function handleRecordedEntry(entry) {
   if (!session) return;
-  if (entry.kind !== "proxy") return;
+  const isMock = entry.kind === "mock";
+  const isProxy = entry.kind === "proxy";
+  if (!isProxy && !isMock) return;
+  if (isMock && session.excludeMock) return;
   if (!entry.status || entry.status < 200 || entry.status >= 300) return;
-  if (entry.responseTruncated || !entry.responseIsJson) return;
+  if (entry.responseTruncated) return;
+  // proxy 靠 responseIsJson 判定；mock 的 responseBody 本就是规则 JSON 对象
+  if (!isMock && !entry.responseIsJson) return;
 
   const rule = {
     enabled: true,

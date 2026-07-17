@@ -94,7 +94,7 @@ export default function AppShell() {
 
       {createPortal(
         <Toaster
-          position="top-center"
+          position="bottom-left"
           richColors
           closeButton
           duration={2000}

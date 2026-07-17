@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import clsx from "clsx";
 import useResource from "../hooks/use-resource";
@@ -17,6 +17,7 @@ import { useStatus } from "../stores/status-store";
 import { MOCK_ID } from "../constants";
 import { prettyJson } from "./mock-config/utils";
 import { showToast } from "../utils/toast";
+import Modal from "../components/modal";
 
 const KIND_META = {
   mock: {
@@ -109,14 +110,137 @@ function HistoryListItem({ entry, selected, onSelect }) {
   );
 }
 
-function JsonBlock({ title, value }) {
+// 把 text 中匹配 keyword（大小写不敏感）的片段包成 <mark>，返回 React 节点数组和命中数。
+// activeIndex 指定当前高亮项，activeRef 挂到该项上以便滚动定位。
+function highlightMatches(text, keyword, activeIndex, activeRef) {
+  if (!keyword) return { nodes: text, count: 0 };
+  const lower = text.toLowerCase();
+  const kw = keyword.toLowerCase();
+  const nodes = [];
+  let from = 0;
+  let idx;
+  let count = 0;
+  while ((idx = lower.indexOf(kw, from)) !== -1) {
+    if (idx > from) nodes.push(text.slice(from, idx));
+    const isActive = count === activeIndex;
+    nodes.push(
+      <mark
+        key={idx}
+        ref={isActive ? activeRef : undefined}
+        className={clsx(
+          "rounded-sm text-slate-900",
+          isActive ? "bg-orange-400 ring-1 ring-orange-500" : "bg-amber-300/70",
+        )}
+      >
+        {text.slice(idx, idx + kw.length)}
+      </mark>,
+    );
+    from = idx + kw.length;
+    count += 1;
+  }
+  if (from < text.length) nodes.push(text.slice(from));
+  return { nodes, count };
+}
+
+function JsonBlock({ title, value, copyable, searchable }) {
   const text = typeof value === "string" ? value : prettyJson(value);
+  const [copied, setCopied] = useState(false);
+  const [keyword, setKeyword] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const activeRef = useRef(null);
+
+  const trimmed = keyword.trim();
+  const { nodes, count } = searchable
+    ? highlightMatches(text || "", trimmed, activeIndex, activeRef)
+    : { nodes: text, count: 0 };
+
+  // 关键字变化后回到第一处匹配
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [trimmed]);
+
+  // 当前匹配项滚动进可视区
+  useEffect(() => {
+    if (activeRef.current) {
+      activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [activeIndex, trimmed]);
+
   if (!text) return null;
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      showToast(`复制失败: ${err?.message || "未知错误"}`, "error");
+    }
+  };
+
+  const goTo = (delta) => {
+    if (count === 0) return;
+    setActiveIndex((prev) => (prev + delta + count) % count);
+  };
+
   return (
     <div className="flex flex-col gap-1.5 min-h-0">
-      <div className="text-xs font-medium text-slate-600">{title}</div>
+      <div className="flex items-center gap-2">
+        <div className="text-xs font-medium text-slate-600">{title}</div>
+        {searchable && (
+          <div className="ml-auto flex items-center gap-1">
+            <input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  goTo(e.shiftKey ? -1 : 1);
+                }
+              }}
+              placeholder="查找关键字"
+              className="w-36 bg-card border border-border rounded px-2 py-0.5 text-[11px] text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
+            />
+            {trimmed && (
+              <span className="text-[10.5px] text-slate-400 tabular-nums min-w-[52px] text-center">
+                {count > 0 ? `${activeIndex + 1}/${count}` : "无匹配"}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => goTo(-1)}
+              disabled={count === 0}
+              title="上一个 (Shift+Enter)"
+              className="px-1.5 py-0.5 rounded border text-[10.5px] font-medium bg-card text-slate-600 border-border hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => goTo(1)}
+              disabled={count === 0}
+              title="下一个 (Enter)"
+              className="px-1.5 py-0.5 rounded border text-[10.5px] font-medium bg-card text-slate-600 border-border hover:bg-hover disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ↓
+            </button>
+          </div>
+        )}
+        {copyable && (
+          <button
+            type="button"
+            onClick={copy}
+            className={clsx(
+              "px-2 py-0.5 rounded border text-[10.5px] font-medium bg-card text-slate-600 border-border hover:bg-hover",
+              searchable ? "" : "ml-auto",
+            )}
+          >
+            {copied ? "✓ 已复制" : "📋 复制"}
+          </button>
+        )}
+      </div>
       <pre className="text-[11px] leading-relaxed font-mono text-slate-800 bg-[#fafbfc] border border-border rounded-lg p-3 overflow-auto max-h-72 whitespace-pre-wrap break-all">
-        {text}
+        {nodes}
       </pre>
     </div>
   );
@@ -135,20 +259,32 @@ function defaultSceneName() {
 function RecordingControl() {
   const recording = useMockRecording();
   const mockStatus = useStatus(MOCK_ID);
-  const [naming, setNaming] = useState(false);
+  const [configuring, setConfiguring] = useState(false);
   const [name, setName] = useState("");
+  const [excludeMock, setExcludeMock] = useState(false);
   const mockRunning = mockStatus === "running";
+
+  const openConfig = () => {
+    setName(defaultSceneName());
+    setExcludeMock(false);
+    setConfiguring(true);
+  };
 
   const start = async () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    const result = await startMockRecording(trimmed);
+    const result = await startMockRecording(trimmed, excludeMock);
     if (!result?.success) {
       showToast(`开始录制失败: ${result?.error || "未知错误"}`, "error");
       return;
     }
-    setNaming(false);
-    showToast(`开始录制到场景「${trimmed}」，经过代理的响应会被自动固化`, "success");
+    setConfiguring(false);
+    showToast(
+      excludeMock
+        ? `开始录制到场景「${trimmed}」，仅固化经过代理的真实响应`
+        : `开始录制到场景「${trimmed}」，代理响应与命中的 mock 都会被固化`,
+      "success",
+    );
   };
 
   const stop = async () => {
@@ -176,56 +312,79 @@ function RecordingControl() {
     );
   }
 
-  if (naming) {
-    return (
-      <div className="flex items-center gap-1.5">
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") start();
-            if (e.key === "Escape") setNaming(false);
-          }}
-          placeholder="场景名"
-          className="w-40 bg-card border border-border rounded-md px-2.5 py-1 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
-        />
-        <button
-          type="button"
-          onClick={start}
-          disabled={!name.trim()}
-          className="px-2.5 py-1 rounded-md border text-xs font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40"
-        >
-          开始
-        </button>
-        <button
-          type="button"
-          onClick={() => setNaming(false)}
-          className="px-2.5 py-1 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover"
-        >
-          取消
-        </button>
-      </div>
-    );
-  }
-
   return (
-    <button
-      type="button"
-      disabled={!mockRunning}
-      onClick={() => {
-        setName(defaultSceneName());
-        setNaming(true);
-      }}
-      title={
-        mockRunning
-          ? "把代理到后端的真实响应录制成 mock 场景（在 Mock 配置页可应用）"
-          : "需要 mock 运行中才能录制"
-      }
-      className="px-3 py-1 rounded-md border text-xs font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
-    >
-      ⏺ 录制
-    </button>
+    <>
+      <button
+        type="button"
+        disabled={!mockRunning}
+        onClick={openConfig}
+        title={
+          mockRunning
+            ? "把请求响应录制成 mock 场景（默认含命中的 mock，可配置排除；在 Mock 配置页可应用）"
+            : "需要 mock 运行中才能录制"
+        }
+        className="px-3 py-1 rounded-md border text-xs font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        ⏺ 录制
+      </button>
+
+      <Modal
+        open={configuring}
+        onClose={() => setConfiguring(false)}
+        title="配置录制"
+        srOnly={false}
+        className="w-[440px] max-w-[calc(100vw-2rem)]"
+      >
+        <div className="p-5 flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-slate-600">场景名</label>
+            <input
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") start();
+              }}
+              placeholder="场景名"
+              className="w-full bg-card border border-border rounded-md px-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+            />
+          </div>
+
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={excludeMock}
+              onChange={(e) => setExcludeMock(e.target.checked)}
+              className="accent-red-500 mt-0.5"
+            />
+            <span className="flex flex-col gap-0.5">
+              <span className="text-xs font-medium text-slate-700">排除 mock</span>
+              <span className="text-[11px] text-slate-400 leading-snug">
+                默认不勾：代理响应与命中的 mock 都会被固化。勾选后只录经过代理的真实后端响应，跳过命中现有 mock 规则的请求。
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="shrink-0 flex items-center justify-end gap-2 px-5 py-3.5 border-t border-border bg-slate-50/50">
+          <button
+            type="button"
+            onClick={() => setConfiguring(false)}
+            className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover transition-colors"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={start}
+            disabled={!name.trim()}
+            className="px-3 py-1.5 rounded-md border text-xs font-semibold bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            ⏺ 开始录制
+          </button>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -333,7 +492,7 @@ function HistoryDetail({ entry }) {
             响应体超过记录上限，未保存内容
           </div>
         ) : (
-          <JsonBlock title="Response" value={entry.responseBody} />
+          <JsonBlock title="Response" value={entry.responseBody} copyable searchable />
         )}
         {entry.kind === "miss" && (
           <div className="text-[11px] text-slate-500">

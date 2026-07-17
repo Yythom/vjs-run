@@ -22,8 +22,8 @@ export async function loadMockRecording() {
   return result;
 }
 
-export async function startMockRecording(name) {
-  const result = await window.electronAPI.startMockRecording(name);
+export async function startMockRecording(name, excludeMock = false) {
+  const result = await window.electronAPI.startMockRecording(name, excludeMock);
   if (result?.success) {
     useMockRecordingStore.setState({
       recording: result.recording || { enabled: false },

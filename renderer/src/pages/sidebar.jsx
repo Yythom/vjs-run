@@ -58,12 +58,18 @@ function NavigationMenuItem({ icon, label, path, activePath }) {
 
 function MockMenuHeader() {
   const status = useStatus(MOCK_ID);
+  const openModal = useModalNav();
   const isActive = status === "running" || status === "starting";
 
   const handleToggle = (e) => {
     e.stopPropagation();
     if (isActive) stopMock();
     else startMock();
+  };
+
+  const handleOpenLog = (e) => {
+    e.stopPropagation();
+    openModal("/mock-service");
   };
 
   return (
@@ -82,6 +88,14 @@ function MockMenuHeader() {
         title={isActive ? "停止 Mock 服务" : "启动 Mock 服务"}
       >
         {isActive ? "⏹" : "▶"}
+      </button>
+      <button
+        type="button"
+        onClick={handleOpenLog}
+        className="w-5 h-5 rounded flex items-center justify-center text-[10px] cursor-pointer border border-slate-300/60 text-slate-500 bg-slate-500/5 hover:bg-slate-500/15 hover:text-slate-700 transition-all shadow-sm shrink-0"
+        title="查看运行日志"
+      >
+        📋
       </button>
     </div>
   );
@@ -159,12 +173,6 @@ export default function Sidebar() {
 
         {/* Mock 服务区 */}
         <MockMenuHeader />
-        <NavigationMenuItem
-          icon="📋"
-          label="运行日志"
-          path="/mock-service"
-          activePath={activePath}
-        />
         <NavigationMenuItem
           icon="🧩"
           label="规则配置"

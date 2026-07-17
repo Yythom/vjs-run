@@ -134,7 +134,8 @@ export default function MockRuleEditor({
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const [recommendOpen, setRecommendOpen] = useState(false);
-  const [backendCurlOpen, setBackendCurlOpen] = useState(false);
+  // null | "backend" | "local"：控制 curl 调试弹窗打开与请求目标
+  const [curlMode, setCurlMode] = useState(null);
   const openModal = useModalNav();
   const path = watch("path");
   const method = watch("method");
@@ -232,12 +233,21 @@ export default function MockRuleEditor({
               </button>
               <button
                 type="button"
-                onClick={() => setBackendCurlOpen(true)}
+                onClick={() => setCurlMode("backend")}
                 disabled={!route || !path.trim()}
                 title="使用推荐数据向配置的后端代理地址执行 curl"
                 className="px-2 py-1 rounded-md border text-[11px] bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 后端调试
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurlMode("local")}
+                disabled={!route || !path.trim()}
+                title="请求本机已启动的 mock 服务，验证当前接口的实际返回"
+                className="px-2 py-1 rounded-md border text-[11px] bg-sky-400/10 text-sky-700 border-sky-400/35 hover:bg-sky-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                本地请求
               </button>
 
               <div className="ml-auto flex gap-2">
@@ -290,13 +300,14 @@ export default function MockRuleEditor({
       />
       {route && (
         <BackendCurlModal
-          open={backendCurlOpen}
+          open={curlMode !== null}
+          mode={curlMode || "backend"}
           method={(method || route.method).toUpperCase()}
           path={path.trim()}
-          backendBaseUrl={backendBaseUrl}
-          onClose={() => setBackendCurlOpen(false)}
+          baseUrl={curlMode === "local" ? mockBaseUrl : backendBaseUrl}
+          onClose={() => setCurlMode(null)}
           onViewLogs={() => {
-            setBackendCurlOpen(false);
+            setCurlMode(null);
             openModal("/mock-service");
           }}
         />
