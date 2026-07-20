@@ -17,6 +17,10 @@ import {
 } from "./server.js";
 import { mockFromSchema } from "./data.js";
 import {
+  getRecommendedQueryParams,
+  getRequestSchema,
+} from "./request-schema.js";
+import {
   MOCK_ID,
   ensureMockRulesDir,
   generateMockSpecs,
@@ -124,18 +128,28 @@ function getBackendUrl(baseUrl, requestPath, params = {}) {
   return url.toString();
 }
 
-function getRecommendedQueryParams(route) {
-  return (route.operation.parameters || []).reduce((params, parameter) => {
-    if (parameter?.in !== "query" || !parameter.name) return params;
-    const example =
-      parameter.example ??
-      Object.values(parameter.examples || {})[0]?.value ??
-      mockFromSchema(parameter.schema || {}, route.spec, {
-        fieldName: parameter.name,
-      });
-    if (example !== undefined) params[parameter.name] = example;
-    return params;
-  }, {});
+// { method, path } → swagger route。path 必须是接入了 service prefix 的完整 path
+// （和列表里展示的一致，例如 /vjg/ads/actions/click）。
+async function resolveRouteFromPayload(payload = {}) {
+  const method = String(payload.method || "*").toUpperCase();
+  const targetPath = String(payload.path || "").trim();
+  if (!targetPath) throw new Error("path 不能为空");
+
+  const config = getConfig();
+  if (!config.mockSpecPath) {
+    throw new Error("Mock spec 路径未配置，请到设置中填写");
+  }
+
+  const sources = await loadOpenApiSources(config.mockSpecPath);
+  const allRoutes = sources.flatMap(({ spec, sourcePath }) =>
+    buildRoutes(spec, sourcePath, config.mockServiceAddress || ""),
+  );
+
+  const route = findRouteForPreview(allRoutes, method, targetPath);
+  if (!route) {
+    throw new Error(`未在 swagger 中找到 ${method} ${targetPath}`);
+  }
+  return route;
 }
 
 export function registerMockIpc() {
@@ -371,28 +385,17 @@ export function registerMockIpc() {
     return { rules, name, file: sceneFilePath(getScenesDir(), name) };
   });
 
+  // 接口的请求侧 schema：参数表 + requestBody 采样，供规则编辑器展示并一键
+  // 填成变体匹配条件。响应侧没定义 schema 的接口也能正常返回。
+  ipcSafe("get-mock-request-schema", async (_, payload = {}) =>
+    getRequestSchema(await resolveRouteFromPayload(payload)),
+  );
+
   // 根据 OpenAPI schema 推荐一份 mock JSON（不写盘，仅返回供用户复制）。
   // 入参 { method, path }：path 必须是接入了 service prefix 的完整 path
   // （和列表里展示的一致，例如 /vjg/ads/actions/click）。
   ipcSafe("preview-mock-response", async (_, payload = {}) => {
-    const method = String(payload.method || "*").toUpperCase();
-    const targetPath = String(payload.path || "").trim();
-    if (!targetPath) throw new Error("path 不能为空");
-
-    const config = getConfig();
-    if (!config.mockSpecPath) {
-      throw new Error("Mock spec 路径未配置，请到设置中填写");
-    }
-
-    const sources = await loadOpenApiSources(config.mockSpecPath);
-    const allRoutes = sources.flatMap(({ spec, sourcePath }) =>
-      buildRoutes(spec, sourcePath, config.mockServiceAddress || ""),
-    );
-
-    const route = findRouteForPreview(allRoutes, method, targetPath);
-    if (!route) {
-      throw new Error(`未在 swagger 中找到 ${method} ${targetPath}`);
-    }
+    const route = await resolveRouteFromPayload(payload);
 
     const responses = route.operation.responses || {};
     const responseKey =

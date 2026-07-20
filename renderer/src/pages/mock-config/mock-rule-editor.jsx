@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -6,8 +6,10 @@ import clsx from "clsx";
 import JsonEditor from "../../components/json-editor";
 import RecommendMockModal from "./recommend-mock-modal";
 import BackendCurlModal from "./backend-curl-modal";
+import RequestSchemaPanel, { ScopeTag, formatExample } from "./request-schema-panel";
 import { METHODS, prettyJson } from "./utils";
 import useModalNav from "../../hooks/use-modal-nav";
+import useResource from "../../hooks/use-resource";
 
 const statusText = z.string().refine(
   (v) => {
@@ -235,8 +237,97 @@ const CONDITION_SCOPES = [
   { value: "body", label: "Body" },
 ];
 
+/**
+ * 「+ 条件」下拉：列出 swagger 里可做条件的参数，点选即填好 scope/key/示例值。
+ * path 参数不在列内——它已经体现在规则的 path 模板（/api/user/{id}）里，
+ * 不是请求间的差异，拿来做变体条件没有意义。
+ */
+function ConditionPicker({ schema, onPick }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (event) => {
+      if (!wrapRef.current?.contains(event.target)) setOpen(false);
+    };
+    const onKeyDown = (event) => event.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const options = [
+    ...(schema?.parameters || [])
+      .filter((p) => p.in !== "path")
+      .map((p) => ({
+        scope: p.in,
+        key: p.name,
+        value: formatExample(p.example),
+        hint: p.description,
+      })),
+    ...(schema?.body?.fields || []).map((f) => ({
+      scope: "body",
+      key: f.path,
+      value: formatExample(f.example),
+      hint: f.type,
+    })),
+  ];
+
+  // 只把表单需要的三个字段交出去，hint 仅用于下拉里的展示
+  const pick = ({ scope, key, value }) => {
+    setOpen(false);
+    onPick({ scope, key, value });
+  };
+
+  return (
+    <div ref={wrapRef} className="relative ml-auto">
+      <button
+        type="button"
+        onClick={() => (options.length ? setOpen(!open) : pick({ scope: "query", key: "", value: "" }))}
+        className="text-sky-700 hover:underline"
+      >
+        + 条件{options.length > 0 && (open ? " ▲" : " ▼")}
+      </button>
+      {open && (
+        <div className="absolute z-20 top-full right-0 mt-1 w-[300px] max-h-[260px] overflow-y-auto rounded-md border border-border bg-card shadow-lg py-1">
+          <div className="px-2.5 py-1 text-[10px] text-slate-400">
+            来自 swagger 的请求参数
+          </div>
+          {options.map((option) => (
+            <button
+              key={`${option.scope}:${option.key}`}
+              type="button"
+              onClick={() => pick(option)}
+              className="w-full px-2.5 py-1.5 flex items-center gap-2 hover:bg-hover text-left cursor-pointer"
+            >
+              <ScopeTag scope={option.scope} />
+              <span className="text-[11px] text-slate-900 truncate">{option.key}</span>
+              {option.value !== "" && (
+                <span className="ml-auto text-[10px] text-slate-400 font-mono truncate max-w-[110px] shrink-0">
+                  {option.value}
+                </span>
+              )}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => pick({ scope: "query", key: "", value: "" })}
+            className="w-full px-2.5 py-1.5 text-[11px] text-slate-600 hover:bg-hover text-left border-t border-border mt-1 cursor-pointer"
+          >
+            自定义条件…
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // 一个变体的条件行（嵌套 useFieldArray 必须独立成组件）
-function ConditionRows({ control, register, errors, variantIndex }) {
+function ConditionRows({ control, register, errors, variantIndex, requestSchema }) {
   const { fields, append, remove } = useFieldArray({
     control,
     name: `variants.${variantIndex}.conditions`,
@@ -250,13 +341,7 @@ function ConditionRows({ control, register, errors, variantIndex }) {
         {typeof conditionErrors?.message === "string" && (
           <span className="text-red-600">{conditionErrors.message}</span>
         )}
-        <button
-          type="button"
-          onClick={() => append({ scope: "query", key: "", value: "" })}
-          className="ml-auto text-sky-700 hover:underline"
-        >
-          + 条件
-        </button>
+        <ConditionPicker schema={requestSchema} onPick={append} />
       </div>
       {fields.map((field, condIndex) => {
         const rowErrors = conditionErrors?.[condIndex];
@@ -301,7 +386,7 @@ function ConditionRows({ control, register, errors, variantIndex }) {
   );
 }
 
-function VariantCard({ control, register, errors, index, onRemove }) {
+function VariantCard({ control, register, errors, index, onRemove, requestSchema }) {
   const variantErrors = errors.variants?.[index];
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden">
@@ -348,6 +433,7 @@ function VariantCard({ control, register, errors, index, onRemove }) {
         register={register}
         errors={errors}
         variantIndex={index}
+        requestSchema={requestSchema}
       />
       <div className="px-3 py-2.5">
         <div className="text-[11px] text-slate-500 mb-1.5 flex items-center gap-2">
@@ -370,7 +456,7 @@ function VariantCard({ control, register, errors, index, onRemove }) {
   );
 }
 
-function VariantsSection({ control, register, errors }) {
+function VariantsSection({ control, register, errors, requestSchema }) {
   const { fields, append, remove } = useFieldArray({ control, name: "variants" });
   const [open, setOpen] = useState(fields.length > 0);
 
@@ -418,6 +504,7 @@ function VariantsSection({ control, register, errors }) {
               errors={errors}
               index={index}
               onRemove={() => remove(index)}
+              requestSchema={requestSchema}
             />
           ))}
         </div>
@@ -472,6 +559,26 @@ export default function MockRuleEditor({
     onDirtyChange?.(isDirty);
   }, [isDirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  // 请求参数 schema：只在挂载时按「选中项自带的 method/path」拉一次
+  // （编辑器有 key={selectedKey}，切换接口会重挂）。不跟 watch("path") 走，
+  // 否则用户在 Path 输入框里每敲一个字都会触发一次重量级的 swagger 解析。
+  const schemaMethod = (route?.method || rule?.method || "").toUpperCase();
+  const schemaPath = route?.path || rule?.path || "";
+  const {
+    data: requestSchema,
+    loading: schemaLoading,
+    error: schemaError,
+  } = useResource(async () => {
+    // 自定义规则（spec 外的路径）没有 route，swagger 里查不到，不必发请求
+    if (!route || !schemaPath) return null;
+    const result = await window.electronAPI.getMockRequestSchema({
+      method: schemaMethod,
+      path: schemaPath,
+    });
+    if (!result?.success) throw new Error(result?.error || "读取请求参数失败");
+    return result;
+  }, [schemaMethod, schemaPath, Boolean(route)]);
 
   const [recommendOpen, setRecommendOpen] = useState(false);
   // null | "backend" | "local"：控制 curl 调试弹窗打开与请求目标
@@ -606,7 +713,19 @@ export default function MockRuleEditor({
         </div>
 
         <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
-          <VariantsSection control={control} register={register} errors={errors} />
+          {route && (
+            <RequestSchemaPanel
+              schema={requestSchema}
+              loading={schemaLoading}
+              error={schemaError ? schemaError.message || String(schemaError) : ""}
+            />
+          )}
+          <VariantsSection
+            control={control}
+            register={register}
+            errors={errors}
+            requestSchema={requestSchema}
+          />
           <div className="px-4 py-2.5 flex items-center gap-2 shrink-0">
             <div className="text-xs font-medium text-slate-600">
               {variantCount ? "Response JSON（兜底：无变体命中时返回）" : "Response JSON"}

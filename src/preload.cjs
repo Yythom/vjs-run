@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
   previewMockResponse: ({ method, path }) =>
     ipcRenderer.invoke("preview-mock-response", { method, path }),
 
+  // 接口的请求侧 schema：query/path/header 参数 + requestBody 字段，
+  // 供规则编辑器展示参数表并一键填成变体匹配条件
+  getMockRequestSchema: ({ method, path }) =>
+    ipcRenderer.invoke("get-mock-request-schema", { method, path }),
+
   // 向设置页配置的后端地址执行当前 OpenAPI 接口的 curl 调试请求
   executeMockBackendCurl: ({ method, path, params, body }) =>
     ipcRenderer.invoke("execute-mock-backend-curl", { method, path, params, body }),

@@ -10,6 +10,7 @@ import {
   normalizeVariantLoose,
   normalizeVariantStrict,
   normalizeVariantsStrict,
+  flattenBodyFields,
 } from "../src/mock/variant-match.js";
 
 // ─── matchWhen：query ────────────────────────────────────────────────────────
@@ -171,6 +172,76 @@ test("normalizeVariantStrict：各校验分支抛中文错误", () => {
     /delay 必须是大于等于 0 的整数/,
   );
 });
+
+// ─── flattenBodyFields（UI 列出可做条件的 body 字段）──────────────────────────
+
+test("flattenBodyFields：对象递归、数组取第一项拼 .0、只收原始值叶子", () => {
+  const fields = flattenBodyFields({
+    name: "张三",
+    filter: { type: "hot", level: 2 },
+    items: [{ id: 7, tag: null }],
+    empty: [],
+  });
+  assert.deepEqual(fields, [
+    { path: "name", type: "string", example: "张三" },
+    { path: "filter.type", type: "string", example: "hot" },
+    { path: "filter.level", type: "number", example: 2 },
+    { path: "items.0.id", type: "number", example: 7 },
+    { path: "items.0.tag", type: "null", example: null },
+  ]); // empty: [] 不产出字段（没有可取值的叶子）
+});
+
+// 这条是 flattenBodyFields 与 matchWhen 的契约：产出的每条 path，
+// 拿它的 example 当条件，必须能在同一份 body 上命中。两边语义漂移就会挂。
+test("flattenBodyFields 产出的路径都能被 matchWhen 命中（生成/消费语义一致）", () => {
+  const body = {
+    name: "张三",
+    filter: { type: "hot", level: 2, on: true },
+    items: [{ id: 7 }],
+  };
+  const fields = flattenBodyFields(body);
+  assert.ok(fields.length >= 5);
+  for (const field of fields) {
+    const when = normalizeWhen({ body: { [field.path]: field.example } });
+    assert.equal(
+      matchWhen(when, { body }),
+      true,
+      `路径 ${field.path} 取不回原值`,
+    );
+  }
+});
+
+test("flattenBodyFields：深度限制与数量限制", () => {
+  // 1. 深度限制：默认最大深度为 5，深度大于 5 级的属性（第 6 级及以上）应该被截断
+  const deepObj = {
+    l1: {
+      l2: {
+        l3: {
+          l4: {
+            l5: "ok leaf", // 第 5 级（leaf），可以产出
+            l5_obj: {
+              l6: "too deep", // 第 6 级（leaf），超过 depth 5，应被截断
+            },
+          },
+        },
+      },
+    },
+  };
+  const fieldsDeep = flattenBodyFields(deepObj);
+  const pathsDeep = fieldsDeep.map(f => f.path);
+  assert.ok(pathsDeep.includes("l1.l2.l3.l4.l5"));
+  assert.ok(!pathsDeep.includes("l1.l2.l3.l4.l5_obj.l6"));
+
+
+  // 2. 数量限制：超过 200 个字段时截断
+  const largeObj = {};
+  for (let i = 0; i < 250; i++) {
+    largeObj[`field_${i}`] = i;
+  }
+  const fieldsLarge = flattenBodyFields(largeObj);
+  assert.equal(fieldsLarge.length, 200);
+});
+
 
 test("normalizeVariantsStrict：非数组报错；name 规则内重复报错", () => {
   assert.throws(() => normalizeVariantsStrict({}, "第 1 条规则"), /variants 必须是数组/);

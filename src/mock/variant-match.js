@@ -211,6 +211,41 @@ export function matchWhen(when, { query, headers, body } = {}) {
   return true;
 }
 
+// ─── 点路径生成（供 UI 列出「哪些 body 字段能做条件」）──────────────────────
+// 与上面的 getByPath 是同一套语义的正反面：这里产出的每条 path，getByPath
+// 都必须能在同一份数据上取回对应的值——放同一模块就是为了防止两边漂移。
+
+const BODY_FIELD_MAX_DEPTH = 5;
+const BODY_FIELD_MAX_COUNT = 200;
+
+/**
+ * requestBody 采样结果 → 扁平的点路径字段列表。
+ * 对象递归拼 `.`，数组取第一个元素并拼 `.0`，只收原始值叶子（能做等值条件的）。
+ */
+export function flattenBodyFields(sample, prefix = "", depth = 0, out = []) {
+  if (out.length >= BODY_FIELD_MAX_COUNT || depth > BODY_FIELD_MAX_DEPTH) return out;
+
+  if (Array.isArray(sample)) {
+    if (sample.length) flattenBodyFields(sample[0], `${prefix}.0`, depth + 1, out);
+    return out;
+  }
+  if (isPlainObject(sample)) {
+    for (const [key, value] of Object.entries(sample)) {
+      flattenBodyFields(value, prefix ? `${prefix}.${key}` : key, depth + 1, out);
+      if (out.length >= BODY_FIELD_MAX_COUNT) break;
+    }
+    return out;
+  }
+  if (prefix) {
+    out.push({
+      path: prefix,
+      type: sample === null ? "null" : typeof sample,
+      example: sample,
+    });
+  }
+  return out;
+}
+
 // 规则内首个启用且命中的变体；无命中返回 undefined（调用方回退规则顶层）。
 export function selectVariant(rule, request) {
   const variants = rule?.variants;
