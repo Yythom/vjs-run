@@ -14,7 +14,8 @@
     "renderer:dev": "pnpm --dir renderer dev",
     "renderer:build": "pnpm --dir renderer build",
     "lint": "eslint \"src/**/*.{js,cjs}\"",
-    "lint:all": "pnpm lint && pnpm --dir renderer lint"
+    "lint:all": "pnpm lint && pnpm --dir renderer lint",
+    "test": "node --test 'scripts/**/*.test.mjs'"
   },
   "keywords": [],
   "author": "xieyuteng",
