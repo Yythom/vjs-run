@@ -23,6 +23,8 @@
 //   node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs scenes                          # 列出所有场景
 //   node scripts/mock-rule.mjs new-scene --scene 登录联调       # 新建空场景（同名报错）
+//   node scripts/mock-rule.mjs rm-scene  --scene 登录联调       # 删除整个场景文件
+//   node scripts/mock-rule.mjs rename-scene --scene 登录联调 --to 登录联调v2   # 重命名场景
 //   echo '{...}' | node scripts/mock-rule.mjs set --scene 登录联调 --path /api/login  # 往场景里加接口
 //   node scripts/mock-rule.mjs list --scene 登录联调            # 查看场景内容
 //
@@ -236,6 +238,36 @@ switch (command) {
     break;
   }
 
+  case "rename-scene": {
+    // 语义对齐 recorder.js 的 renameScene；「录制中禁止改名」是 app 进程内状态，CLI 无法检查
+    const from = sanitizeSceneName(flags.scene);
+    if (flags.to === true || flags.to === undefined) fail("--to 需要一个新场景名");
+    const to = sanitizeSceneName(flags.to);
+    const fromFile = sceneFilePath(from);
+    if (!fs.existsSync(fromFile)) fail(`场景不存在：${from}`);
+    if (to === from) {
+      console.log(`✔ 新旧名字相同，无需重命名：${from}`);
+      break;
+    }
+    const toFile = sceneFilePath(to);
+    if (fs.existsSync(toFile)) fail(`场景已存在：${to}`);
+    fs.renameSync(fromFile, toFile);
+    console.log(`✔ 已重命名：${from} → ${to}`);
+    console.log(`  → ${toFile}`);
+    break;
+  }
+
+  case "rm-scene": {
+    const name = sanitizeSceneName(flags.scene);
+    const target = sceneFilePath(name);
+    if (!fs.existsSync(target)) fail(`场景不存在：${name}`);
+    // 只删场景文件本身，不影响活动 mock-rules.json（即使该场景曾被「应用」过）
+    fs.unlinkSync(target);
+    console.log(`✔ 已删除场景：${name}`);
+    console.log(`  → ${target}`);
+    break;
+  }
+
   case "get": {
     const { method, rulePath } = requireTarget();
     const rule = loadRules(file).find((r) => sameRule(r, method, rulePath));
@@ -330,6 +362,8 @@ switch (command) {
         "",
         "  scenes                              列出所有场景",
         "  new-scene --scene <名>              新建空场景（同名报错）",
+        "  rm-scene  --scene <名>              删除整个场景文件（不影响活动规则）",
+        "  rename-scene --scene <旧名> --to <新名>   重命名场景（同名冲突报错）",
         "",
         "  --scene <名> 时所有命令改为操作 scenes/<名>.json（不碰活动规则）",
         "  --method 缺省为 *（匹配所有方法）；--file 可覆盖活动规则文件路径",

@@ -47,6 +47,12 @@ node scripts/mock-rule.mjs scenes
 # 新建空场景（同名报错）
 node scripts/mock-rule.mjs new-scene --scene 登录联调
 
+# 删除整个场景文件（删前先和用户确认；不影响活动规则）
+node scripts/mock-rule.mjs rm-scene --scene 登录联调
+
+# 重命名场景（新名已存在会报错；若软件正把该场景用于「录制」，请先在软件里停止录制再改名）
+node scripts/mock-rule.mjs rename-scene --scene 登录联调 --to 登录联调v2
+
 # 往场景里加/改接口（response 从 stdin 读 JSON）
 echo '{"rc":0,"code":"SUCCESS","data":{"token":"abc"}}' \
   | node scripts/mock-rule.mjs set --scene 登录联调 --method POST --path /api/login --status 200
@@ -54,10 +60,15 @@ echo '{"rc":0,"code":"SUCCESS","data":{"token":"abc"}}' \
 # 复杂 JSON 先写文件再喂进去
 node scripts/mock-rule.mjs set --scene 登录联调 --method GET --path /api/user/profile < /tmp/resp.json
 
+# 模拟慢接口：--delay 毫秒数（返回前先等待）
+echo '{"rc":0,"data":[]}' \
+  | node scripts/mock-rule.mjs set --scene 登录联调 --method GET --path /api/list --delay 3000
+
 # 查看 / 开关 / 删除场景内某条
 node scripts/mock-rule.mjs list    --scene 登录联调
 node scripts/mock-rule.mjs get     --scene 登录联调 --method POST --path /api/login
 node scripts/mock-rule.mjs disable --scene 登录联调 --method POST --path /api/login
+node scripts/mock-rule.mjs enable  --scene 登录联调 --method POST --path /api/login
 node scripts/mock-rule.mjs rm      --scene 登录联调 --method POST --path /api/login
 ```
 
@@ -70,12 +81,20 @@ node scripts/mock-rule.mjs list
 echo '{"rc":0,"data":{"name":"张三"}}' \
   | node scripts/mock-rule.mjs set --method GET --path /api/user/profile --status 200
 node scripts/mock-rule.mjs disable --method GET --path /api/user/profile
+node scripts/mock-rule.mjs enable  --method GET --path /api/user/profile
 node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 ```
 
 要点：
 - `set` 按 **method + path 幂等定位**：命中则覆盖 response、未命中则追加，**绝不动其它规则**。
+- `set` 可选项：`--status <整数>`、`--delay <毫秒>`（响应延迟，模拟慢接口）、`--disabled`/`--enabled`。
+  覆盖已有规则时，**本次没传的字段保留原值**（比如只改 response 不会丢 delay）。
 - `--method` 缺省为 `*`（匹配该 path 的所有请求方法）。
+- 匹配是 **first-match**：按数组顺序逐条试，第一条命中即生效。`/api/user/{id}` 与
+  `/api/user/123` 并存时排前面的赢——「改了规则却没生效」先 `list` 看顺序有没有被截胡。
+- 只带 `status`/`delay`、**不带 `response` 的规则，仅对 swagger spec 里已有的路径生效**
+  （强制改状态码/加延迟）；spec 之外的路径必须带 `response` 才会被拦截，否则规则静默不生效。
+  所以「让 /api/xxx 返回 500」这类需求，spec 外的路径要连 body 一起给。
 - 定位是**字面 path 字符串**：占位符规则 `/api/user/{id}` 必须原样传 `--path '/api/user/{id}'`，
   传具体的 `/api/user/123` 定位不到那条、反而会新增一条。
 - 校验失败以非 0 退出并打印原因（path 没以 `/` 开头、status 非整数、stdin 不是合法 JSON 等）。
@@ -90,6 +109,7 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 | `method` | string | 否 | 大写；缺省/`"*"` 匹配所有方法 |
 | `response` | any(JSON) | 否 | 命中时返回的 body。**这就是你要定制的接口数据** |
 | `status` | integer | 否 | HTTP 状态码，缺省走默认 |
+| `delay` | integer | 否 | 响应延迟毫秒数（≥0），返回前先等待，用于模拟慢接口 |
 | `enabled` | boolean | 否 | 缺省 `true`；`false` 时该规则不生效 |
 
 示例（一个场景文件的内容）：
