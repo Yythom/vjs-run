@@ -1,5 +1,4 @@
 import useResource from "../../hooks/use-resource";
-import { ruleKey } from "./utils";
 
 /**
  * mock-config 页面的数据层：读 OpenAPI routes + mock rules。
@@ -12,8 +11,6 @@ import { ruleKey } from "./utils";
 export default function useMockData({
   config,
   onToast,
-  selectedKey,
-  setSelectedKey,
   editingScene = null,
 }) {
   const { data, loading, reload } = useResource(async () => {
@@ -30,17 +27,11 @@ export default function useMockData({
       onToast?.(`读取 mock rules 失败: ${ruleResult?.error || "未知错误"}`, "error");
     }
 
-    const nextRoutes = routeResult?.routes || [];
-    const nextRules = ruleResult?.rules || [];
-
-    // 选中项保持，否则选第一条 route / rule
-    const firstRoute = nextRoutes[0] ? ruleKey(nextRoutes[0]) : "";
-    const firstRule = nextRules[0] ? ruleKey(nextRules[0]) : "";
-    setSelectedKey(selectedKey || firstRoute || firstRule);
-
+    // 不在这里碰 selectedKey：它现在是编辑器弹框的开关，
+    // 加载完自动选中会让弹框在进页面 / 切回页面时自己弹出来。
     return {
-      routes: nextRoutes,
-      rules: nextRules,
+      routes: routeResult?.routes || [],
+      rules: ruleResult?.rules || [],
       rulesFile: ruleResult?.file || "",
     };
   }, [config?.mockSpecPath, config?.mockServiceAddress, editingScene]);

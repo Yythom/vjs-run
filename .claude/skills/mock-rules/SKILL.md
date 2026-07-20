@@ -99,6 +99,43 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
   传具体的 `/api/user/123` 定位不到那条、反而会新增一条。
 - 校验失败以非 0 退出并打印原因（path 没以 `/` 开头、status 非整数、stdin 不是合法 JSON 等）。
 
+## 变体：同一路径按条件返回不同响应
+
+一条规则（method+path）内可挂多个**变体**（`variants`），按请求的 query/header/body
+做**相等匹配**，命中哪个变体就返回哪个的 response——典型场景：分页（`page=2` 返回第
+2 页）、状态流转（`status=1` 返回列表、`status=2` 返回空）。
+
+```bash
+# 先有规则（顶层 response 是「无变体命中」时的兜底），再挂变体
+echo '{"rc":0,"data":{"list":["第1页"]}}' \
+  | node scripts/mock-rule.mjs set --scene 订单联调 --method GET --path /api/orders
+
+echo '{"rc":0,"data":{"list":["第2页"]}}' \
+  | node scripts/mock-rule.mjs set-variant --scene 订单联调 --method GET --path /api/orders \
+      --name 分页第2页 --when-query page=2
+
+# 条件可叠加（全部相等才命中，AND）；三类条件都可重复传
+echo '{"rc":0,"data":{"list":[]}}' \
+  | node scripts/mock-rule.mjs set-variant --scene 订单联调 --method GET --path /api/orders \
+      --name 管理员空列表 --when-query page=1 --when-header x-role=admin --when-body filter.type=hot
+
+# 变体也可以单独带 --status/--delay/--disabled；删除单个变体：
+node scripts/mock-rule.mjs rm-variant --scene 订单联调 --method GET --path /api/orders --name 分页第2页
+```
+
+变体要点：
+- `set-variant` 按 **(规则, --name) 幂等定位**；规则必须已存在（先 `set` 建兜底）。
+  更新时没传的字段保留原值，但**给了任意 `--when-*` 就整体替换 when**（不逐 key 合并）。
+- 匹配语义（V1 仅相等匹配）：
+  - `--when-query k=v`：请求 query 中存在 k 且值字符串相等；
+  - `--when-header k=v`：header 名大小写不敏感，值字符串相等；
+  - `--when-body a.b.c=v`：k 是 body 的**点路径**（可索引数组，如 `items.0.id`），仅 JSON
+    body 可命中；值先按 JSON 解析（`2`→数字、`true`→布尔），失败按字符串；原始值比较时
+    数字/字符串互转（`1` 与 `"1"` 命中），对象/数组值走深度相等。
+- 变体按数组顺序 **first-match**，都不命中回退规则顶层 response；调整顺序 = `rm-variant` 后按序重加。
+- 优先级：请求控制参数（`__mockStatus`/`x-mock-*`）＞ 命中变体 ＞ 规则顶层 ＞ override 文件 ＞ swagger 生成样本。
+- 软件里的「录制」只会写规则顶层 response，**不会生成变体**，但也不会清掉已有变体。
+
 ## 规则 JSON 结构（理解用；场景文件与活动规则同结构）
 
 顶层是**数组**，每条规则字段如下（白名单，多余字段会被丢弃）：
@@ -111,6 +148,7 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 | `status` | integer | 否 | HTTP 状态码，缺省走默认 |
 | `delay` | integer | 否 | 响应延迟毫秒数（≥0），返回前先等待，用于模拟慢接口 |
 | `enabled` | boolean | 否 | 缺省 `true`；`false` 时该规则不生效 |
+| `variants` | array | 否 | 变体数组（见上节）。每个变体：`name`（必填，规则内唯一）、`when`（必填，`{query?, headers?, body?}` 至少 1 个条件）、`response`（必填）、`status`/`delay`/`enabled`（可选，缺省回退规则顶层） |
 
 示例（一个场景文件的内容）：
 
@@ -128,6 +166,20 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
     "method": "GET",
     "path": "/api/user/{id}",
     "response": { "rc": 0, "data": { "id": 100, "name": "张三" } }
+  },
+  {
+    "enabled": true,
+    "method": "GET",
+    "path": "/api/orders",
+    "response": { "rc": 0, "data": { "list": ["第1页（兜底）"] } },
+    "variants": [
+      {
+        "name": "分页第2页",
+        "enabled": true,
+        "when": { "query": { "page": "2" } },
+        "response": { "rc": 0, "data": { "list": ["第2页"] } }
+      }
+    ]
   }
 ]
 ```

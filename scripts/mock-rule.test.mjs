@@ -149,6 +149,116 @@ test("规则文件损坏时报错而不是清空重建", () => {
   assert.equal(fs.readFileSync(rulesFile(ud), "utf8"), "{broken"); // 原文件未被动过
 });
 
+// ─── 变体（set-variant / rm-variant）─────────────────────────────────────────
+
+test("set-variant：规则不存在时报错并提示先 set", () => {
+  const ud = freshUserData();
+  const r = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"], '{"v":1}');
+  assert.equal(r.code, 1);
+  assert.match(r.err, /未找到规则/);
+  assert.match(r.err, /先用 set 创建/);
+});
+
+test("set-variant 新建：when 三域落盘（header key 小写、body 值 JSON 解析）、追加到末尾", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--path", "/api/orders", "--method", "GET"], '{"fallback":true}');
+  const r = run(
+    ud,
+    ["set-variant", "--path", "/api/orders", "--method", "GET", "--name", "分页第2页",
+     "--when-query", "page=2", "--when-query", "size=10",
+     "--when-header", "X-Role=admin",
+     "--when-body", "filter.type=hot", "--when-body", "count=2",
+     "--status", "200", "--delay", "300"],
+    '{"list":["第2页"]}',
+  );
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /已新增变体/);
+  const rule = readJson(rulesFile(ud))[0];
+  assert.deepEqual(rule.response, { fallback: true }); // 顶层兜底不受影响
+  assert.deepEqual(rule.variants, [
+    {
+      name: "分页第2页",
+      enabled: true,
+      when: {
+        query: { page: "2", size: "10" },
+        headers: { "x-role": "admin" },
+        body: { "filter.type": "hot", count: 2 }, // count 被 JSON.parse 成数字
+      },
+      response: { list: ["第2页"] },
+      status: 200,
+      delay: 300,
+    },
+  ]);
+});
+
+test("set-variant 新建校验：缺 --name / 缺 stdin response / 缺 when 条件均报错", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--path", "/api/a"], '{"v":1}');
+  const noName = run(ud, ["set-variant", "--path", "/api/a", "--when-query", "p=1"], '{"v":1}');
+  assert.equal(noName.code, 1);
+  assert.match(noName.err, /缺少 --name/);
+  const noResp = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"]);
+  assert.equal(noResp.code, 1);
+  assert.match(noResp.err, /必须从 stdin 提供 response/);
+  const noWhen = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1"], '{"v":1}');
+  assert.equal(noWhen.code, 1);
+  assert.match(noWhen.err, /至少要一个条件/);
+  const badPair = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "novalue"], '{"v":1}');
+  assert.equal(badPair.code, 1);
+  assert.match(badPair.err, /key=value 形式/);
+});
+
+test("set-variant 幂等更新：没传的字段保留，--when-* 整体替换，--disabled 只翻开关", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--path", "/api/a"], '{"fallback":1}');
+  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1", "--status", "500"], '{"v":1}');
+  // 只换 when：response/status 保留
+  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=2"]);
+  let v = readJson(rulesFile(ud))[0].variants[0];
+  assert.deepEqual(v.when, { query: { p: "2" } }); // 整体替换，不合并
+  assert.deepEqual(v.response, { v: 1 });
+  assert.equal(v.status, 500);
+  // 只停用：其余全保留
+  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--disabled"]);
+  v = readJson(rulesFile(ud))[0].variants[0];
+  assert.equal(v.enabled, false);
+  assert.deepEqual(v.when, { query: { p: "2" } });
+  // 同名更新不追加
+  assert.equal(readJson(rulesFile(ud))[0].variants.length, 1);
+});
+
+test("set（规则级）不丢已有 variants；rm-variant 删单个、删空后字段消失", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--path", "/api/a"], '{"fallback":1}');
+  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"], '{"v":1}');
+  run(ud, ["set-variant", "--path", "/api/a", "--name", "v2", "--when-query", "p=2"], '{"v":2}');
+  // 规则级 set 只改顶层 response，变体原样保留
+  run(ud, ["set", "--path", "/api/a"], '{"fallback":2}');
+  let rule = readJson(rulesFile(ud))[0];
+  assert.deepEqual(rule.response, { fallback: 2 });
+  assert.deepEqual(rule.variants.map((v) => v.name), ["v1", "v2"]);
+  // rm-variant 只删目标
+  assert.equal(run(ud, ["rm-variant", "--path", "/api/a", "--name", "v1"]).code, 0);
+  rule = readJson(rulesFile(ud))[0];
+  assert.deepEqual(rule.variants.map((v) => v.name), ["v2"]);
+  // 未命中报错
+  assert.notEqual(run(ud, ["rm-variant", "--path", "/api/a", "--name", "v1"]).code, 0);
+  // 删空后 variants 字段整个消失
+  run(ud, ["rm-variant", "--path", "/api/a", "--name", "v2"]);
+  assert.equal("variants" in readJson(rulesFile(ud))[0], false);
+});
+
+test("list 展示变体摘要（●启用 ○停用）；--scene 下 set-variant 可用且不碰活动规则", () => {
+  const ud = freshUserData();
+  run(ud, ["new-scene", "--scene", "联调"]);
+  run(ud, ["set", "--scene", "联调", "--path", "/api/a"], '{"fallback":1}');
+  run(ud, ["set-variant", "--scene", "联调", "--path", "/api/a", "--name", "命中", "--when-query", "p=1"], '{"v":1}');
+  run(ud, ["set-variant", "--scene", "联调", "--path", "/api/a", "--name", "停用", "--when-query", "p=2", "--disabled"], '{"v":2}');
+  assert.equal(fs.existsSync(rulesFile(ud)), false); // 活动规则未被创建
+  const out = run(ud, ["list", "--scene", "联调"]).out;
+  assert.match(out, /▸ 变体×2：●命中 ○停用/);
+});
+
 // ─── 场景 ────────────────────────────────────────────────────────────────────
 
 test("场景生命周期：new-scene → set --scene → scenes/list → rm-scene，全程不碰活动规则", () => {

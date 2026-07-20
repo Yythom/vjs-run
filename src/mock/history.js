@@ -12,8 +12,9 @@ let entries = [];
 /**
  * @param {object} entry - server.js 组装的记录，形如：
  *   { kind: "mock"|"proxy"|"proxy-error"|"miss", method, path, query,
- *     matchedPath, status, durationMs, source, requestBody, responseBody,
- *     responseTruncated }
+ *     matchedPath, status, durationMs, source, variant?, requestBody,
+ *     responseBody, responseTruncated }
+ *   variant：命中 mock 规则「变体」时的变体名（source 为 "rule-variant"）
  */
 export function recordMockRequest(entry) {
   const full = { id: ++seq, ts: Date.now(), ...entry };

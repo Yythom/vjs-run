@@ -354,8 +354,6 @@ export default function MockConfigPage() {
   const { routes, rules, rulesFile, loading, load, saveRules } = useMockData({
     config,
     onToast: showToast,
-    selectedKey,
-    setSelectedKey,
     editingScene,
   });
 
@@ -451,9 +449,15 @@ export default function MockConfigPage() {
 
   let selectedItem = allItems.find((item) => item.key === selectedKey) || null;
   if (selectedKey === DRAFT_KEY && draft) {
+    // 草稿命中已有规则（同 method+path）时把已有变体带上，避免一次保存把变体清空
+    const existingForDraft = lookupRule(draft.method || "*", draft.path);
     selectedItem = {
       key: DRAFT_KEY,
-      rule: { enabled: true, ...draft },
+      rule: {
+        enabled: true,
+        ...(existingForDraft?.variants ? { variants: existingForDraft.variants } : {}),
+        ...draft,
+      },
       route: null,
     };
   }
@@ -553,8 +557,8 @@ export default function MockConfigPage() {
     const done = await deleteRuleByKey(editingKey);
     if (!done) return;
     setEditorDirty(false);
-    // 删完后保留 route 选中（若有），否则清空
-    setSelectedKey(selectedItem?.route ? ruleKey(selectedItem.route) : "");
+    // 编辑器在弹框里：删完直接关弹框回列表
+    setSelectedKey("");
   };
 
   const deleteRuleFromList = async (rule) => {
@@ -665,7 +669,7 @@ export default function MockConfigPage() {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 grid grid-cols-[360px_1fr] overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         <MockRuleList
           allItems={allItems}
           loading={loading}
@@ -677,20 +681,37 @@ export default function MockConfigPage() {
           onBulkSetEnabled={bulkSetEnabled}
           onBulkDelete={bulkDelete}
         />
-
-        {/* key 让 Editor 在切换选中项时重挂，useForm 自然用新 defaults 初始化 */}
-        <MockRuleEditor
-          key={selectedKey || "empty"}
-          rule={selectedItem?.rule}
-          route={selectedItem?.route}
-          hasSavedRule={hasSavedRule}
-          mockBaseUrl={mockBaseUrl}
-          backendBaseUrl={config?.mockBackendBaseUrl}
-          onSubmit={saveRule}
-          onDelete={deleteRule}
-          onDirtyChange={handleDirtyChange}
-        />
       </div>
+
+      {/* 编辑器改为全屏弹框：列表占满页面，配置区不再被变体挤压。
+          conditional render + key：打开即按当前选中项初始化表单，切换项自然重挂 */}
+      {Boolean(selectedKey) && (
+        <Modal
+          open
+          onClose={() => guardSwitch(() => setSelectedKey(""))}
+          srOnly={false}
+          title={
+            selectedItem
+              ? `${(selectedItem.method || selectedItem.rule?.method || "*").toUpperCase()} ${
+                  selectedItem.path || selectedItem.rule?.path || ""
+                }`
+              : "新增 Mock 规则"
+          }
+          className="w-[94vw] max-w-[1200px] h-[92vh]"
+        >
+          <MockRuleEditor
+            key={selectedKey}
+            rule={selectedItem?.rule}
+            route={selectedItem?.route}
+            hasSavedRule={hasSavedRule}
+            mockBaseUrl={mockBaseUrl}
+            backendBaseUrl={config?.mockBackendBaseUrl}
+            onSubmit={saveRule}
+            onDelete={deleteRule}
+            onDirtyChange={handleDirtyChange}
+          />
+        </Modal>
+      )}
       {confirmDialog}
     </div>
   );

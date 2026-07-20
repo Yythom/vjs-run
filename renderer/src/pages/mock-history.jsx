@@ -662,6 +662,11 @@ function HistoryDetail({ entry }) {
             来源 <span className="text-slate-700">{entry.source}</span>
           </span>
         )}
+        {entry.variant && (
+          <span className="truncate max-w-full">
+            变体 <span className="text-violet-700">{entry.variant}</span>
+          </span>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-4">

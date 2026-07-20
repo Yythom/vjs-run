@@ -5,6 +5,7 @@ import cors from "cors";
 import chokidar from "chokidar";
 import { parse as parseCookie } from "cookie";
 import { mockFromSchema, tunePayloadForRequest } from "./data.js";
+import { normalizeVariantLoose, selectVariant } from "./variant-match.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
 
 const HTTP_METHODS = new Set([
@@ -190,43 +191,62 @@ function createMockServer({
           req.method || "GET",
           requestUrl.pathname,
         );
-        if (customRule?.response !== undefined) {
+        // 变体判定需要 body，一旦读过流就被消费，之后转发必须补传 rawBody
+        let consumedRawBody;
+        if (
+          customRule &&
+          (customRule.response !== undefined || customRule.variants?.length)
+        ) {
           const rawBody = await readRawBody(req);
+          consumedRawBody = rawBody;
           const body = parseRequestBody(rawBody);
-          const requestControls = getRequestControls(req, requestUrl, {
-            delay: typeof customRule.delay === "number" ? customRule.delay : delay,
-            forcedStatus,
-          });
-          await sleep(requestControls.delay);
-          const status = Number(customRule.status) || 200;
-          const responseText = sendJson(res, status, customRule.response);
-          logRequest(
-            "MOCK:rule-custom",
-            req.method,
-            status,
-            Date.now() - requestStart,
-            requestUrl.pathname + requestUrl.search,
-            runtimeConfig.onLog,
-            buildRequestLogDetails({ requestUrl, body }),
-          );
-          const cappedResponse = capForRecord(customRule.response, responseText);
-          record({
-            kind: "mock",
-            source: "rule-custom",
-            method: (req.method || "GET").toUpperCase(),
-            path: requestUrl.pathname,
+          const variant = selectVariant(customRule, {
             query: Object.fromEntries(requestUrl.searchParams.entries()),
-            matchedPath: customRule.path,
-            status,
-            durationMs: Date.now() - requestStart,
-            requestBody: capForRecord(body).value,
-            responseBody: cappedResponse.value,
-            responseTruncated: cappedResponse.truncated,
+            headers: req.headers,
+            body,
           });
-          return;
+          // 只有变体、都没命中、又无顶层 response：与今天一样不认此规则，落回 proxy/404
+          const effectiveResponse = variant ? variant.response : customRule.response;
+          if (effectiveResponse !== undefined) {
+            const ruleDelay = variant?.delay ?? customRule.delay;
+            const requestControls = getRequestControls(req, requestUrl, {
+              delay: typeof ruleDelay === "number" ? ruleDelay : delay,
+              forcedStatus,
+            });
+            await sleep(requestControls.delay);
+            const status = Number(variant?.status ?? customRule.status) || 200;
+            const responseText = sendJson(res, status, effectiveResponse);
+            const mockSource = variant ? "rule-variant" : "rule-custom";
+            logRequest(
+              `MOCK:${mockSource}`,
+              req.method,
+              status,
+              Date.now() - requestStart,
+              requestUrl.pathname + requestUrl.search,
+              runtimeConfig.onLog,
+              buildRequestLogDetails({ requestUrl, body }),
+            );
+            const cappedResponse = capForRecord(effectiveResponse, responseText);
+            record({
+              kind: "mock",
+              source: mockSource,
+              method: (req.method || "GET").toUpperCase(),
+              path: requestUrl.pathname,
+              query: Object.fromEntries(requestUrl.searchParams.entries()),
+              matchedPath: customRule.path,
+              status,
+              durationMs: Date.now() - requestStart,
+              ...(variant ? { variant: variant.name } : {}),
+              requestBody: capForRecord(body).value,
+              responseBody: cappedResponse.value,
+              responseTruncated: cappedResponse.truncated,
+            });
+            return;
+          }
         }
         if (runtimeConfig.backendBaseUrl) {
           await proxyRequest(req, res, requestUrl, runtimeConfig.backendBaseUrl, {
+            ...(consumedRawBody !== undefined ? { rawBody: consumedRawBody } : {}),
             onLog: runtimeConfig.onLog,
             onRecord: record,
           });
@@ -264,12 +284,21 @@ function createMockServer({
         req.method || "GET",
         requestUrl.pathname,
       );
-      const requestControls = getRequestControls(req, requestUrl, {
-        delay: mockRule && typeof mockRule.delay === "number" ? mockRule.delay : delay,
-        forcedStatus,
-      });
+      // 变体选择要看 query/headers/body，body 读取因此提前（与 getRequestControls 无依赖）
       const rawBody = await readRawBody(req);
       const body = parseRequestBody(rawBody);
+      const variant = mockRule
+        ? selectVariant(mockRule, {
+            query: Object.fromEntries(requestUrl.searchParams.entries()),
+            headers: req.headers,
+            body,
+          })
+        : undefined;
+      const ruleDelay = variant?.delay ?? mockRule?.delay;
+      const requestControls = getRequestControls(req, requestUrl, {
+        delay: typeof ruleDelay === "number" ? ruleDelay : delay,
+        forcedStatus,
+      });
 
       if (
         !shouldUseMock({
@@ -319,9 +348,11 @@ function createMockServer({
 
       await sleep(requestControls.delay);
 
+      // 优先级：请求控制参数（__mockStatus/x-mock-*）＞ 命中变体 ＞ 规则顶层
+      const ruleStatus = variant?.status ?? mockRule?.status;
       const response = selectResponse(
         route.operation.responses || {},
-        requestControls.status || (mockRule?.status ? Number(mockRule.status) : undefined),
+        requestControls.status || (ruleStatus ? Number(ruleStatus) : undefined),
         requestControls.code,
       );
       const contentType = selectContentType(response);
@@ -333,9 +364,10 @@ function createMockServer({
         body,
         controls: requestControls,
       };
+      const effectiveResponse = variant ? variant.response : mockRule?.response;
       const payload =
-        mockRule?.response !== undefined
-          ? mockRule.response
+        effectiveResponse !== undefined
+          ? effectiveResponse
           : overridePayload.found
             ? normalizeApiResponse(overridePayload.payload, response, request, { fixed: true })
             : buildResponsePayload({
@@ -345,8 +377,9 @@ function createMockServer({
                 contentType,
                 request,
               });
-      const mockSource =
-        mockRule?.response !== undefined
+      const mockSource = variant
+        ? "rule-variant"
+        : mockRule?.response !== undefined
           ? "rule-response"
           : mockRule?.status
             ? "rule-control"
@@ -379,6 +412,7 @@ function createMockServer({
           matchedPath: route.fullPath,
           status: response.status,
           durationMs: Date.now() - requestStart,
+          ...(variant ? { variant: variant.name } : {}),
           requestBody: capForRecord(body).value,
           responseBody: cappedResponse.value,
           responseTruncated: cappedResponse.truncated,
@@ -1003,6 +1037,11 @@ function normalizeMockRule(rule) {
     };
   }
 
+  // variants：加载路径宽松清洗（非法变体静默丢弃），手改文件不至于整条规则失效
+  const variants = Array.isArray(rule.variants)
+    ? rule.variants.map(normalizeVariantLoose).filter(Boolean)
+    : [];
+
   return {
     method: (rule.method || "*").toUpperCase(),
     path: rule.path,
@@ -1010,6 +1049,7 @@ function normalizeMockRule(rule) {
     status: rule.status,
     delay: rule.delay,
     enabled: rule.enabled !== false,
+    ...(variants.length ? { variants } : {}),
   };
 }
 

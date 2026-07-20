@@ -13,6 +13,7 @@ import {
   startMockServer,
 } from "./server.js";
 import { getConfig } from "../config/store.js";
+import { normalizeVariantsStrict } from "./variant-match.js";
 import { recordMockRequest } from "./history.js";
 import { handleRecordedEntry } from "./recorder.js";
 import { generateSwaggerSpecs } from "./generate-spec.js";
@@ -233,6 +234,12 @@ export function normalizeRulesForSave(rules = []) {
     if (delay !== undefined && (!Number.isInteger(delay) || delay < 0)) {
       throw new Error(`第 ${index + 1} 条规则的 delay 必须是大于等于 0 的整数`);
     }
+    // variants 保存路径走严格校验：normalizeMockRule 已做过 Loose 清洗，这里
+    // 用原始输入重新校验，避免非法变体被静默丢弃后「保存成功但内容缩水」。
+    const variants =
+      rule?.variants !== undefined && rule.variants !== null
+        ? normalizeVariantsStrict(rule.variants, `第 ${index + 1} 条规则`)
+        : [];
     return {
       enabled: normalized.enabled !== false,
       method: (normalized.method || "*").toUpperCase(),
@@ -240,6 +247,7 @@ export function normalizeRulesForSave(rules = []) {
       ...(status !== undefined ? { status } : {}),
       ...(delay !== undefined ? { delay } : {}),
       ...(normalized.response !== undefined ? { response: normalized.response } : {}),
+      ...(variants.length ? { variants } : {}),
     };
   });
 }

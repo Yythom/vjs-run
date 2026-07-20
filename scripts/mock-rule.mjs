@@ -21,6 +21,10 @@
 //   node scripts/mock-rule.mjs enable  --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs disable --method GET --path /api/user/profile
 //   node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
+//   echo '{...}' | node scripts/mock-rule.mjs set-variant --method GET --path /api/orders \
+//     --name 分页第2页 --when-query page=2 [--when-header x-role=admin] [--when-body a.b=1] \
+//     [--status 200] [--delay 300] [--disabled]   # 同路径按条件返回不同响应（变体）
+//   node scripts/mock-rule.mjs rm-variant --method GET --path /api/orders --name 分页第2页
 //   node scripts/mock-rule.mjs scenes                          # 列出所有场景
 //   node scripts/mock-rule.mjs new-scene --scene 登录联调       # 新建空场景（同名报错）
 //   node scripts/mock-rule.mjs rm-scene  --scene 登录联调       # 删除整个场景文件
@@ -29,6 +33,9 @@
 //   node scripts/mock-rule.mjs list --scene 登录联调            # 查看场景内容
 //
 // set 按 method+path 幂等定位：命中则覆盖，未命中则追加，绝不动其它规则。
+// set-variant 按 (规则, --name) 幂等定位；变体必须挂在已有规则上，规则顶层
+// response 是「无变体命中」时的兜底。变体按数组顺序 first-match，V1 调序 =
+// 手改 JSON 或 rm-variant 后重加。
 
 import fs from "node:fs";
 import os from "node:os";
@@ -119,10 +126,69 @@ function normalizeRule(rule) {
     out.delay = delay;
   }
   if (rule.response !== undefined) out.response = rule.response;
+  // variants 由 set-variant 流程校验后写入，这里只透传保留（set 不丢已有变体）
+  if (Array.isArray(rule.variants) && rule.variants.length) out.variants = rule.variants;
   return out;
 }
 
+// ─── 变体（variants）────────────────────────────────────────────────────────
+// 语义与 src/mock/variant-match.js 对齐（CLI 自包含，不 import src，以保证
+// skill 目录副本可独立运行）：等值匹配，query/header 值存字符串，header key
+// 小写，body key 为点路径、值尝试 JSON.parse（失败按字符串）。
+
+const VARIANT_NAME_MAX = 60;
+
+function requireVariantName() {
+  const name = typeof flags.name === "string" ? flags.name.trim() : "";
+  if (!name) fail("缺少 --name（变体名，规则内唯一）");
+  if (name.length > VARIANT_NAME_MAX) fail(`变体名过长（最多 ${VARIANT_NAME_MAX} 字符）`);
+  return name;
+}
+
+function findVariantIndex(rule, name) {
+  if (!Array.isArray(rule.variants)) return -1;
+  return rule.variants.findIndex(
+    (v) => v && typeof v.name === "string" && v.name.trim() === name,
+  );
+}
+
+// --when-query/--when-header/--when-body（可重复）→ when 对象；一个都没给返回 undefined
+function collectWhenFlags() {
+  const scopes = [
+    ["when-query", "query"],
+    ["when-header", "headers"],
+    ["when-body", "body"],
+  ];
+  const when = {};
+  let total = 0;
+  for (const [flag, scope] of scopes) {
+    if (flags[flag] === undefined) continue;
+    const entries = Array.isArray(flags[flag]) ? flags[flag] : [flags[flag]];
+    for (const entry of entries) {
+      if (entry === true) fail(`--${flag} 需要 key=value 形式，如 --${flag} page=2`);
+      const text = String(entry);
+      const eq = text.indexOf("=");
+      if (eq <= 0) fail(`--${flag} 需要 key=value 形式：${text}`);
+      const key = scope === "headers" ? text.slice(0, eq).toLowerCase() : text.slice(0, eq);
+      let value = text.slice(eq + 1);
+      if (scope === "body") {
+        try {
+          value = JSON.parse(value); // 2→数字、true→布尔、{"a":1}→对象；失败按字符串
+        } catch {
+          // 保留原字符串
+        }
+      }
+      (when[scope] ||= {})[key] = value;
+      total++;
+    }
+  }
+  return total > 0 ? when : undefined;
+}
+
 // ─── 参数解析 ────────────────────────────────────────────────────────────────
+
+// 可重复的 flag（每次出现都累积成数组），用于变体的 when 条件
+const REPEATABLE_FLAGS = new Set(["when-query", "when-header", "when-body"]);
 
 function parseFlags(argv) {
   const flags = {};
@@ -131,11 +197,17 @@ function parseFlags(argv) {
     if (!token.startsWith("--")) continue;
     const key = token.slice(2);
     const next = argv[i + 1];
+    let value;
     if (next === undefined || next.startsWith("--")) {
-      flags[key] = true; // 布尔开关：--disabled / --enabled
+      value = true; // 布尔开关：--disabled / --enabled
     } else {
-      flags[key] = next;
+      value = next;
       i++;
+    }
+    if (REPEATABLE_FLAGS.has(key)) {
+      (flags[key] ||= []).push(value);
+    } else {
+      flags[key] = value;
     }
   }
   return flags;
@@ -196,6 +268,12 @@ switch (command) {
       console.log(
         `${flag} ${String(r.method || "*").toUpperCase().padEnd(6)} ${r.path}${status}${delay}`,
       );
+      if (Array.isArray(r.variants) && r.variants.length) {
+        const summary = r.variants
+          .map((v) => `${v.enabled === false ? "○" : "●"}${v.name}`)
+          .join(" ");
+        console.log(`    ▸ 变体×${r.variants.length}：${summary}`);
+      }
     }
     break;
   }
@@ -295,6 +373,8 @@ switch (command) {
     const next = normalizeRule({
       method,
       path: rulePath,
+      // variants：set 只动规则顶层字段，已有变体原样保留（增删改走 set-variant）
+      variants: existing.variants,
       // response：本次传了用本次；没传保留原有
       response: response !== undefined ? response : existing.response,
       // status：--status 优先；否则保留原有
@@ -318,6 +398,93 @@ switch (command) {
       saveRules(file, rules);
       console.log(`✔ 已新增：${method} ${rulePath}`);
     }
+    console.log(`  → ${file}${applyHint}`);
+    break;
+  }
+
+  case "set-variant": {
+    const { method, rulePath } = requireTarget();
+    const name = requireVariantName();
+
+    const rules = loadRules(file);
+    const rule = rules.find((r) => sameRule(r, method, rulePath));
+    if (!rule) {
+      fail(
+        `未找到规则：${method} ${rulePath}\n  变体必须挂在已有规则上（规则顶层 response 兜底）：先用 set 创建`,
+      );
+    }
+
+    let response;
+    const stdin = readStdin();
+    if (stdin !== null) {
+      try {
+        response = JSON.parse(stdin);
+      } catch (err) {
+        fail(`stdin 不是合法 JSON：${err.message}`);
+      }
+    }
+
+    const when = collectWhenFlags();
+    const variants = Array.isArray(rule.variants) ? [...rule.variants] : [];
+    const idx = findVariantIndex(rule, name);
+    const existing = idx >= 0 ? variants[idx] : undefined;
+
+    if (!existing && response === undefined) fail("新建变体必须从 stdin 提供 response JSON");
+    if (!existing && !when) {
+      fail("新建变体至少要一个条件：--when-query/--when-header/--when-body key=value");
+    }
+
+    const next = {
+      name,
+      // enabled：--disabled/--enabled 显式覆盖；否则保留原有（新建默认启用）
+      enabled: flags.disabled ? false : flags.enabled ? true : !existing || existing.enabled !== false,
+      // when：给了任意 --when-* 就整体替换（不做逐 key 合并）；没给保留原有
+      when: when !== undefined ? when : existing.when,
+      // response：stdin 传了用本次；没传保留原有
+      response: response !== undefined ? response : existing.response,
+    };
+
+    const statusInput = flags.status !== undefined ? flags.status : existing?.status;
+    if (statusInput !== undefined && statusInput !== "") {
+      if (typeof statusInput === "boolean") fail("--status 需要一个整数值，如 --status 200");
+      const status = Number(statusInput);
+      if (!Number.isInteger(status)) fail(`status 必须是整数：${statusInput}`);
+      next.status = status;
+    }
+    const delayInput = flags.delay !== undefined ? flags.delay : existing?.delay;
+    if (delayInput !== undefined && delayInput !== "") {
+      if (typeof delayInput === "boolean") fail("--delay 需要一个毫秒数，如 --delay 500");
+      const delayMs = Number(delayInput);
+      if (!Number.isInteger(delayMs) || delayMs < 0) {
+        fail(`delay 必须是大于等于 0 的整数：${delayInput}`);
+      }
+      next.delay = delayMs;
+    }
+
+    if (idx >= 0) {
+      variants[idx] = next;
+    } else {
+      variants.push(next); // 追加到末尾：顺序即匹配序（first-match）
+    }
+    rule.variants = variants;
+    saveRules(file, rules);
+    console.log(`✔ 已${idx >= 0 ? "更新" : "新增"}变体：${name}（${method} ${rulePath}）`);
+    console.log(`  → ${file}${applyHint}`);
+    break;
+  }
+
+  case "rm-variant": {
+    const { method, rulePath } = requireTarget();
+    const name = requireVariantName();
+    const rules = loadRules(file);
+    const rule = rules.find((r) => sameRule(r, method, rulePath));
+    if (!rule) fail(`未找到规则：${method} ${rulePath}`);
+    const idx = findVariantIndex(rule, name);
+    if (idx < 0) fail(`未找到变体：${name}（${method} ${rulePath}）`);
+    rule.variants.splice(idx, 1);
+    if (!rule.variants.length) delete rule.variants; // 空数组不落盘，保持文件干净
+    saveRules(file, rules);
+    console.log(`✔ 已删除变体：${name}（${method} ${rulePath}）`);
     console.log(`  → ${file}${applyHint}`);
     break;
   }
@@ -359,6 +526,12 @@ switch (command) {
         "  enable  --path <p> [--method <m>] [--scene <名>]   启用规则",
         "  disable --path <p> [--method <m>] [--scene <名>]   禁用规则",
         "  rm      --path <p> [--method <m>] [--scene <名>]   删除规则",
+        "",
+        "  set-variant --path <p> --name <名> --when-query k=v [--when-header k=v] [--when-body a.b=v]",
+        "              [--method <m>] [--status 200] [--delay 300] [--disabled] [--scene <名>]  < response.json",
+        "                                      同路径按条件返回不同响应；条件全部相等才命中（AND），",
+        "                                      变体按顺序 first-match，都不命中时回退规则顶层 response",
+        "  rm-variant  --path <p> --name <名> [--method <m>] [--scene <名>]   删除单个变体",
         "",
         "  scenes                              列出所有场景",
         "  new-scene --scene <名>              新建空场景（同名报错）",
