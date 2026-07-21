@@ -1255,8 +1255,8 @@ function resolveBackendTargetUrl(requestUrl, backendBaseUrl) {
 }
 
 function proxyHeaders(headers, pathname) {
-  // cookie@1.x parse 行为与原手写版（及 dev-api-proxy 依赖的 cookie-parser）一致：
-  // 同名 cookie 保留首次出现、value 仅在含 % 时 decodeURIComponent、解码失败回退原值。
+  // cookie@1.x parse 行为与原手写版一致：同名 cookie 保留首次出现、
+  // value 仅在含 % 时 decodeURIComponent、解码失败回退原值。
   const cookies = parseCookie(getHeaderValue(headers, "cookie") || "");
   // host / connection / content-length 都由 fetch 自己管理，无需透传
   const skip = new Set(["host", "connection", "content-length"]);
@@ -1264,9 +1264,9 @@ function proxyHeaders(headers, pathname) {
   const incomingAuthorization = getHeaderValue(headers, "authorization");
   const incomingMgmtauth = getHeaderValue(headers, "mgmtauth");
 
-  // 与 dev-api-proxy 实际行为保持一致：cookie 中的 token 只在请求头没有该字段时注入，
-  // 不覆盖前端显式发送的 Authorization / Mgmtauth（dev-api-proxy 因 Node 把 req.headers 全小写化，
-  // `req.headers.Authorization = ...` 实际上不会覆盖小写 authorization，因此原值胜出）。
+  // cookie 中的 token 只在请求头没有该字段时注入，不覆盖前端显式发送的
+  // Authorization / Mgmtauth —— 这是为兼容既有转发行为而保留的语义，
+  // 不要改成 cookie 总是胜出。
   const injectAuthorization = cookies.VJTOKEN && !incomingAuthorization;
   const injectMgmtauth =
     cookies.TOKEN && pathname.includes("/mgmt") && !incomingMgmtauth;
