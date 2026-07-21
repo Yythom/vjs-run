@@ -60,6 +60,24 @@ function scenesDir() {
   return path.join(path.dirname(resolveRulesFile(flags.file)), "scenes");
 }
 
+// mock server 的访问地址，从 config.json 读 mockHost/mockPort。
+// 走与规则文件相同的 userData 解析（含 VJTOOLS_USER_DATA_DIR），
+// 否则隔离环境下会读到真实配置、和规则文件指向两个地方。
+// 配置缺失/损坏时回退 defaults.js 的默认值，让自检命令始终能给出一个地址。
+function resolveBaseUrl() {
+  const userData = process.env.VJTOOLS_USER_DATA_DIR || defaultUserData();
+  const configFile = path.join(userData, "config.json");
+  let config = {};
+  try {
+    config = JSON.parse(fs.readFileSync(configFile, "utf8"));
+  } catch {
+    // 未启动过 app / 文件损坏：用默认值
+  }
+  const host = config.mockHost || "127.0.0.1";
+  const port = Number(config.mockPort) || 3002;
+  return { url: `http://${host}:${port}`, configFile, fromConfig: Boolean(config.mockHost) };
+}
+
 // 场景名清洗，等价 recorder.js 的 sanitizeSceneName：去非法字符、trim、非空、≤60。
 function sanitizeSceneName(rawName) {
   if (rawName === true || rawName === undefined) fail("--scene 需要一个场景名");
@@ -514,6 +532,20 @@ switch (command) {
     break;
   }
 
+  // 自检用：打印 mock server 地址，供后续 curl $BASE/__mock/... 使用。
+  // --quiet 只输出地址本身，便于 BASE=$(... base --quiet) 直接取值。
+  case "base": {
+    const { url, configFile, fromConfig } = resolveBaseUrl();
+    if (flags.quiet) {
+      console.log(url);
+      break;
+    }
+    console.log(url);
+    console.log(`  来源：${fromConfig ? configFile : `${configFile}（读不到，用默认值）`}`);
+    console.log(`  自检：curl -fsS ${url}/__mock/health`);
+    break;
+  }
+
   default:
     console.log(
       [
@@ -537,6 +569,8 @@ switch (command) {
         "  new-scene --scene <名>              新建空场景（同名报错）",
         "  rm-scene  --scene <名>              删除整个场景文件（不影响活动规则）",
         "  rename-scene --scene <旧名> --to <新名>   重命名场景（同名冲突报错）",
+        "",
+        "  base [--quiet]                      打印 mock server 地址（自检用）",
         "",
         "  --scene <名> 时所有命令改为操作 scenes/<名>.json（不碰活动规则）",
         "  --method 缺省为 *（匹配所有方法）；--file 可覆盖活动规则文件路径",

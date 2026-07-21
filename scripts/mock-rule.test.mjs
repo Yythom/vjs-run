@@ -349,6 +349,42 @@ test("写盘原子性：不残留 .tmp 文件", () => {
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")), []);
 });
 
+// ─── base（自检地址）─────────────────────────────────────────────────────────
+
+test("base：从同一 userData 的 config.json 读 mockHost/mockPort（隔离环境不串真实配置）", () => {
+  const ud = freshUserData();
+  fs.writeFileSync(
+    path.join(ud, "config.json"),
+    JSON.stringify({ mockHost: "0.0.0.0", mockPort: 4567 }),
+  );
+  const { code, out } = run(ud, ["base"]);
+  assert.equal(code, 0);
+  assert.match(out, /http:\/\/0\.0\.0\.0:4567/);
+  assert.match(out, /来源：/);
+});
+
+test("base --quiet：只输出地址本身，可直接 BASE=$(...) 取值", () => {
+  const ud = freshUserData();
+  fs.writeFileSync(
+    path.join(ud, "config.json"),
+    JSON.stringify({ mockHost: "127.0.0.1", mockPort: 3100 }),
+  );
+  const { code, out } = run(ud, ["base", "--quiet"]);
+  assert.equal(code, 0);
+  assert.equal(out.trim(), "http://127.0.0.1:3100");
+});
+
+test("base：config.json 缺失或损坏时回退默认值，不报错", () => {
+  const missing = freshUserData();
+  assert.equal(run(missing, ["base", "--quiet"]).out.trim(), "http://127.0.0.1:3002");
+
+  const broken = freshUserData();
+  fs.writeFileSync(path.join(broken, "config.json"), "{ 这不是 JSON");
+  const { code, out } = run(broken, ["base", "--quiet"]);
+  assert.equal(code, 0);
+  assert.equal(out.trim(), "http://127.0.0.1:3002");
+});
+
 // ─── 副本同步（防漂移）───────────────────────────────────────────────────────
 
 test("skill 目录的 mock-rule.mjs 与仓库根字节一致（改了记得 cp 同步）", () => {
