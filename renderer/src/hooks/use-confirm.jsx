@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 import Modal from "../components/modal";
 
 /**

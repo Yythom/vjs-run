@@ -1,4 +1,4 @@
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 
 /**
  * PageShell - 统一的独立页面包装外壳

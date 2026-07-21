@@ -1,5 +1,5 @@
 import { useState } from "react";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 import PageShell from "../components/page-shell";
 import { DEFAULT_WATCHED_PORTS } from "../constants";
 import useResource from "../hooks/use-resource";

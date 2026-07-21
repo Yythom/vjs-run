@@ -17,6 +17,9 @@
 // 加载热路径用 Loose（非法变体静默丢弃，手改文件不至于整条规则崩掉），
 // 保存路径用 Strict（非法直接抛中文错误，把问题挡在写盘前）。
 
+import get from "lodash-es/get.js";
+import isEqual from "lodash-es/isEqual.js";
+
 const VARIANT_NAME_MAX = 60;
 
 // ─── 归一化 ──────────────────────────────────────────────────────────────────
@@ -140,31 +143,6 @@ export function normalizeVariantsStrict(variants, ruleLabel) {
 
 // ─── 匹配 ────────────────────────────────────────────────────────────────────
 
-// 点路径取值：a.b.c / items.0.id。只往对象/数组里走，取不到返回 undefined。
-function getByPath(value, dotPath) {
-  let current = value;
-  for (const part of String(dotPath).split(".")) {
-    if (typeof current !== "object" || current === null) return undefined;
-    current = current[part];
-  }
-  return current;
-}
-
-function deepEqual(a, b) {
-  if (a === b) return true;
-  if (Array.isArray(a) && Array.isArray(b)) {
-    return a.length === b.length && a.every((item, i) => deepEqual(item, b[i]));
-  }
-  if (isPlainObject(a) && isPlainObject(b)) {
-    const keysA = Object.keys(a);
-    return (
-      keysA.length === Object.keys(b).length &&
-      keysA.every((key) => Object.prototype.hasOwnProperty.call(b, key) && deepEqual(a[key], b[key]))
-    );
-  }
-  return false;
-}
-
 function isPrimitive(value) {
   const type = typeof value;
   return type === "string" || type === "number" || type === "boolean";
@@ -175,7 +153,7 @@ function matchBodyValue(actual, expected) {
   if (isPrimitive(expected)) {
     return isPrimitive(actual) && String(actual) === String(expected);
   }
-  return deepEqual(actual, expected); // 对象/数组条件：深相等，嵌套内不做互转
+  return isEqual(actual, expected); // 对象/数组条件：深相等，嵌套内不做互转
 }
 
 // when 的全部条件 AND；query/headers/body 均为纯对象
@@ -200,9 +178,9 @@ export function matchWhen(when, { query, headers, body } = {}) {
   }
 
   if (when.body) {
-    // 仅 JSON 对象/数组 body 可命中（getByPath 对非对象一律返回 undefined）
+    // 仅 JSON 对象/数组 body 可命中（get 对非对象一律返回 undefined）
     for (const [dotPath, expected] of Object.entries(when.body)) {
-      const actual = getByPath(body, dotPath);
+      const actual = get(body, dotPath);
       if (actual === undefined) return false;
       if (!matchBodyValue(actual, expected)) return false;
     }

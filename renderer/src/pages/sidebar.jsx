@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 import { useAppConfig, updateAppConfig } from "../stores/app-config-store";
 import {
   startMock,

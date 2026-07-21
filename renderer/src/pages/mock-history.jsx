@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 import useResource from "../hooks/use-resource";
 import {
   clearMockHistory,

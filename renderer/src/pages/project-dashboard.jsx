@@ -11,7 +11,7 @@ import useModalNav from "../hooks/use-modal-nav";
 import { showToast } from "../utils/toast";
 import { copyRepoConfig } from "../utils/export-config";
 import { useProjectTabsStore } from "../stores/project-tabs-store";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 
 export default function ProjectDashboard() {
   const openModal = useModalNav();

@@ -16,7 +16,7 @@ import { getStatusLabel } from "../utils/status";
 import { useProjectTabsStore } from "../stores/project-tabs-store";
 import LogWindowWrapper from "../components/log-window-wrapper";
 import { useCloseModal } from "../hooks/use-modal-nav";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 
 export default function ProjectConsole() {
   const projects = useProjects();

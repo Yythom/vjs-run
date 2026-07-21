@@ -1,6 +1,6 @@
 import { memo, useDeferredValue, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import clsx from "clsx";
+import clsx from "../../utils/clsx";
 import { ruleKey } from "./utils";
 
 // 每个 RuleListItem 估算高度（px）。带按钮的项约 78，简项约 56，给个中位偏大值

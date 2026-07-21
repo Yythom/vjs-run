@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import set from "lodash-es/set";
 import { useForm, useFieldArray, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import clsx from "clsx";
+import clsx from "../../utils/clsx";
 import { toast } from "sonner";
 import JsonEditor from "../../components/json-editor";
 import RecommendMockModal from "./recommend-mock-modal";
@@ -800,7 +801,13 @@ export default function MockRuleEditor({
       if (c.scope === "query") {
         params[c.key] = val;
       } else if (c.scope === "body") {
-        setDeepValue(bodyObj, c.key, val);
+        let parsedVal = val;
+        try {
+          parsedVal = JSON.parse(val);
+        } catch {
+          // Keep raw string
+        }
+        set(bodyObj, c.key, parsedVal);
       }
     });
 
@@ -993,21 +1000,3 @@ export default function MockRuleEditor({
   );
 }
 
-function setDeepValue(obj, path, value) {
-  const parts = path.split(".");
-  let current = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const part = parts[i];
-    if (!(part in current)) {
-      current[part] = {};
-    }
-    current = current[part];
-  }
-  let parsedValue = value;
-  try {
-    parsedValue = JSON.parse(value);
-  } catch {
-    // Keep raw string
-  }
-  current[parts[parts.length - 1]] = parsedValue;
-}

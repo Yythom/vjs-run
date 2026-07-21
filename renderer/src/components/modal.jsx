@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import clsx from "clsx";
+import clsx from "../utils/clsx";
 
 /**
  * 统一 modal 外壳：所有弹窗共用 overlay / Portal / Content 定位。

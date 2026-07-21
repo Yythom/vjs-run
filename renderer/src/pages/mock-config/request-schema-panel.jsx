@@ -1,5 +1,5 @@
 import { useState } from "react";
-import clsx from "clsx";
+import clsx from "../../utils/clsx";
 
 /**
  * 接口请求侧 schema 展示：query/path/header 参数列表 + requestBody（JSON 视图，字段行尾以注释形式展示 description）。
