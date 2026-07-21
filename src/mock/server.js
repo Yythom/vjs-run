@@ -19,6 +19,10 @@ const HTTP_METHODS = new Set([
 ]);
 const DEFAULT_MOCK_DATA_DIR = "./mock-data";
 const DEFAULT_MOCK_RULES_FILE = "./mock-rules.json";
+// origin:true 是「反射来源」而非 "*"——带凭证时 "*" 非法。cors 会连带发出
+// Vary: Origin，避免中间层缓存把 A 站的响应喂给 B 站。
+// 预检由 cors 自己终结（preflightContinue 默认 false）：回 204 并带
+// Content-Length: 0，Safari 少了它会一直等 body 挂住。
 const corsMiddleware = cors({
   origin: true,
   credentials: true,
@@ -121,16 +125,8 @@ function createMockServer({
   return http.createServer(async (req, res) => {
     try {
       await runMiddleware(req, res, corsMiddleware);
-
-      if (res.writableEnded) {
-        return;
-      }
-
-      if (req.method === "OPTIONS") {
-        res.writeHead(204);
-        res.end();
-        return;
-      }
+      // 预检请求由 cors 直接终结（preflightContinue 默认 false），这里收工即可
+      if (res.writableEnded) return;
 
       const requestUrl = new URL(
         req.url || "/",
@@ -520,13 +516,9 @@ async function loadOpenApiSpec(specPath) {
   const ext = path.extname(specPath).toLowerCase();
 
   if (ext === ".yaml" || ext === ".yml") {
-    try {
-      // 动态 import：js-yaml 是可选依赖，未安装时优雅降级
-      const { default: yaml } = await import("js-yaml");
-      return yaml.load(raw);
-    } catch {
-      throw new Error("YAML specs require optional dependency js-yaml.");
-    }
+    // 动态 import：只有用户真的配了 YAML spec 才加载解析器
+    const { default: yaml } = await import("js-yaml");
+    return yaml.load(raw);
   }
 
   return JSON.parse(raw);
@@ -1507,6 +1499,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// cors 是 connect 风格中间件（req, res, next），这里把它接到原生 http 上。
 function runMiddleware(req, res, middleware) {
   return new Promise((resolve, reject) => {
     middleware(req, res, (error) => {
