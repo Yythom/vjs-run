@@ -35,6 +35,12 @@ importers:
       jieba-wasm:
         specifier: ^2.4.0
         version: 2.4.0
+      js-yaml:
+        specifier: ^4.1.0
+        version: 4.1.1
+      lodash-es:
+        specifier: ^4.18.1
+        version: 4.18.1
       openapi-sampler:
         specifier: ^1.7.3
         version: 1.7.3
@@ -90,6 +96,12 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      lodash-es:
+        specifier: ^4.18.1
+        version: 4.18.1
+      parse-curl:
+        specifier: ^0.2.6
+        version: 0.2.6
       react:
         specifier: ^19.2.0
         version: 19.2.6
@@ -108,6 +120,9 @@ importers:
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      tailwind-merge:
+        specifier: ^3.6.0
+        version: 3.6.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -2131,6 +2146,9 @@ packages:
     resolution: {integrity: sha512-iPZK6eYjbxRu3uB4/WZ3EsEIMJFMqAoopl3R+zuq0UjcAm/MO6KCweDgPfP3elTztoKP3KtnVHxTn2NHBSDVUw==}
     engines: {node: '>=10'}
 
+  lodash-es@4.18.1:
+    resolution: {integrity: sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==}
+
   lodash.escaperegexp@4.1.2:
     resolution: {integrity: sha512-TM9YBvyC84ZxE3rgfefxUWiQKLilstD6k7PTGt6wfbtXF8ixIJLOL3VYyV/z+ZiPLsVxAsKAFVwWlWeb2Y8Yyw==}
 
@@ -2355,6 +2373,9 @@ packages:
 
   package-json-from-dist@1.0.1:
     resolution: {integrity: sha512-UEZIS3/by4OC8vL3P2dTXRETpebLI2NiI5vIrjaD/5UtrkFX/tNbwjTSRAGC/+7CAo2pIcBaRgWmcBBHcsaCIw==}
+
+  parse-curl@0.2.6:
+    resolution: {integrity: sha512-ENhXeIxG4A6wFvYSU87b0o3Tp6U+Wup069GYhXCn0ZP/E7evfvomTSM/MeEOs3QTyuye+u2r7fFRj6nX0q9kQA==}
 
   path-exists@3.0.0:
     resolution: {integrity: sha512-bpC7GYwiDYQ4wYLe+FA8lhRjhQCMcQGuSgGGqDkg/QerRWw9CmGRT0iSOVRSZJ29NMLZgIzqaljJ63oaL4NIJQ==}
@@ -2622,6 +2643,9 @@ packages:
     resolution: {integrity: sha512-ObmnIF4hXNg1BqhnHmgbDETF8dLPCggZWBjkQfhZpbszZnYur5DUljTcCHii5LC3J5E0yeO/1LIMyH+UvHQgyw==}
     engines: {node: '>= 0.4'}
 
+  shellwords@0.1.1:
+    resolution: {integrity: sha512-vFwSUfQvqybiICwZY5+DAWIPLKsWO31Q91JSKl3UYv+K5c2QRPzn0qzec6QPu1Qc9eHYItiP3NdJqNVqetYAww==}
+
   signal-exit@3.0.7:
     resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
 
@@ -2729,6 +2753,9 @@ packages:
   supports-color@8.1.1:
     resolution: {integrity: sha512-MpUEN2OodtUzxvKQl72cUF7RQ5EiHsGvSsVG0ia9c5RbWGL2CI4C7EpPS8UTBIplnlzZiNuV56w+FuNxy3ty2Q==}
     engines: {node: '>=10'}
+
+  tailwind-merge@3.6.0:
+    resolution: {integrity: sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==}
 
   tailwindcss@4.2.2:
     resolution: {integrity: sha512-KWBIxs1Xb6NoLdMVqhbhgwZf2PGBpPEiwOqgI4pFIYbNTfBXiKYyWoTsXgBQ9WFg/OlhnvHaY+AEpW7wSmFo2Q==}
@@ -5057,6 +5084,8 @@ snapshots:
     dependencies:
       p-locate: 5.0.0
 
+  lodash-es@4.18.1: {}
+
   lodash.escaperegexp@4.1.2: {}
 
   lodash.isequal@4.5.0: {}
@@ -5284,6 +5313,10 @@ snapshots:
   p-try@2.2.0: {}
 
   package-json-from-dist@1.0.1: {}
+
+  parse-curl@0.2.6:
+    dependencies:
+      shellwords: 0.1.1
 
   path-exists@3.0.0: {}
 
@@ -5529,6 +5562,8 @@ snapshots:
 
   shell-quote@1.8.3: {}
 
+  shellwords@0.1.1: {}
+
   signal-exit@3.0.7: {}
 
   signal-exit@4.1.0: {}
@@ -5642,6 +5677,8 @@ snapshots:
   supports-color@8.1.1:
     dependencies:
       has-flag: 4.0.0
+
+  tailwind-merge@3.6.0: {}
 
   tailwindcss@4.2.2: {}
 
