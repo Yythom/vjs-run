@@ -1,4 +1,5 @@
 import { useState } from "react";
+import parseCurl from "parse-curl";
 import Modal from "../../components/modal";
 import JsonEditor from "../../components/json-editor";
 import useResource from "../../hooks/use-resource";
@@ -11,6 +12,67 @@ function parseQueryParams(text) {
     throw new Error("Query Params 必须是 JSON 对象");
   }
   return params;
+}
+
+function parseCurlText(curlText) {
+  if (!curlText || !curlText.trim()) {
+    throw new Error("请输入或粘贴 cURL 文本");
+  }
+
+  // 预处理 cURL：处理多行续行符 `\`，以及归一化各种 --data-* 参数
+  const cleaned = curlText
+    .trim()
+    .replace(/\\\r?\n/g, " ")
+    .replace(/--data-raw/g, "-d")
+    .replace(/--data-binary/g, "-d")
+    .replace(/--data-urlencode/g, "-d");
+
+  const parsed = parseCurl(cleaned);
+  if (!parsed || (!parsed.url && !parsed.header && !parsed.body)) {
+    throw new Error("无法解析该 cURL 命令，请确认格式是否正确");
+  }
+
+  let method = parsed.method ? parsed.method.toUpperCase() : "GET";
+  let queryParams = {};
+
+  if (parsed.url) {
+    try {
+      const urlObj = new URL(parsed.url);
+      urlObj.searchParams.forEach((val, key) => {
+        queryParams[key] = val;
+      });
+    } catch {
+      // Fallback
+    }
+  }
+
+  let parsedBody = null;
+  if (parsed.body) {
+    try {
+      parsedBody = JSON.stringify(JSON.parse(parsed.body), null, 2);
+    } catch {
+      parsedBody = parsed.body;
+    }
+  }
+
+  let vjToken = null;
+  if (parsed.header) {
+    for (const [k, v] of Object.entries(parsed.header)) {
+      if (k.toLowerCase() === "authorization" && v) {
+        vjToken = v;
+      } else if (k.toLowerCase() === "cookie" && v) {
+        const match = String(v).match(/VJTOKEN=([^;]+)/);
+        if (match) vjToken = match[1];
+      }
+    }
+  }
+
+  return {
+    method,
+    params: Object.keys(queryParams).length > 0 ? JSON.stringify(queryParams, null, 2) : null,
+    body: parsedBody,
+    vjToken,
+  };
 }
 
 function buildRequestUrl(baseUrl, path, params) {
@@ -146,9 +208,24 @@ export default function BackendCurlModal({
     setParamsText(null);
   }
   const paramsTextValue = paramsText ?? generatedParams;
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [resultText, setResultText] = useState("");
   const hasRequestBody = !["GET", "HEAD"].includes(method);
+
+  const handleImportCurlText = (curlText) => {
+    try {
+      const result = parseCurlText(curlText);
+      if (result.params) setParamsText(result.params);
+      if (result.body && hasRequestBody) setEditedBody(result.body);
+      if (result.vjToken) updateAppConfig({ mockVjToken: result.vjToken });
+      showToast("cURL 解析成功，已自动提取参数并填充", "success");
+      return true;
+    } catch (err) {
+      showToast(err.message || "cURL 解析失败", "warning");
+      return false;
+    }
+  };
 
   const execute = async () => {
     let params;
@@ -391,6 +468,14 @@ export default function BackendCurlModal({
         <div className="ml-auto flex gap-2">
           <button
             type="button"
+            onClick={() => setImportModalOpen(true)}
+            disabled={loading || Boolean(error)}
+            className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40"
+          >
+            解析 cURL
+          </button>
+          <button
+            type="button"
             onClick={copyCurl}
             disabled={loading || Boolean(error)}
             className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40"
@@ -421,6 +506,66 @@ export default function BackendCurlModal({
             {executing ? "执行中…" : "执行 curl"}
           </button>
         </div>
+      </div>
+
+      <ImportCurlModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onImport={handleImportCurlText}
+      />
+    </Modal>
+  );
+}
+
+function ImportCurlModal({ open, onClose, onImport }) {
+  const [curlText, setCurlText] = useState("");
+
+  const handleConfirm = () => {
+    if (!curlText.trim()) {
+      showToast("请输入或粘贴 cURL 命令", "warning");
+      return;
+    }
+    const success = onImport(curlText);
+    if (success) {
+      setCurlText("");
+      onClose();
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="解析并导入 cURL 命令"
+      className="w-[640px] max-w-[92vw]"
+    >
+      <div className="p-4 space-y-3">
+        <div className="text-xs text-slate-600 font-medium">
+          请在下方粘贴 cURL 命令，系统将自动解析 Query 参数、Body 请求体及 Authorization Token 并填充到调试面板：
+        </div>
+        <textarea
+          value={curlText}
+          onChange={(e) => setCurlText(e.target.value)}
+          placeholder="如: curl 'https://api.com/path?page=1' -H 'Authorization: Bearer xyz' -d '{\&quot;name\&quot;:\&quot;test\&quot;}'"
+          rows={7}
+          className="w-full bg-slate-900 text-slate-200 border border-slate-700 rounded-lg p-3 text-xs font-mono outline-none focus:border-slate-500 shadow-inner resize-none leading-relaxed"
+        />
+      </div>
+      <div className="border-t border-border px-5 py-3 flex items-center justify-end gap-2 shrink-0">
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900"
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          onClick={handleConfirm}
+          className="px-3 py-1.5 bg-slate-800 text-white rounded-md text-xs font-medium hover:bg-slate-700 transition-colors shadow-sm cursor-pointer"
+        >
+          确认解析并填充
+        </button>
       </div>
     </Modal>
   );
