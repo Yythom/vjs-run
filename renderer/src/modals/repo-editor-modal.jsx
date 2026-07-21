@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useMatch } from "react-router";
+import { useForm, useFieldArray } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import Modal from "../components/modal";
 import { copyRepoConfig } from "../utils/export-config";
 import { useAppConfig, updateAppConfig } from "../stores/app-config-store";
@@ -7,16 +10,78 @@ import { refreshProjects } from "../stores/runner-store";
 import { useCloseModal } from "../hooks/use-modal-nav";
 import { showToast } from "../utils/toast";
 
-const VALIDATION_MESSAGES = {
-  repo: "Repo 的 key、名称和路径不能为空",
-  "repo-key": "Repo key 不能重复",
-  projects: "至少需要一个项目",
-  "project-key": "项目 key 不能重复",
-  "project-fields": "项目的 key、名称和命令不能为空",
-};
-
 function emptyProject() {
   return { key: "", name: "", command: "" };
+}
+
+/** 整行都空的项目行在校验/保存时静默丢弃，半填的行才报错 */
+function isBlankProject(project) {
+  return (
+    !String(project.key || "").trim() &&
+    !String(project.name || "").trim() &&
+    !String(project.command || "").trim()
+  );
+}
+
+// 校验依赖「已有 repo key 列表」这类动态数据，用工厂函数按当前上下文构建 schema
+function buildRepoSchema(existingKeys, originalKey) {
+  return z
+    .object({
+      repoKey: z.string().refine((v) => v.trim(), { message: "Repo Key 不能为空" }),
+      repoLabel: z.string().refine((v) => v.trim(), { message: "Repo 名称不能为空" }),
+      repoPath: z.string().refine((v) => v.trim(), { message: "Repo 根目录不能为空" }),
+      jsonInput: z.string(),
+      projects: z.array(
+        z.object({
+          key: z.string(),
+          name: z.string(),
+          command: z.string(),
+        }),
+      ),
+    })
+    .superRefine((values, ctx) => {
+      const nextKey = values.repoKey.trim();
+      if (nextKey && existingKeys.includes(nextKey) && nextKey !== originalKey) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["repoKey"],
+          message: "Repo Key 不能重复",
+        });
+      }
+
+      const filled = values.projects.filter((project) => !isBlankProject(project));
+      if (filled.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["projects"],
+          message: "至少需要一个项目",
+        });
+        return;
+      }
+      const seenKeys = new Set();
+      values.projects.forEach((project, index) => {
+        if (isBlankProject(project)) return;
+        for (const field of ["key", "name", "command"]) {
+          if (!String(project[field] || "").trim()) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["projects", index, field],
+              message: "项目的 key、名称和命令不能为空",
+            });
+          }
+        }
+        const key = String(project.key || "").trim();
+        if (!key) return;
+        if (seenKeys.has(key)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["projects", index, "key"],
+            message: "项目 key 不能重复",
+          });
+        }
+        seenKeys.add(key);
+      });
+    });
 }
 
 function normalizeImportedProject(project = {}, index = 0) {
@@ -63,6 +128,16 @@ function resolveImportedRepo(raw) {
   throw new Error("无法识别 JSON 结构");
 }
 
+function FieldError({ message }) {
+  if (!message) return null;
+  return <div className="text-[11px] text-red-600">{message}</div>;
+}
+
+const INPUT_CLS =
+  "w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors";
+const PROJECT_INPUT_CLS =
+  "w-full bg-panel border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors";
+
 export default function RepoEditorModal() {
   const close = useCloseModal();
   const appConfig = useAppConfig();
@@ -81,41 +156,50 @@ export default function RepoEditorModal() {
     if (!isCreate && !existingRepo) close();
   }, [isCreate, existingRepo, close]);
 
+  const originalKey = existingRepo?.key || null;
+  const existingKeys = repoGroups.map((repo) => repo.key);
+
   // 表单初始值从 URL + store 一次性算出，依靠 modal 是 route 组件每次打开都新挂载这一点
-  // 来「重置」表单。不需要 effect 同步 prop → state。
-  const [repoKey, setRepoKey] = useState(existingRepo?.key || "");
-  const [repoLabel, setRepoLabel] = useState(existingRepo?.label || "");
-  const [repoPath, setRepoPath] = useState(existingRepo?.path || "");
-  const [projects, setProjects] = useState(() =>
-    existingRepo?.projects?.length
-      ? existingRepo.projects.map((project) => ({
-          key: project.key || "",
-          name: project.name || "",
-          command: project.command || "",
-        }))
-      : [emptyProject()],
-  );
-  const [jsonInput, setJsonInput] = useState("");
-  const [saving, setSaving] = useState(false);
+  // 来「重置」表单。register 是非受控模式，打字不会触发弹窗重渲染。
+  const {
+    register,
+    control,
+    handleSubmit,
+    setValue,
+    getValues,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(buildRepoSchema(existingKeys, originalKey)),
+    defaultValues: {
+      repoKey: existingRepo?.key || "",
+      repoLabel: existingRepo?.label || "",
+      repoPath: existingRepo?.path || "",
+      jsonInput: "",
+      projects: existingRepo?.projects?.length
+        ? existingRepo.projects.map((project) => ({
+            key: project.key || "",
+            name: project.name || "",
+            command: project.command || "",
+          }))
+        : [emptyProject()],
+    },
+  });
+  const { fields, append, remove, move, replace } = useFieldArray({
+    control,
+    name: "projects",
+  });
+
+  // 拖拽排序的视觉高亮；顺序变更本身交给 useFieldArray 的 move()
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
+  // 删除 Repo 的进行中标志（保存用 isSubmitting，两者都会禁用按钮）
+  const [deleting, setDeleting] = useState(false);
+  const busy = isSubmitting || deleting;
 
   const handleDragStart = (e, index) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", index);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-  };
-
-  const handleDragEnter = (index) => {
-    setDragOverIndex(index);
-  };
-
-  const handleDragLeave = () => {
-    setDragOverIndex(null);
   };
 
   const handleDragEnd = () => {
@@ -125,47 +209,33 @@ export default function RepoEditorModal() {
 
   const handleDrop = (e, targetIndex) => {
     e.preventDefault();
-    const sourceIndex = draggedIndex !== null ? draggedIndex : parseInt(e.dataTransfer.getData("text/plain"), 10);
+    const sourceIndex =
+      draggedIndex !== null
+        ? draggedIndex
+        : parseInt(e.dataTransfer.getData("text/plain"), 10);
     setDraggedIndex(null);
     setDragOverIndex(null);
-
     if (sourceIndex === null || isNaN(sourceIndex) || sourceIndex === targetIndex) return;
-
-    setProjects((prev) => {
-      const next = [...prev];
-      const [draggedItem] = next.splice(sourceIndex, 1);
-      next.splice(targetIndex, 0, draggedItem);
-      return next;
-    });
+    move(sourceIndex, targetIndex);
   };
 
   if (!isCreate && !existingRepo) return null;
 
   const mode = isCreate ? "create" : "edit";
-  const originalKey = existingRepo?.key || null;
-  const existingKeys = repoGroups.map((repo) => repo.key);
-
-  const updateProject = (index, field, value) => {
-    setProjects((prev) =>
-      prev.map((project, i) =>
-        i === index ? { ...project, [field]: value } : project,
-      ),
-    );
-  };
 
   const handleSelectDirectory = async () => {
     try {
       const selectedPath = await window.electronAPI.selectDirectory();
       if (selectedPath) {
-        setRepoPath(selectedPath);
+        setValue("repoPath", selectedPath, { shouldDirty: true });
         // 如果 Repo 名称或 Repo Key 为空，自动帮用户推断并填入
         const folderName = selectedPath.split(/[/\\]/).pop() || "";
-        if (!repoLabel.trim()) {
-          setRepoLabel(folderName);
+        if (!getValues("repoLabel").trim()) {
+          setValue("repoLabel", folderName, { shouldDirty: true });
         }
-        if (!repoKey.trim()) {
+        if (!getValues("repoKey").trim()) {
           const safeKey = folderName.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
-          setRepoKey(safeKey);
+          setValue("repoKey", safeKey, { shouldDirty: true });
         }
       }
     } catch (err) {
@@ -173,57 +243,23 @@ export default function RepoEditorModal() {
     }
   };
 
-
-  const handleSave = async () => {
-    if (saving) return;
-
-    const nextRepoKey = repoKey.trim();
-    const nextRepoLabel = repoLabel.trim();
-    const nextRepoPath = repoPath.trim();
-    const nextProjects = projects
-      .map((project) => ({
-        key: String(project.key || "").trim(),
-        name: String(project.name || "").trim(),
-        command: String(project.command || "").trim(),
-      }))
-      .filter((project) => project.key || project.name || project.command);
-
-    if (!nextRepoKey || !nextRepoLabel || !nextRepoPath) {
-      showToast(VALIDATION_MESSAGES.repo, "warning");
-      return;
-    }
-    if (existingKeys.includes(nextRepoKey) && nextRepoKey !== originalKey) {
-      showToast(VALIDATION_MESSAGES["repo-key"], "warning");
-      return;
-    }
-    if (!nextProjects.length) {
-      showToast(VALIDATION_MESSAGES.projects, "warning");
-      return;
-    }
-    const seenProjectKeys = new Set();
-    for (const project of nextProjects) {
-      if (!project.key || !project.name || !project.command) {
-        showToast(VALIDATION_MESSAGES["project-fields"], "warning");
-        return;
-      }
-      if (seenProjectKeys.has(project.key)) {
-        showToast(VALIDATION_MESSAGES["project-key"], "warning");
-        return;
-      }
-      seenProjectKeys.add(project.key);
-    }
-
+  const handleSave = handleSubmit(async (values) => {
     const nextRepo = {
-      key: nextRepoKey,
-      label: nextRepoLabel,
-      path: nextRepoPath,
-      projects: nextProjects,
+      key: values.repoKey.trim(),
+      label: values.repoLabel.trim(),
+      path: values.repoPath.trim(),
+      projects: values.projects
+        .filter((project) => !isBlankProject(project))
+        .map((project) => ({
+          key: project.key.trim(),
+          name: project.name.trim(),
+          command: project.command.trim(),
+        })),
     };
     const nextGroups = isCreate
       ? [...repoGroups, nextRepo]
       : repoGroups.map((repo) => (repo.key === originalKey ? nextRepo : repo));
 
-    setSaving(true);
     try {
       await updateAppConfig({ frontendProjectGroups: nextGroups });
       await refreshProjects();
@@ -231,24 +267,26 @@ export default function RepoEditorModal() {
       close();
     } catch (error) {
       showToast(`保存失败: ${error?.message || String(error)}`, "error");
-    } finally {
-      setSaving(false);
     }
+  });
+
+  // 只覆盖 JSON 里出现的字段，没提供的保留当前输入
+  const applyImportedRepo = (parsed) => {
+    if (parsed.key) setValue("repoKey", parsed.key, { shouldDirty: true });
+    if (parsed.label) setValue("repoLabel", parsed.label, { shouldDirty: true });
+    if (parsed.path) setValue("repoPath", parsed.path, { shouldDirty: true });
+    if (parsed.projects?.length) replace(parsed.projects);
+    setValue("jsonInput", "");
   };
 
   const handleImportJson = () => {
-    const raw = jsonInput.trim();
+    const raw = getValues("jsonInput").trim();
     if (!raw) {
       showToast("JSON 内容不能为空", "warning");
       return;
     }
     try {
-      const parsed = resolveImportedRepo(JSON.parse(raw));
-      if (parsed.key) setRepoKey(parsed.key);
-      if (parsed.label) setRepoLabel(parsed.label);
-      if (parsed.path) setRepoPath(parsed.path);
-      if (parsed.projects?.length) setProjects(parsed.projects);
-      setJsonInput("");
+      applyImportedRepo(resolveImportedRepo(JSON.parse(raw)));
       showToast("JSON 解析成功", "success");
     } catch (error) {
       showToast(`JSON 解析失败: ${error?.message || String(error)}`, "error");
@@ -263,12 +301,7 @@ export default function RepoEditorModal() {
         showToast("剪切板内容为空", "warning");
         return;
       }
-      const parsed = resolveImportedRepo(JSON.parse(trimmed));
-      if (parsed.key) setRepoKey(parsed.key);
-      if (parsed.label) setRepoLabel(parsed.label);
-      if (parsed.path) setRepoPath(parsed.path);
-      if (parsed.projects?.length) setProjects(parsed.projects);
-      setJsonInput("");
+      applyImportedRepo(resolveImportedRepo(JSON.parse(trimmed)));
       showToast("已成功从剪切板读取并解析配置 ✨", "success");
     } catch (error) {
       showToast(`剪切板解析失败: ${error?.message || "请确认剪切板中是合法的 JSON 格式"}`, "error");
@@ -276,10 +309,10 @@ export default function RepoEditorModal() {
   };
 
   const handleDelete = async () => {
-    if (saving || isCreate || !existingRepo) return;
+    if (busy || isCreate || !existingRepo) return;
     if (!window.confirm(`删除 repo「${existingRepo.label}」？`)) return;
 
-    setSaving(true);
+    setDeleting(true);
     try {
       const nextGroups = repoGroups.filter((repo) => repo.key !== originalKey);
       await updateAppConfig({ frontendProjectGroups: nextGroups });
@@ -289,17 +322,18 @@ export default function RepoEditorModal() {
     } catch (error) {
       showToast(`删除失败: ${error?.message || String(error)}`, "error");
     } finally {
-      setSaving(false);
+      setDeleting(false);
     }
   };
 
   const handleExport = async () => {
     try {
+      const values = getValues();
       const exported = await copyRepoConfig({
-        key: repoKey,
-        label: repoLabel,
-        path: repoPath,
-        projects,
+        key: values.repoKey,
+        label: values.repoLabel,
+        path: values.repoPath,
+        projects: values.projects,
       });
       showToast(
         `已复制 ${exported.label || exported.key || "Repo"} 的 JSON 配置到剪贴板`,
@@ -311,11 +345,13 @@ export default function RepoEditorModal() {
   };
 
   const title = mode === "create" ? "新增 Repo" : `编辑 ${existingRepo?.label || ""}`;
+  const projectsError =
+    typeof errors.projects?.message === "string" ? errors.projects.message : "";
 
   return (
     <Modal
       open
-      onClose={saving ? undefined : close}
+      onClose={busy ? undefined : close}
       title={title}
       className="w-[760px] max-w-[94vw] max-h-[90vh]"
     >
@@ -326,7 +362,7 @@ export default function RepoEditorModal() {
         <button
           type="button"
           onClick={close}
-          disabled={saving}
+          disabled={busy}
           className="text-slate-500 hover:text-slate-900 transition-colors text-lg leading-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           aria-label="关闭 repo 编辑弹窗"
         >
@@ -338,23 +374,13 @@ export default function RepoEditorModal() {
         <div className="grid grid-cols-2 gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-slate-600">Repo Key</label>
-            <input
-              type="text"
-              value={repoKey}
-              onChange={(e) => setRepoKey(e.target.value)}
-              placeholder="main"
-              className="w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
-            />
+            <input type="text" {...register("repoKey")} placeholder="main" className={INPUT_CLS} />
+            <FieldError message={errors.repoKey?.message} />
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-slate-600">Repo 名称</label>
-            <input
-              type="text"
-              value={repoLabel}
-              onChange={(e) => setRepoLabel(e.target.value)}
-              placeholder="vjs-monorepo"
-              className="w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
-            />
+            <input type="text" {...register("repoLabel")} placeholder="vjs-monorepo" className={INPUT_CLS} />
+            <FieldError message={errors.repoLabel?.message} />
           </div>
         </div>
 
@@ -363,10 +389,9 @@ export default function RepoEditorModal() {
           <div className="flex gap-2">
             <input
               type="text"
-              value={repoPath}
-              onChange={(e) => setRepoPath(e.target.value)}
+              {...register("repoPath")}
               placeholder="/Users/yourname/Documents/work/vjs-monorepo"
-              className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+              className={`flex-1 ${INPUT_CLS}`}
             />
             <button
               type="button"
@@ -376,6 +401,7 @@ export default function RepoEditorModal() {
               📂 选择文件夹
             </button>
           </div>
+          <FieldError message={errors.repoPath?.message} />
         </div>
 
         <div className="flex flex-col gap-2">
@@ -400,8 +426,7 @@ export default function RepoEditorModal() {
             </div>
           </div>
           <textarea
-            value={jsonInput}
-            onChange={(e) => setJsonInput(e.target.value)}
+            {...register("jsonInput")}
             placeholder={'支持 repo 对象、projects 数组，或 {"frontendProjectGroups":[...]}'}
             spellCheck={false}
             className="min-h-28 w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors resize-y"
@@ -411,9 +436,10 @@ export default function RepoEditorModal() {
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <div className="text-xs font-medium text-slate-600">项目列表</div>
+            <FieldError message={projectsError} />
             <button
               type="button"
-              onClick={() => setProjects((prev) => [...prev, emptyProject()])}
+              onClick={() => append(emptyProject())}
               className="ml-auto px-2.5 py-1 rounded-md border text-[11px] font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors"
             >
               ＋ 新增项目
@@ -421,76 +447,77 @@ export default function RepoEditorModal() {
           </div>
 
           <div className="flex flex-col gap-3">
-            {projects.map((project, index) => (
-              <div
-                key={`${mode}-${index}`}
-                onDragOver={handleDragOver}
-                onDragEnter={() => handleDragEnter(index)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, index)}
-                className={`border rounded-lg bg-card/60 p-3 flex gap-3 items-center transition-all ${
-                  dragOverIndex === index
-                    ? "border-blue-500 bg-blue-500/5 shadow-sm"
-                    : draggedIndex === index
-                    ? "opacity-40 border-dashed border-slate-300"
-                    : "border-border"
-                }`}
-              >
-                {/* Drag Handle */}
+            {fields.map((field, index) => {
+              const rowErrors = errors.projects?.[index];
+              const rowError =
+                rowErrors?.key?.message ||
+                rowErrors?.name?.message ||
+                rowErrors?.command?.message;
+              return (
                 <div
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, index)}
-                  onDragEnd={handleDragEnd}
-                  className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 transition-colors flex items-center justify-center w-6 self-stretch shrink-0"
-                  title="按住拖拽排序"
+                  key={field.id}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnter={() => setDragOverIndex(index)}
+                  onDragLeave={() => setDragOverIndex(null)}
+                  onDrop={(e) => handleDrop(e, index)}
+                  className={`border rounded-lg bg-card/60 p-3 flex gap-3 items-center transition-all ${
+                    dragOverIndex === index
+                      ? "border-blue-500 bg-blue-500/5 shadow-sm"
+                      : draggedIndex === index
+                      ? "opacity-40 border-dashed border-slate-300"
+                      : "border-border"
+                  }`}
                 >
-                  <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20">
-                    <path d="M7 6c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm6-8c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2z" />
-                  </svg>
-                </div>
-
-                {/* Main Card Form Fields */}
-                <div className="flex-1 flex flex-col gap-3">
-                  <div className="grid grid-cols-[140px_1fr_auto] gap-3 items-start">
-                    <input
-                      type="text"
-                      value={project.key}
-                      onChange={(e) => updateProject(index, "key", e.target.value)}
-                      placeholder="project-key"
-                      className="w-full bg-panel border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
-                    />
-                    <input
-                      type="text"
-                      value={project.name}
-                      onChange={(e) => updateProject(index, "name", e.target.value)}
-                      placeholder="项目名称"
-                      className="w-full bg-panel border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
-                    />
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setProjects((prev) =>
-                          prev.length === 1
-                            ? [emptyProject()]
-                            : prev.filter((_, i) => i !== index),
-                        )
-                      }
-                      className="px-2.5 py-2 rounded-md border text-[11px] font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 transition-colors"
-                    >
-                      删除
-                    </button>
+                  {/* Drag Handle */}
+                  <div
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, index)}
+                    onDragEnd={handleDragEnd}
+                    className="cursor-grab active:cursor-grabbing text-slate-400 hover:text-slate-600 transition-colors flex items-center justify-center w-6 self-stretch shrink-0"
+                    title="按住拖拽排序"
+                  >
+                    <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20">
+                      <path d="M7 6c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm6-8c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2zm0 4c0-1.1-.9-2-2-2s-2 .9-2 2 .9 2 2 2 2-.9 2-2z" />
+                    </svg>
                   </div>
 
-                  <input
-                    type="text"
-                    value={project.command}
-                    onChange={(e) => updateProject(index, "command", e.target.value)}
-                    placeholder="pnpm run dev --filter @gc-app/xxx"
-                    className="w-full bg-panel border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
-                  />
+                  {/* Main Card Form Fields */}
+                  <div className="flex-1 flex flex-col gap-3">
+                    <div className="grid grid-cols-[140px_1fr_auto] gap-3 items-start">
+                      <input
+                        type="text"
+                        {...register(`projects.${index}.key`)}
+                        placeholder="project-key"
+                        className={PROJECT_INPUT_CLS}
+                      />
+                      <input
+                        type="text"
+                        {...register(`projects.${index}.name`)}
+                        placeholder="项目名称"
+                        className={PROJECT_INPUT_CLS}
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          fields.length === 1 ? replace([emptyProject()]) : remove(index)
+                        }
+                        className="px-2.5 py-2 rounded-md border text-[11px] font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 transition-colors"
+                      >
+                        删除
+                      </button>
+                    </div>
+
+                    <input
+                      type="text"
+                      {...register(`projects.${index}.command`)}
+                      placeholder="pnpm run dev --filter @gc-app/xxx"
+                      className={PROJECT_INPUT_CLS}
+                    />
+                    <FieldError message={rowError} />
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -502,7 +529,7 @@ export default function RepoEditorModal() {
               <button
                 type="button"
                 onClick={handleDelete}
-                disabled={saving}
+                disabled={busy}
                 className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 删除 Repo
@@ -511,7 +538,7 @@ export default function RepoEditorModal() {
             <button
               type="button"
               onClick={handleExport}
-              disabled={saving}
+              disabled={busy}
               className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               复制 JSON
@@ -523,7 +550,7 @@ export default function RepoEditorModal() {
           <button
             type="button"
             onClick={close}
-            disabled={saving}
+            disabled={busy}
             className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             取消
@@ -531,10 +558,10 @@ export default function RepoEditorModal() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving}
+            disabled={busy}
             className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {saving ? "保存中..." : "保存"}
+            {isSubmitting ? "保存中..." : "保存"}
           </button>
         </div>
       </div>

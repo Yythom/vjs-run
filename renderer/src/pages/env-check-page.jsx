@@ -12,9 +12,33 @@ const ENV_ICONS = {
   pm2: "⚙️",
 };
 
-export default function EnvCheckPage() {
-  const [copiedId, setCopiedId] = useState(null);
+/** copied 提示只影响按钮自身，state 收在叶子里，点复制不重画整页卡片列表 */
+function CopyInstallButton({ item }) {
+  const [copied, setCopied] = useState(false);
 
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(item.install);
+      setCopied(true);
+      showToast(`已复制 ${item.label} 安装命令`, "success");
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      showToast(`复制失败: ${err?.message || "未知错误"}`, "error");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="w-full text-center py-1.5 rounded border text-[10px] font-semibold bg-white text-slate-600 border-border hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer"
+    >
+      {copied ? "✓ 已复制" : "📋 复制安装命令"}
+    </button>
+  );
+}
+
+export default function EnvCheckPage() {
   const {
     data,
     loading,
@@ -29,21 +53,6 @@ export default function EnvCheckPage() {
     }
   }, []);
   const results = data ?? [];
-
-  const copyInstall = async (item) => {
-    if (!item.install) return;
-    try {
-      await navigator.clipboard.writeText(item.install);
-      setCopiedId(item.id);
-      showToast(`已复制 ${item.label} 安装命令`, "success");
-      setTimeout(
-        () => setCopiedId((prev) => (prev === item.id ? null : prev)),
-        1500,
-      );
-    } catch (err) {
-      showToast(`复制失败: ${err?.message || "未知错误"}`, "error");
-    }
-  };
 
   const missingCount = results.filter((item) => item.status === "missing").length;
   
@@ -119,13 +128,7 @@ export default function EnvCheckPage() {
                     >
                       {item.install}
                     </code>
-                    <button
-                      type="button"
-                      onClick={() => copyInstall(item)}
-                      className="w-full text-center py-1.5 rounded border text-[10px] font-semibold bg-white text-slate-600 border-border hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer"
-                    >
-                      {copiedId === item.id ? "✓ 已复制" : "📋 复制安装命令"}
-                    </button>
+                    <CopyInstallButton item={item} />
                   </div>
                 )}
               </div>

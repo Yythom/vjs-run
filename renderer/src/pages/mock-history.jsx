@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import clsx from "clsx";
 import useResource from "../hooks/use-resource";
@@ -709,7 +709,9 @@ export default function MockHistoryPage() {
     [],
   );
 
-  const normalizedKeyword = keyword.trim().toLowerCase();
+  // 输入框即时响应，列表过滤延后一拍（与规则列表的搜索一致）
+  const deferredKeyword = useDeferredValue(keyword);
+  const normalizedKeyword = deferredKeyword.trim().toLowerCase();
   const filtered = entries.filter(
     (entry) =>
       matchFilter(entry, filter) &&

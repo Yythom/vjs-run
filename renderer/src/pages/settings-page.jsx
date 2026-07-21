@@ -1,9 +1,42 @@
-import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import PageShell from "../components/page-shell";
 import { updateAppConfig, useAppConfigStore } from "../stores/app-config-store";
 import { generateMockSpec, useGeneratingMockSpec } from "../stores/runner-store";
 import useModalNav from "../hooks/use-modal-nav";
 import { showToast } from "../utils/toast";
+
+// 绝对路径目录（不能直接指到 json/yaml 文件）
+function isAbsoluteSpecDir(value) {
+  return value.startsWith("/") && !/\.(json|ya?ml)$/i.test(value);
+}
+
+const settingsSchema = z.object({
+  mockSpecPath: z
+    .string()
+    .refine((v) => isAbsoluteSpecDir(v.trim()), {
+      message: "OpenAPI JSON 路径必须是绝对目录",
+    }),
+  mockSwaggerServer: z.string(),
+  mockHost: z.string(),
+  mockPort: z
+    .string()
+    .refine((v) => v.trim() !== "" && Number.isInteger(Number(v.trim())), {
+      message: "端口必须是整数",
+    }),
+  mockServiceAddress: z.string(),
+  mockBackendBaseUrl: z.string(),
+  mockAll: z.boolean(),
+});
+
+function FieldError({ message }) {
+  if (!message) return null;
+  return <div className="text-[11px] text-red-600">{message}</div>;
+}
+
+const INPUT_CLS =
+  "w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors";
 
 export default function SettingsPage() {
   const openModal = useModalNav();
@@ -11,32 +44,39 @@ export default function SettingsPage() {
   // 配置已经在 store 里（app 启动时 init 拉过一次），直接同步取一次作为初始值。
   // 用 getState() 而不是 useAppConfig()，避免 store 变化时把用户正在编辑的表单 reset。
   const cfg = useAppConfigStore.getState().appConfig;
-  const [mockSpecPath, setMockSpecPath] = useState(cfg.mockSpecPath || "");
-  const [mockSwaggerServer, setMockSwaggerServer] = useState(cfg.mockSwaggerServer || "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com");
-  const [mockHost, setMockHost] = useState(cfg.mockHost || "127.0.0.1");
-  const [mockPort, setMockPort] = useState(String(cfg.mockPort || 3002));
-  const [mockServiceAddress, setMockServiceAddress] = useState(cfg.mockServiceAddress || "");
-  const [mockBackendBaseUrl, setMockBackendBaseUrl] = useState(cfg.mockBackendBaseUrl || "");
-  const [mockAll, setMockAll] = useState(Boolean(cfg.mockAll));
-  const [saving, setSaving] = useState(false);
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    getValues,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(settingsSchema),
+    defaultValues: {
+      mockSpecPath: cfg.mockSpecPath || "",
+      mockSwaggerServer:
+        cfg.mockSwaggerServer || "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com",
+      mockHost: cfg.mockHost || "127.0.0.1",
+      mockPort: String(cfg.mockPort || 3002),
+      mockServiceAddress: cfg.mockServiceAddress || "",
+      mockBackendBaseUrl: cfg.mockBackendBaseUrl || "",
+      mockAll: Boolean(cfg.mockAll),
+    },
+  });
   const generating = useGeneratingMockSpec();
-
-
 
   // 独立操作：先把表单里的目录 + 源服务器地址落盘（生成逻辑读的是已保存配置），再触发生成
   const handleGenerate = async () => {
     if (generating) return;
 
-    const nextMockSpecPath = mockSpecPath.trim();
-    const nextMockSwaggerServer = mockSwaggerServer.trim();
-    const mockSpecIsAbsoluteDir =
-      nextMockSpecPath.startsWith("/") && !/\.(json|ya?ml)$/i.test(nextMockSpecPath);
+    const nextMockSpecPath = getValues("mockSpecPath").trim();
+    const nextMockSwaggerServer = getValues("mockSwaggerServer").trim();
 
     if (!nextMockSwaggerServer) {
       showToast("请先填写 Swagger 源服务器地址", "warning");
       return;
     }
-    if (!nextMockSpecPath || !mockSpecIsAbsoluteDir) {
+    if (!isAbsoluteSpecDir(nextMockSpecPath)) {
       showToast("OpenAPI JSON 路径必须是绝对目录", "warning");
       return;
     }
@@ -57,54 +97,29 @@ export default function SettingsPage() {
     try {
       const selectedPath = await window.electronAPI.selectDirectory();
       if (selectedPath) {
-        setMockSpecPath(selectedPath);
+        setValue("mockSpecPath", selectedPath, { shouldDirty: true });
       }
     } catch (err) {
       showToast(`选择目录失败: ${err.message}`, "error");
     }
   };
 
-  const handleSave = async () => {
-    if (saving) return;
-
-    const nextMockSpecPath = mockSpecPath.trim();
-    const nextMockHost = mockHost.trim() || "127.0.0.1";
-    const nextMockPort = Number(mockPort);
-    const nextMockServiceAddress = mockServiceAddress.trim();
-
-    const mockSpecIsAbsoluteDir =
-      nextMockSpecPath.startsWith("/") && !/\.(json|ya?ml)$/i.test(nextMockSpecPath);
-
-    if (
-      !nextMockSpecPath ||
-      !mockSpecIsAbsoluteDir ||
-      !Number.isInteger(nextMockPort)
-    ) {
-      showToast(
-        "OpenAPI JSON 路径必须是绝对目录，端口和 rc 需要是整数",
-        "warning",
-      );
-      return;
-    }
-
-    setSaving(true);
+  const handleSave = handleSubmit(async (values) => {
     try {
       await updateAppConfig({
-        mockSpecPath: nextMockSpecPath,
-        mockSwaggerServer: mockSwaggerServer.trim(),
-        mockHost: nextMockHost,
-        mockPort: nextMockPort,
-        mockServiceAddress: nextMockServiceAddress,
-        mockBackendBaseUrl: mockBackendBaseUrl.trim(),
-        mockAll,
+        mockSpecPath: values.mockSpecPath.trim(),
+        mockSwaggerServer: values.mockSwaggerServer.trim(),
+        mockHost: values.mockHost.trim() || "127.0.0.1",
+        mockPort: Number(values.mockPort.trim()),
+        mockServiceAddress: values.mockServiceAddress.trim(),
+        mockBackendBaseUrl: values.mockBackendBaseUrl.trim(),
+        mockAll: values.mockAll,
       });
       showToast("配置已保存，下次启动项目时生效", "success");
     } catch (error) {
       showToast(`保存失败: ${error?.message || String(error)}`, "error");
-    } finally {
-      setSaving(false);
     }
-  };
+  });
 
   return (
     <PageShell
@@ -114,10 +129,10 @@ export default function SettingsPage() {
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving}
+          disabled={isSubmitting}
           className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-40"
         >
-          {saving ? "保存中..." : "保存"}
+          {isSubmitting ? "保存中..." : "保存"}
         </button>
       }
     >
@@ -135,10 +150,9 @@ export default function SettingsPage() {
             <div className="flex gap-2">
               <input
                 type="text"
-                value={mockSpecPath}
-                onChange={(e) => setMockSpecPath(e.target.value)}
+                {...register("mockSpecPath")}
                 placeholder="/Users/yourname/tool/swagger-mock/json.output"
-                className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+                className={`flex-1 ${INPUT_CLS}`}
               />
               <button
                 type="button"
@@ -148,6 +162,7 @@ export default function SettingsPage() {
                 📂 选择文件夹
               </button>
             </div>
+            <FieldError message={errors.mockSpecPath?.message} />
             <p className="text-[11px] text-slate-400">
               必须填写包含 OpenAPI JSON/YAML 文件的绝对路径目录
             </p>
@@ -161,10 +176,9 @@ export default function SettingsPage() {
             <div className="flex gap-2">
               <input
                 type="text"
-                value={mockSwaggerServer}
-                onChange={(e) => setMockSwaggerServer(e.target.value)}
+                {...register("mockSwaggerServer")}
                 placeholder="http://alb-xxx.cn-shanghai.alb.aliyuncs.com/t2"
-                className="flex-1 bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+                className={`flex-1 ${INPUT_CLS}`}
               />
               <button
                 type="button"
@@ -201,21 +215,20 @@ export default function SettingsPage() {
               <label className="text-xs font-medium text-slate-600">Mock Host</label>
               <input
                 type="text"
-                value={mockHost}
-                onChange={(e) => setMockHost(e.target.value)}
+                {...register("mockHost")}
                 placeholder="127.0.0.1"
-                className="w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+                className={INPUT_CLS}
               />
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-slate-600">Mock Port</label>
               <input
                 type="number"
-                value={mockPort}
-                onChange={(e) => setMockPort(e.target.value)}
+                {...register("mockPort")}
                 placeholder="3002"
-                className="w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+                className={INPUT_CLS}
               />
+              <FieldError message={errors.mockPort?.message} />
             </div>
           </div>
 
@@ -226,10 +239,9 @@ export default function SettingsPage() {
             </label>
             <input
               type="text"
-              value={mockServiceAddress}
-              onChange={(e) => setMockServiceAddress(e.target.value)}
+              {...register("mockServiceAddress")}
               placeholder="/vjk 或 http://127.0.0.1:3002/vjk"
-              className="w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+              className={INPUT_CLS}
             />
             <p className="text-[11px] text-slate-400">
               所有 mock 路由的前缀（如 /vjh、/vjk）。留空时自动读取 OpenAPI 文档里的默认前缀
@@ -245,16 +257,14 @@ export default function SettingsPage() {
             </label>
             <input
               type="text"
-              value={mockBackendBaseUrl}
-              onChange={(e) => setMockBackendBaseUrl(e.target.value)}
+              {...register("mockBackendBaseUrl")}
               placeholder="https://vapi.vjshi.cn/t2"
-              className="w-full bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
+              className={INPUT_CLS}
             />
             <label className="mt-1 inline-flex items-center gap-2 text-xs text-slate-600">
               <input
                 type="checkbox"
-                checked={mockAll}
-                onChange={(e) => setMockAll(e.target.checked)}
+                {...register("mockAll")}
                 className="accent-blue-500"
               />
               全部接口使用 mock，不 fallback 到后端
@@ -265,4 +275,3 @@ export default function SettingsPage() {
     </PageShell>
   );
 }
-
