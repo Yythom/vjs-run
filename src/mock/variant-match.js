@@ -226,7 +226,7 @@ export function flattenBodyFields(sample, prefix = "", depth = 0, out = []) {
   if (out.length >= BODY_FIELD_MAX_COUNT || depth > BODY_FIELD_MAX_DEPTH) return out;
 
   if (Array.isArray(sample)) {
-    if (sample.length) flattenBodyFields(sample[0], `${prefix}.0`, depth + 1, out);
+    if (sample.length) flattenBodyFields(sample[0], prefix ? `${prefix}.0` : "0", depth + 1, out);
     return out;
   }
   if (isPlainObject(sample)) {

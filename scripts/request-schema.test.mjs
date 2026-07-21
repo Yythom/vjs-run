@@ -9,11 +9,12 @@ import {
   getRecommendedQueryParams,
 } from "../src/mock/request-schema.js";
 
-function routeFrom(operation, { method = "post", path = "/api/orders" } = {}) {
+function routeFrom(operation, { method = "post", path = "/api/orders", components } = {}) {
   const spec = {
     openapi: "3.0.0",
     info: { title: "t", version: "1" },
     paths: { [path]: { [method]: operation } },
+    ...(components ? { components } : {}),
   };
   const routes = buildRoutes(spec, "test.json", "");
   assert.equal(routes.length, 1, "buildRoutes 应产出一条路由");
@@ -141,6 +142,128 @@ test("响应侧没有任何 schema 也能正常返回请求参数（与 previewM
   assert.equal(schema.parameters.length, 1);
   assert.equal(schema.method, "POST");
   assert.equal(schema.path, "/api/orders");
+});
+
+// ─── extractBodyDescriptions（body.fields 的 description 来源）───────────────
+
+function bodyRoute(schema, components) {
+  return routeFrom(
+    {
+      requestBody: { content: { "application/json": { schema } } },
+      responses: {},
+    },
+    { components },
+  );
+}
+
+test("body descriptions：内联 properties 的 description 逐级挂到点路径字段上", () => {
+  const schema = getRequestSchema(
+    bodyRoute({
+      type: "object",
+      properties: {
+        keyword: { type: "string", description: "搜索词" },
+        filter: {
+          type: "object",
+          description: "过滤条件",
+          properties: { type: { type: "string", description: "类型" } },
+        },
+      },
+    }),
+  );
+  const byPath = Object.fromEntries(schema.body.fields.map((f) => [f.path, f.description]));
+  assert.equal(byPath.keyword, "搜索词");
+  assert.equal(byPath["filter.type"], "类型");
+  // 非叶子路径的 description 也进 descriptions（供 UI 展示分组说明）
+  assert.equal(schema.body.descriptions.filter, "过滤条件");
+  // 没写 description 的字段兜底为空字符串
+  assert.ok(schema.body.fields.every((f) => typeof f.description === "string"));
+});
+
+test("body descriptions：$ref 解析到 components；$ref 包装层的 description 优先于目标", () => {
+  const schema = getRequestSchema(
+    bodyRoute(
+      {
+        type: "object",
+        properties: {
+          user: { $ref: "#/components/schemas/User" },
+          owner: { $ref: "#/components/schemas/User", description: "包装层说明" },
+        },
+      },
+      {
+        schemas: {
+          User: {
+            type: "object",
+            description: "用户对象",
+            properties: { id: { type: "integer", description: "用户ID" } },
+          },
+        },
+      },
+    ),
+  );
+  const d = schema.body.descriptions;
+  assert.equal(d.user, "用户对象"); // 无包装说明时用目标的
+  assert.equal(d.owner, "包装层说明"); // 包装层优先
+  assert.equal(d["user.id"], "用户ID"); // ref 内部的属性继续递归
+  assert.equal(d["owner.id"], "用户ID");
+});
+
+test("body descriptions：allOf 各分支合并；title/summary 作为 description 兜底", () => {
+  const schema = getRequestSchema(
+    bodyRoute({
+      type: "object",
+      properties: {
+        item: {
+          allOf: [
+            { type: "object", properties: { a: { type: "string", title: "标题A" } } },
+            { type: "object", properties: { b: { type: "string", description: "说明B" } } },
+          ],
+        },
+      },
+    }),
+  );
+  const d = schema.body.descriptions;
+  assert.equal(d["item.a"], "标题A");
+  assert.equal(d["item.b"], "说明B");
+});
+
+test("body descriptions：数组 items 拼 .0 路径；顶层数组 body 从 0 起（与 fields 对齐）", () => {
+  const schema = getRequestSchema(
+    bodyRoute({
+      type: "array",
+      items: {
+        type: "object",
+        properties: { id: { type: "integer", description: "编号" } },
+      },
+    }),
+  );
+  assert.equal(schema.body.descriptions["0.id"], "编号");
+  // fields 与 descriptions 的路径体系必须一致，description 才能挂上
+  const idField = schema.body.fields.find((f) => f.path === "0.id");
+  assert.ok(idField, "顶层数组 body 应产出 0.id 字段（无前导点）");
+  assert.equal(idField.description, "编号");
+});
+
+test("body descriptions：循环 $ref 不死循环，正常返回已解析部分", () => {
+  const schema = getRequestSchema(
+    bodyRoute(
+      { $ref: "#/components/schemas/Node" },
+      {
+        schemas: {
+          Node: {
+            type: "object",
+            description: "节点",
+            properties: {
+              name: { type: "string", description: "节点名" },
+              parent: { $ref: "#/components/schemas/Node" },
+            },
+          },
+        },
+      },
+    ),
+  );
+  assert.equal(schema.body.descriptions.name, "节点名");
+  // 循环点被剪断：再次遇到同一 $ref 解析为 {}，parent 不产出 description
+  assert.equal(schema.body.descriptions.parent, undefined);
 });
 
 test("getRecommendedQueryParams：只取 query，扁平 name→示例值", () => {

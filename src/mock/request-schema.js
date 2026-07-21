@@ -32,9 +32,55 @@ export function getRecommendedQueryParams(route) {
   }, {});
 }
 
+function resolveRef(schema, spec, seenRefs) {
+  if (!schema || typeof schema !== "object") return schema;
+  if (!schema.$ref) return schema;
+  if (seenRefs.has(schema.$ref)) return {};
+  seenRefs.add(schema.$ref);
+  if (!schema.$ref.startsWith("#/")) return schema;
+  return (
+    schema.$ref
+      .slice(2)
+      .split("/")
+      .map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"))
+      .reduce((current, key) => current?.[key], spec) || schema
+  );
+}
+
+function extractBodyDescriptions(schema, spec, prefix = "", seenRefs = new Set()) {
+  if (!schema || typeof schema !== "object") return {};
+  
+  // 保留 $ref 包装层上的 description / title / summary
+  const outerDesc = schema.description || schema.title || schema.summary;
+  const resolved = resolveRef(schema, spec, seenRefs);
+  const innerDesc = resolved.description || resolved.title || resolved.summary;
+  const commentText = outerDesc || innerDesc || "";
+
+  const out = {};
+  if (prefix && commentText) {
+    out[prefix] = commentText;
+  }
+
+  if (resolved.allOf && Array.isArray(resolved.allOf)) {
+    for (const item of resolved.allOf) {
+      Object.assign(out, extractBodyDescriptions(item, spec, prefix, new Set(seenRefs)));
+    }
+  }
+
+  if (resolved.type === "array" && resolved.items) {
+    Object.assign(out, extractBodyDescriptions(resolved.items, spec, prefix ? `${prefix}.0` : "0", new Set(seenRefs)));
+  } else if (resolved.properties) {
+    for (const [key, childSchema] of Object.entries(resolved.properties)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      Object.assign(out, extractBodyDescriptions(childSchema, spec, path, new Set(seenRefs)));
+    }
+  }
+  return out;
+}
+
 /**
  * 完整请求侧 schema。parameters 保留 in/required/type/description 供表格展示；
- * body.fields 是扁平的点路径列表，直接对应变体 body 条件的写法。
+ * body.fields 是扁平的点路径列表，带对应字段的 description。
  */
 export function getRequestSchema(route) {
   const parameters = (route.operation.parameters || [])
@@ -60,16 +106,29 @@ export function getRequestSchema(route) {
   const content = route.operation.requestBody?.content || {};
   const contentType =
     Object.keys(content).find((type) => type.includes("json")) ||
-    Object.keys(content)[0];
-  const bodySchema = contentType ? content[contentType]?.schema : null;
+    Object.keys(content)[0] ||
+    "application/json";
+
+  const bodyParam = (route.operation.parameters || []).find((p) => p?.in === "body");
+  const bodySchema =
+    (contentType && content[contentType]?.schema) ||
+    (content && Object.values(content)[0]?.schema) ||
+    bodyParam?.schema;
+
   if (bodySchema) {
     try {
       const sample = mockFromSchema(bodySchema, route.spec, {});
+      const descriptions = extractBodyDescriptions(bodySchema, route.spec);
+      const fields = flattenBodyFields(sample).map((f) => ({
+        ...f,
+        description: descriptions[f.path] || "",
+      }));
       body = {
         contentType,
         required: Boolean(route.operation.requestBody?.required),
         sample,
-        fields: flattenBodyFields(sample),
+        fields,
+        descriptions,
       };
     } catch {
       body = null; // body schema 解析不了就当没有，不阻断参数表

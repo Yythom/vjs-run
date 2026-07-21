@@ -1,7 +1,7 @@
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import clsx from "clsx";
-import { isRuleEffective, ruleKey } from "./utils";
+import { ruleKey } from "./utils";
 
 // 每个 RuleListItem 估算高度（px）。带按钮的项约 78，简项约 56，给个中位偏大值
 // 减少二次测量。virtualizer 会按实际渲染的尺寸自动校准。
@@ -34,7 +34,27 @@ function Switch({ checked, disabled, onChange, label }) {
   );
 }
 
-function RuleListItem({
+function getMethodBadgeClass(method) {
+  const m = String(method).toUpperCase();
+  switch (m) {
+    case "GET":
+      return "text-method-get-text bg-method-get-bg border-method-get-border";
+    case "POST":
+      return "text-method-post-text bg-method-post-bg border-method-post-border";
+    case "PUT":
+      return "text-method-put-text bg-method-put-bg border-method-put-border";
+    case "PATCH":
+      return "text-method-patch-text bg-method-patch-bg border-method-patch-border";
+    case "DELETE":
+      return "text-method-delete-text bg-method-delete-bg border-method-delete-border";
+    default:
+      return "text-slate-500 bg-card border-border";
+  }
+}
+
+// memo：VirtualizedItems 因 useVirtualizer 被 React Compiler 跳过，滚动时会整体
+// 重渲染；列表项用 memo 隔离，只有 props 真变的卡片才重画。
+const RuleListItem = memo(function RuleListItem({
   item,
   selected,
   toggleBusy,
@@ -46,7 +66,6 @@ function RuleListItem({
   onToggleEnabled,
   onDelete,
 }) {
-  const effective = isRuleEffective(item.rule);
   const hasRule = Boolean(item.rule);
 
   const handleClick = () => onSelect(item);
@@ -67,10 +86,12 @@ function RuleListItem({
       onClick={handleClick}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && handleClick()}
       className={clsx(
-        "w-full text-left rounded-lg border px-2.5 py-2 mb-1.5 transition-colors cursor-pointer",
+        "group w-full text-left rounded-xl border p-3.5 mb-2.5 premium-card cursor-pointer",
         selected
-          ? "bg-sky-400/[0.08] border-sky-400/30"
-          : "bg-card border-border hover:bg-hover",
+          ? "premium-card-active"
+          : hasRule
+            ? "bg-white border-slate-200 shadow-sm shadow-slate-100/50"
+            : "bg-slate-50/40 border-dashed border-slate-200 hover:bg-slate-100/20",
       )}
     >
       <div className="flex items-center gap-2">
@@ -81,41 +102,58 @@ function RuleListItem({
             onClick={(e) => e.stopPropagation()}
             onChange={() => onToggleChecked(item.rule)}
             aria-label={`选择 ${item.method} ${item.path}`}
-            className="accent-sky-500 shrink-0"
+            className="accent-violet-600 shrink-0 cursor-pointer rounded border-slate-300"
           />
         )}
         <span
           className={clsx(
-            "text-[10px] font-semibold px-1.5 py-0.5 rounded border",
-            effective
-              ? "text-emerald-700 bg-emerald-400/10 border-emerald-400/35"
-              : hasRule
-                ? "text-slate-500 bg-card border-border"
-                : "text-slate-400 bg-transparent border-transparent",
+            "text-[9.5px] font-bold px-2 py-0.5 rounded-md border tracking-wider",
+            getMethodBadgeClass(item.method),
           )}
         >
           {item.method}
         </span>
-        <span className="text-xs text-slate-900 font-medium truncate">
+        <span className="text-xs text-slate-800 font-semibold truncate flex-1 leading-none">
           {item.path}
         </span>
-        {Array.isArray(item.rule?.variants) &&
-          item.rule.variants.length > 0 && (
-            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border text-violet-700 bg-violet-400/10 border-violet-400/35">
-              {item.rule.variants.length} 变体
-            </span>
-          )}
+        
+        {/* Modern micro-interaction action badges */}
+        <div className="relative shrink-0 flex items-center justify-end h-5 w-24">
+          <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1.5 transition-all duration-250 group-hover:opacity-0 group-hover:scale-95 group-hover:pointer-events-none">
+            {Array.isArray(item.rule?.variants) && item.rule.variants.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md border text-violet-600 bg-violet-50/50 border-violet-100 font-medium">
+                {item.rule.variants.length} 变体
+              </span>
+            )}
+            {!hasRule && (
+              <span className="text-[9.5px] px-1.5 py-0.5 rounded-md border border-slate-200 bg-slate-100/50 text-slate-400 font-medium whitespace-nowrap">
+                未配置
+              </span>
+            )}
+          </div>
+          <div className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 scale-95 transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 flex items-center">
+            {hasRule ? (
+              <span className="text-[10px] font-bold text-violet-600 bg-violet-50 border border-violet-200/50 px-2 py-0.5 rounded-md shadow-sm whitespace-nowrap">
+                ✏️ 编辑
+              </span>
+            ) : (
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/50 px-2 py-0.5 rounded-md shadow-sm whitespace-nowrap">
+                ＋ 快速配置
+              </span>
+            )}
+          </div>
+        </div>
       </div>
       {item.summary && (
-        <div className="text-[11px] text-slate-500 mt-0.5 truncate">
+        <div className="text-[11px] text-slate-400 mt-1 truncate pl-0.5 leading-relaxed font-normal">
           {item.summary}
         </div>
       )}
       {hasRule && (
-        <div className="flex items-center gap-2 mt-1.5">
+        <div className="flex items-center gap-2 mt-3 pt-2.5 border-t border-slate-100 group-hover:border-slate-200/40">
           <span
             onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1.5 text-[11px] text-slate-700"
+            className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-slate-700 transition-colors leading-none"
           >
             <Switch
               checked={displayEnabled}
@@ -123,13 +161,15 @@ function RuleListItem({
               onChange={handleToggle}
               label="启用"
             />
-            启用
+            <span className="font-semibold text-[10.5px]">
+              {displayEnabled ? "已启用" : "已停用"}
+            </span>
           </span>
           <button
             type="button"
             onClick={handleDelete}
             disabled={toggleBusy}
-            className="ml-auto text-[10px] px-1.5 py-0.5 rounded border bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40"
+            className="ml-auto text-[10px] px-2 py-0.5 rounded-md border bg-red-500/5 text-red-600 border-red-200/40 hover:bg-red-500/10 hover:text-red-700 transition-all duration-150 disabled:opacity-40 font-semibold cursor-pointer"
           >
             删除
           </button>
@@ -137,7 +177,8 @@ function RuleListItem({
       )}
     </div>
   );
-}
+});
+
 
 /**
  * 批量操作条：在「已配置/已停用/有变体」这些规则子集视图下出现。全选勾选框
@@ -347,27 +388,27 @@ export default function MockRuleList({
   const filterCounts = { all: allItems.length, mocked, disabled, variants, unset };
 
   return (
-    <aside className="min-h-0 border-r border-border flex flex-col overflow-hidden">
+    <aside className="flex-1 w-full h-full min-h-0 border-r border-border flex flex-col overflow-hidden bg-slate-50/20">
       {/* 列表已占满整页宽：筛选控件横向排开，宽度不够时自动换行 */}
-      <div className="p-3 border-b border-border  gap-x-3 gap-y-2">
-        <div className="flex gap-2 items-center">
+      <div className="p-4 border-b border-border flex flex-col gap-2 bg-white">
+        <div className="flex gap-3 items-center flex-wrap">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索 path / summary / source"
-            className="flex-1 min-w-[200px] max-w-[360px] bg-card border border-border rounded-md px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500"
+            className="flex-1 min-w-[200px] max-w-[360px] bg-white border border-slate-200 shadow-sm focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-all rounded-lg px-3 py-2 text-xs text-slate-800 placeholder-slate-400 outline-none"
           />
-          <div className="flex gap-1 shrink-0">
-            {["ALL", "GET", "POST", "PUT", "PATCH", "DELETE"].map((method) => (
+          <div className="flex gap-1 shrink-0 bg-slate-100 p-0.5 rounded-lg border border-slate-200/60">
+            {["ALL", "GET", "POST", "PUT", "DELETE", "PATCH"].map((method) => (
               <button
                 key={method}
                 type="button"
                 onClick={() => setMethodFilter(method)}
                 className={clsx(
-                  "px-2 py-1 rounded-md border text-[11px]",
+                  "px-2.5 py-1 rounded-md text-[10.5px] font-bold transition-all cursor-pointer outline-none",
                   methodFilter === method
-                    ? "bg-sky-400/10 text-sky-700 border-sky-400/35"
-                    : "bg-card text-slate-500 border-border hover:bg-hover hover:text-slate-900",
+                    ? "bg-white text-slate-900 shadow-sm"
+                    : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/30",
                 )}
               >
                 {method}
@@ -375,7 +416,7 @@ export default function MockRuleList({
             ))}
           </div>
         </div>
-        <div className="flex gap-1 shrink-0 mt-2">
+        <div className="flex items-center gap-1.5 mt-1 max-w-full overflow-x-auto segmented-tab-container">
           {[
             { id: "ALL", label: "全部", count: filterCounts.all },
             { id: "ENABLED", label: "已配置", count: filterCounts.mocked },
@@ -388,40 +429,43 @@ export default function MockRuleList({
               type="button"
               onClick={() => switchRuleFilter(id)}
               className={clsx(
-                "px-2 py-1 rounded-md border text-[11px] flex items-center gap-1.5",
+                "segmented-tab-item px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer border border-transparent outline-none",
                 ruleFilter === id
-                  ? {
-                      ENABLED:
-                        "bg-emerald-400/10 text-emerald-700 border-emerald-400/35",
-                      DISABLED:
-                        "bg-amber-400/10 text-amber-700 border-amber-400/35",
-                      VARIANTS:
-                        "bg-violet-400/10 text-violet-700 border-violet-400/35",
-                    }[id] || "bg-sky-400/10 text-sky-700 border-sky-400/35"
-                  : "bg-card text-slate-500 border-border hover:bg-hover hover:text-slate-900",
+                  ? "segmented-tab-item-active"
+                  : "text-slate-500 hover:text-slate-900 hover:bg-slate-200/50",
               )}
             >
               <span>{label}</span>
-              <span>{count}</span>
+              <span className={clsx(
+                "text-[9.5px] px-1.5 py-0.2 rounded-full font-bold transition-all",
+                ruleFilter === id
+                  ? "bg-slate-100 text-slate-700"
+                  : "bg-slate-200/60 text-slate-500"
+              )}>
+                {count}
+              </span>
             </button>
           ))}
         </div>
         {selectable && (
-          <div className="ml-auto min-w-[220px]">
-            <BulkActions
-              rules={filteredRules}
-              selectedRules={selectedRules}
-              disabled={loading || saving}
-              allChecked={allChecked}
-              someChecked={selectedRules.length > 0}
-              onToggleAll={toggleAll}
-              onClearSelection={clearSelection}
-              onSetEnabled={onBulkSetEnabled}
-              onDelete={onBulkDelete}
-            />
+          <div className="mt-1 pt-2 border-t border-slate-100 flex justify-end">
+            <div className="min-w-[220px]">
+              <BulkActions
+                rules={filteredRules}
+                selectedRules={selectedRules}
+                disabled={loading || saving}
+                allChecked={allChecked}
+                someChecked={selectedRules.length > 0}
+                onToggleAll={toggleAll}
+                onClearSelection={clearSelection}
+                onSetEnabled={onBulkSetEnabled}
+                onDelete={onBulkDelete}
+              />
+            </div>
           </div>
         )}
       </div>
+
 
       <VirtualizedItems
         items={items}
@@ -439,8 +483,7 @@ export default function MockRuleList({
   );
 }
 
-// 列表卡片的目标宽度（px），容器宽度 / 目标宽度 → 列数（1~4 列自适应）
-const TARGET_CARD_WIDTH = 360;
+
 
 /**
  * 虚拟列表：只渲染视口内的行，剩下的撑空 div 维持滚动高度。
@@ -460,23 +503,7 @@ function VirtualizedItems({
   onDeleteRule,
 }) {
   const scrollRef = useRef(null);
-  const [columns, setColumns] = useState(1);
-
-  // 容器宽度变化（拖窗口）时重算列数
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const update = () => {
-      const width = el.clientWidth;
-      setColumns(
-        Math.max(1, Math.min(4, Math.floor(width / TARGET_CARD_WIDTH))),
-      );
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const columns = 2;
 
   const rowCount = Math.ceil(items.length / columns);
 
@@ -492,18 +519,31 @@ function VirtualizedItems({
   // 保留列表，避免每次即时保存都把列表清空重绘。
   if (loading && items.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto p-2">
-        <div className="p-4 text-xs text-slate-500">加载中…</div>
+      <div className="flex-1 flex flex-col items-center justify-center p-8 bg-slate-50/10">
+        <div className="relative w-10 h-10 flex items-center justify-center">
+          <div className="absolute inset-0 rounded-full border-2 border-indigo-500/10"></div>
+          <div className="absolute inset-0 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></div>
+        </div>
+        <p className="text-xs text-slate-400 mt-4 font-semibold tracking-wider">获取接口列表中…</p>
       </div>
     );
   }
   if (items.length === 0) {
     return (
-      <div className="flex-1 overflow-y-auto p-2">
-        <div className="p-4 text-xs text-slate-500">没有匹配的接口</div>
+      <div className="flex-1 flex flex-col items-center justify-center p-12 bg-slate-50/20">
+        <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200/60 shadow-sm flex items-center justify-center text-slate-400 mb-4">
+          <svg className="w-6 h-6 stroke-slate-400/80" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <h3 className="text-xs font-bold text-slate-700">没有找到匹配的接口</h3>
+        <p className="text-[11px] text-slate-400 mt-1 max-w-[280px] text-center leading-relaxed font-normal">
+          请调整搜索词或 HTTP 方法过滤器，或者在页面顶部点击“新增”以创建一个自定义 API 规则。
+        </p>
       </div>
     );
   }
+
 
   return (
     <div ref={scrollRef} className="sidebar-scroll flex-1 overflow-y-auto p-2">
@@ -535,7 +575,8 @@ function VirtualizedItems({
                 transform: `translateY(${virtualRow.start}px)`,
                 display: "grid",
                 gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-                columnGap: "6px",
+                columnGap: "12px",
+                rowGap: "8px",
               }}
             >
               {rowItems.map((item) => (

@@ -97,12 +97,24 @@ export default function BackendCurlModal({
   baseUrl,
   onClose,
   onViewLogs,
+  initialParams,
+  initialBody,
 }) {
   const config = useAppConfig();
   const vjToken = config.mockVjToken || "";
   const modeConfig = MODE_CONFIG[mode] || MODE_CONFIG.backend;
 
+  const handleViewLogs = () => {
+    if (onViewLogs) {
+      onViewLogs();
+    } else if (window.electronAPI?.openWindow) {
+      window.electronAPI.openWindow("/mock-service");
+    }
+  };
+
   const { data, loading, error } = useResource(async () => {
+    // If initial params are provided, we don't need to load recommendations
+    if (initialParams || initialBody) return null;
     const result = await window.electronAPI.previewMockResponse({
       method,
       path,
@@ -112,11 +124,13 @@ export default function BackendCurlModal({
       body: JSON.stringify(result.json, null, 2),
       params: JSON.stringify(result.queryParams || {}, null, 2),
     };
-  }, [method, path]);
+  }, [method, path, initialParams, initialBody]);
 
   const [editedBody, setEditedBody] = useState(null);
   const [bodyKey, setBodyKey] = useState(null);
-  const generatedBody = data?.body || "";
+  const generatedBody = initialBody
+    ? (typeof initialBody === "object" ? JSON.stringify(initialBody, null, 2) : initialBody)
+    : (data?.body || "");
   if (bodyKey !== generatedBody) {
     setBodyKey(generatedBody);
     setEditedBody(null);
@@ -124,7 +138,9 @@ export default function BackendCurlModal({
   const body = editedBody ?? generatedBody;
   const [paramsText, setParamsText] = useState(null);
   const [paramsKey, setParamsKey] = useState(null);
-  const generatedParams = data?.params || "{}";
+  const generatedParams = initialParams
+    ? (typeof initialParams === "object" ? JSON.stringify(initialParams, null, 2) : initialParams)
+    : (data?.params || "{}");
   if (paramsKey !== generatedParams) {
     setParamsKey(generatedParams);
     setParamsText(null);
@@ -366,7 +382,7 @@ export default function BackendCurlModal({
       <div className="shrink-0 border-t border-border px-5 py-3 flex items-center gap-2">
         <button
           type="button"
-          onClick={onViewLogs}
+          onClick={handleViewLogs}
           className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900"
         >
           查看日志

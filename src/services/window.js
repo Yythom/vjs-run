@@ -23,7 +23,7 @@ export function createWindow() {
     y: windowState.y,
     width: windowState.width,
     height: windowState.height,
-    minWidth: 800,
+    minWidth: 900,
     minHeight: 600,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#ffffff",

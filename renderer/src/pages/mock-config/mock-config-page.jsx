@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import useMockData from "./use-mock-data";
 import MockRuleList from "./mock-rule-list";
@@ -360,20 +360,24 @@ export default function MockConfigPage() {
   const { confirm, confirmDialog } = useConfirm();
 
   // Editor 上报的「有未保存改动」。切换选中项前用它拦截，避免静默丢失。
-  const [editorDirty, setEditorDirty] = useState(false);
-  const handleDirtyChange = useCallback((dirty) => setEditorDirty(dirty), []);
+  // 只在事件处理器里读取、不参与渲染，用 ref 存：编辑器进入/退出 dirty
+  // 状态时不重渲染整页（state 版还会让 guardSwitch 闭包变化，击穿列表 memo）。
+  const editorDirtyRef = useRef(false);
+  const handleDirtyChange = useCallback((dirty) => {
+    editorDirtyRef.current = dirty;
+  }, []);
 
   // 切换选中项 / 进出场景编辑前的统一守卫：编辑器有未保存改动时先确认。
   const guardSwitch = async (proceed) => {
-    if (editorDirty) {
+    if (editorDirtyRef.current) {
       const ok = await confirm({
         title: "放弃未保存的改动？",
-        message: "当前编辑器有未保存的修改，切换后会丢失。",
-        confirmText: "放弃并切换",
+        message: "当前编辑器有未保存的修改，关闭后会丢失。",
+        confirmText: "放弃",
         danger: true,
       });
       if (!ok) return;
-      setEditorDirty(false);
+      editorDirtyRef.current = false;
     }
     proceed();
   };
@@ -478,7 +482,7 @@ export default function MockConfigPage() {
 
     const saved = await saveRules(nextRules);
     if (!saved) return;
-    setEditorDirty(false);
+    editorDirtyRef.current = false;
     setSelectedKey(newKey);
     showToast(
       editingScene ? `规则已保存到场景「${editingScene}」` : "Mock 规则已保存",
@@ -529,7 +533,7 @@ export default function MockConfigPage() {
     const saved = await saveRules(nextRules);
     if (!saved) return false;
     if (targetKeys.has(editingKey)) {
-      setEditorDirty(false);
+      editorDirtyRef.current = false;
       setSelectedKey("");
     }
     showToast(`已清除 ${targetKeys.size} 条 mock 规则`, "success");
@@ -556,7 +560,7 @@ export default function MockConfigPage() {
     if (!ok) return;
     const done = await deleteRuleByKey(editingKey);
     if (!done) return;
-    setEditorDirty(false);
+    editorDirtyRef.current = false;
     // 编辑器在弹框里：删完直接关弹框回列表
     setSelectedKey("");
   };
@@ -697,7 +701,7 @@ export default function MockConfigPage() {
                 }`
               : "新增 Mock 规则"
           }
-          className="w-[94vw] max-w-[1200px] h-[92vh]"
+          className="w-[94vw] max-w-300 h-[92vh]"
         >
           <MockRuleEditor
             key={selectedKey}
@@ -709,6 +713,7 @@ export default function MockConfigPage() {
             onSubmit={saveRule}
             onDelete={deleteRule}
             onDirtyChange={handleDirtyChange}
+            confirm={confirm}
           />
         </Modal>
       )}
