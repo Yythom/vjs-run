@@ -19,6 +19,7 @@ import SettingsPage from "./pages/settings-page";
 import EnvCheckPage from "./pages/env-check-page";
 import PortCheckerPage from "./pages/port-checker-page";
 import CleanupPage from "./pages/cleanup-page";
+import CodecPage from "./pages/codec-page";
 import RepoEditorModal from "./modals/repo-editor-modal";
 import CleanModal from "./modals/clean-modal";
 
@@ -42,6 +43,7 @@ function MainRoutes() {
       <Route path="/env-check" element={<EnvCheckPage />} />
       <Route path="/port-checker" element={<PortCheckerPage />} />
       <Route path="/cleanup" element={<CleanupPage />} />
+      <Route path="/codec" element={<CodecPage />} />
 
       {/* 直接刷新到 modal route 时主区域 fallback 到 ProjectDashboard */}
       <Route path="*" element={<ProjectDashboard />} />

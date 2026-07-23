@@ -217,6 +217,12 @@ export default function Sidebar() {
           path="/cleanup"
           activePath={activePath}
         />
+        <NavigationMenuItem
+          icon="🔐"
+          label="统计数据计算"
+          path="/codec"
+          activePath={activePath}
+        />
       </div>
 
       {/* 底部版本与更新 */}
