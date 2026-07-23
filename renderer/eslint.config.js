@@ -33,6 +33,8 @@ export default [
         Blob: "readonly",
         URL: "readonly",
         Map: "readonly",
+        btoa: "readonly",
+        atob: "readonly",
         Set: "readonly",
       },
     },
