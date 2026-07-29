@@ -1,6 +1,6 @@
 {
   "name": "vjtools",
-  "version": "0.0.12",
+  "version": "0.0.13",
   "description": "桌面端项目启动控制台",
   "type": "module",
   "main": "src/main.js",
@@ -45,12 +45,19 @@
   "build": {
     "appId": "com.xieyuteng.vjtools",
     "productName": "vjtools",
+    "electronLanguages": [
+      "en",
+      "zh_CN"
+    ],
     "directories": {
       "output": "dist"
     },
     "files": [
       "src/**/*",
-      "renderer/dist/**/*"
+      "renderer/dist/**/*",
+      "!node_modules/jieba-wasm/pkg/web/**",
+      "!node_modules/jieba-wasm/pkg/deno/**",
+      "!node_modules/jieba-wasm/pkg/bundler/**"
     ],
     "publish": {
       "provider": "github",
