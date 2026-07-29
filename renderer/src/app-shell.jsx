@@ -15,6 +15,7 @@ import ProjectDashboard from "./pages/project-dashboard";
 import MockServiceDetail from "./pages/mock-service-detail";
 import MockConfigPage from "./pages/mock-config/mock-config-page";
 import MockHistoryPage from "./pages/mock-history";
+import SwaggerConvertPage from "./pages/swagger-convert-page";
 import SettingsPage from "./pages/settings-page";
 import EnvCheckPage from "./pages/env-check-page";
 import PortCheckerPage from "./pages/port-checker-page";
@@ -38,6 +39,7 @@ function MainRoutes() {
       <Route index element={<ProjectDashboard />} />
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
+      <Route path="/swagger-convert" element={<SwaggerConvertPage />} />
 
       {/* 小程序管理 */}
       <Route path="/weapp-deploy" element={<WeappDeployPage />} />

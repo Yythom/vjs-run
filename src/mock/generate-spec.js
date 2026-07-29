@@ -227,29 +227,41 @@ async function fetchApiError(errorUrl, { method, uri }, schema, onLog) {
 
 // ─── generateJson（对应 fetch-data/index.ts）─────────────────────────────────
 
+/** 就地删除黑名单接口，返回被删除的条数 */
+function pruneExcludedPaths(paths) {
+  let removed = 0;
+  Object.keys(paths).forEach((key) => {
+    if (EXCLUDE_INTERFACE.some((e) => key.includes(e))) {
+      delete paths[key];
+      removed += 1;
+    }
+  });
+  return removed;
+}
+
+/** 就地清理单个 operation：剔除鉴权参数与 security，补齐 description */
+function sanitizeOperation(schema) {
+  // 过滤鉴权参数
+  schema.parameters = schema.parameters?.filter(
+    (e) => !EXCLUDE_PARAMETERS.includes(e.name),
+  );
+  delete schema.security;
+
+  // 优先使用 description，没有再用 summary，保证有基本描述
+  schema.description = schema.description || schema.summary || "";
+}
+
 async function generateJson({ jsonPath, apiUrl, errorUrl, onLog }) {
   const swaggerData = await fetchApi(apiUrl, onLog);
   const shadow = flatResponseData(swaggerData);
   const { paths = {} } = shadow || {};
 
-  // 删除不需要的接口
-  Object.keys(paths).forEach((key) => {
-    if (EXCLUDE_INTERFACE.some((e) => key.includes(e))) {
-      delete paths[key];
-    }
-  });
+  pruneExcludedPaths(paths);
 
   const requestTasks = Object.entries(paths).flatMap(([key, item]) =>
     Object.keys(item).map((method) => {
       const schema = item[method];
-      // 过滤鉴权参数
-      schema.parameters = schema.parameters?.filter(
-        (e) => !EXCLUDE_PARAMETERS.includes(e.name),
-      );
-      delete schema.security;
-
-      // 优先使用 description，没有再用 summary，保证有基本描述
-      schema.description = schema.description || schema.summary || "";
+      sanitizeOperation(schema);
 
       return () =>
         fetchApiError(
@@ -323,6 +335,91 @@ export async function generateSwaggerSpecs({ serverUrl, outputDir, onLog }) {
   }
 
   return { generated, failed };
+}
+
+// ─── 单文档转换（独立工具，不写文件，只返回结果）───────────────────────────
+
+/** swagger2 需要经 converter 转成 openapi3；已经是 openapi3 的直接用 */
+function isSwagger2(doc) {
+  return typeof doc?.swagger === "string" && doc.swagger.startsWith("2");
+}
+
+function countOperations(paths) {
+  return Object.values(paths || {}).reduce(
+    (sum, item) => sum + Object.keys(item || {}).length,
+    0,
+  );
+}
+
+/**
+ * 转换单份 Swagger/OpenAPI 文档，复用批量生成用的同一套处理：
+ * converter 转 openapi3 → 扁平化 R«xxx» → 剔除黑名单接口与鉴权参数。
+ * 不拉取错误码（那需要配套的 errors/api-ecs 服务），也不落盘。
+ *
+ * @param {object} doc  已解析的 swagger2 或 openapi3 文档对象
+ * @returns {{ json: string, stats: object }}
+ */
+export async function convertSwaggerDoc({ doc, onLog }) {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    throw new Error("内容不是一个 JSON 对象，无法作为 Swagger 文档解析");
+  }
+
+  let source = doc;
+  if (isSwagger2(doc)) {
+    onLog?.("检测到 swagger 2.0，提交 converter 转 OpenAPI 3");
+    source = await fetchJson(OPENAPI_CONVERT_SERVER, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(doc),
+    });
+  } else if (!doc.openapi) {
+    throw new Error(
+      "文档既没有 swagger 字段也没有 openapi 字段，不是有效的 API 文档",
+    );
+  }
+
+  if (!source?.paths || typeof source.paths !== "object") {
+    throw new Error("文档中没有 paths，不是有效的 Swagger/OpenAPI 文档");
+  }
+
+  // flatResponseData 依赖 components.schemas，缺失时补空对象避免抛错
+  if (!source.components || typeof source.components !== "object") {
+    source.components = { schemas: {} };
+  } else if (!source.components.schemas) {
+    source.components.schemas = {};
+  }
+
+  const shadow = flatResponseData(source);
+  const paths = shadow.paths || {};
+
+  const totalPaths = Object.keys(paths).length;
+  const excludedPaths = pruneExcludedPaths(paths);
+
+  for (const item of Object.values(paths)) {
+    for (const method of Object.keys(item)) {
+      sanitizeOperation(item[method]);
+    }
+  }
+
+  const json = JSON.stringify(shadow, null, 2).replaceAll(
+    '"*/*"',
+    '"application/json"',
+  );
+
+  return {
+    json,
+    stats: {
+      title: shadow.info?.title || "",
+      version: shadow.info?.version || "",
+      openapi: shadow.openapi || "",
+      converted: isSwagger2(doc),
+      totalPaths,
+      excludedPaths,
+      pathCount: Object.keys(paths).length,
+      operationCount: countOperations(paths),
+      schemaCount: Object.keys(shadow.components?.schemas || {}).length,
+    },
+  };
 }
 
 // ─── search-utils 与 api-index 生成（对应 search-utils.ts 和 utils.ts 中的部分逻辑）───

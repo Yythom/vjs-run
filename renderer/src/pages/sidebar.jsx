@@ -189,6 +189,12 @@ export default function Sidebar() {
           activePath={activePath}
         />
         <NavigationMenuItem
+          icon="🔄"
+          label="OpenAPI 转换"
+          path="/swagger-convert"
+          activePath={activePath}
+        />
+        <NavigationMenuItem
           icon="⚙️"
           label="服务设置"
           path="/settings"

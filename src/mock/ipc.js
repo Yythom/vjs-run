@@ -16,6 +16,7 @@ import {
   wrapSampleInEnvelope,
 } from "./server.js";
 import { mockFromSchema } from "./data.js";
+import { convertSwaggerDoc } from "./generate-spec.js";
 import {
   getRecommendedQueryParams,
   getRequestSchema,
@@ -167,6 +168,49 @@ export function registerMockIpc() {
 
   // 独立的「生成 OpenAPI JSON」操作：从 swagger 源服务器拉文档写入 mockSpecPath
   ipcSafe("generate-mock-spec", () => generateMockSpecs(MOCK_ID));
+
+  // 独立工具：转换单份 swagger 文档（URL 或粘贴/选中的文件内容），只返回结果不落盘
+  ipcSafe("convert-swagger-spec", async (_, { sourceType, value }) => {
+    const raw = String(value || "").trim();
+    if (!raw) throw new Error("请先填写地址或选择文件");
+
+    let doc;
+    if (sourceType === "url") {
+      const url = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!response.ok) {
+        throw new Error(`GET ${url} → HTTP ${response.status}`);
+      }
+      const text = await response.text();
+      try {
+        doc = JSON.parse(text);
+      } catch (err) {
+        throw new Error(`${url} 返回的不是合法 JSON`, { cause: err });
+      }
+    } else {
+      try {
+        doc = JSON.parse(raw);
+      } catch (err) {
+        throw new Error(`内容不是合法 JSON: ${err.message}`, { cause: err });
+      }
+    }
+
+    return convertSwaggerDoc({ doc });
+  });
+
+  // 把转换结果另存为本地 JSON 文件
+  ipcSafe("save-swagger-spec", async (_, { content, defaultFilename }) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: "保存 OpenAPI JSON",
+      defaultPath: defaultFilename || "openapi.json",
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (canceled || !filePath) return { canceled: true };
+    await fs.promises.writeFile(filePath, String(content ?? ""), "utf8");
+    return { filePath };
+  });
 
   // 通用 curl 执行：backend 打后端代理地址，local 打本机已启动的 mock 服务。
   async function executeCurl(baseUrl, payload) {

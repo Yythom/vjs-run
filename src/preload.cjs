@@ -41,6 +41,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 从 swagger 源服务器生成 OpenAPI JSON 到 mockSpecPath 目录（独立操作）
   generateMockSpec: () => ipcRenderer.invoke("generate-mock-spec"),
 
+  // 独立转换工具：sourceType 为 "url"（拉取地址）或 "text"（文件/粘贴的 JSON 内容）
+  convertSwaggerSpec: (sourceType, value) =>
+    ipcRenderer.invoke("convert-swagger-spec", { sourceType, value }),
+
+  saveSwaggerSpec: (content, defaultFilename) =>
+    ipcRenderer.invoke("save-swagger-spec", { content, defaultFilename }),
+
   getMockRoutes: () => ipcRenderer.invoke("get-mock-routes"),
 
   getMockRules: () => ipcRenderer.invoke("get-mock-rules"),
