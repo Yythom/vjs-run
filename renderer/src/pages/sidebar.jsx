@@ -223,6 +223,12 @@ export default function Sidebar() {
           path="/codec"
           activePath={activePath}
         />
+        <NavigationMenuItem
+          icon="🚀"
+          label="小程序发布"
+          path="/weapp-deploy"
+          activePath={activePath}
+        />
       </div>
 
       {/* 底部版本与更新 */}

@@ -122,6 +122,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 终止进行中的清理 / 重装
   stopCleanMonorepo: () => ipcRenderer.invoke("stop-clean-monorepo"),
 
+  // ── 小程序发布 ──────────────────────────────────────────────────────────────
+
+  // 读取指定目录的本地分支列表，返回 { current, branches }
+  getRepoBranches: (repoPath) =>
+    ipcRenderer.invoke("get-repo-branches", { repoPath }),
+
+  // 在指定目录下执行 pnpm deploy:weapp（构建 Taro 产物 + 上传微信 CI，仅测试服）
+  // payload: { repoPath, branch, robot, pullLatest }
+  startWeappDeploy: (payload) =>
+    ipcRenderer.invoke("start-weapp-deploy", payload),
+
+  // 终止进行中的小程序发布
+  stopWeappDeploy: () => ipcRenderer.invoke("stop-weapp-deploy"),
+
   // 开发环境体检：并发检测 node / pnpm / git / brew / pm2 版本，返回结果数组
   checkEnv: () => ipcRenderer.invoke("check-env"),
 

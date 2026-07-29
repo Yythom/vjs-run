@@ -20,6 +20,7 @@ import EnvCheckPage from "./pages/env-check-page";
 import PortCheckerPage from "./pages/port-checker-page";
 import CleanupPage from "./pages/cleanup-page";
 import CodecPage from "./pages/codec-page";
+import WeappDeployPage from "./pages/weapp-deploy-page";
 import RepoEditorModal from "./modals/repo-editor-modal";
 import CleanModal from "./modals/clean-modal";
 
@@ -37,6 +38,9 @@ function MainRoutes() {
       <Route index element={<ProjectDashboard />} />
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
+
+      {/* 小程序管理 */}
+      <Route path="/weapp-deploy" element={<WeappDeployPage />} />
 
       {/* 工具与配置页 */}
       <Route path="/settings" element={<SettingsPage />} />

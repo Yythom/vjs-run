@@ -34,6 +34,14 @@ export const DEFAULT_CONFIG = {
   // UI 偏好
   sidebarWidth: 248,
 
+  // 小程序发布页上次用的参数，下次打开直接复用
+  weappDeploy: {
+    repoPath: "",
+    branch: "",
+    robot: "5",
+    pullLatest: false,
+  },
+
   // 端口占用查看器默认监听的端口
   watchedPorts: [3000, 3001, 5173, 3002],
 };

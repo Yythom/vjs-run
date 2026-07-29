@@ -147,13 +147,14 @@ export async function startProject(project, repo) {
 
 /**
  * 在给定 cwd 下执行命令，stdout/stderr 实时流到指定日志面板。
+ * env 为附加环境变量，会覆盖 buildSpawnEnv() 的同名项（不传则完全沿用基础环境）。
  */
-export function runStreaming(projectId, cmd, { cwd, onChild } = {}) {
+export function runStreaming(projectId, cmd, { cwd, env, onChild } = {}) {
   return new Promise((resolve, reject) => {
     sendLog(projectId, `\x1b[2m$ ${cmd}\x1b[0m\n`);
     const proc = spawn(cmd, [], {
       cwd,
-      env: buildSpawnEnv(),
+      env: buildSpawnEnv(env),
       shell: "/bin/zsh",
       detached: false,
     });

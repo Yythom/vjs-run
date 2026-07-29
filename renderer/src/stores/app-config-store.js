@@ -11,6 +11,12 @@ const DEFAULT_APP_CONFIG = {
   mockVjToken: "",
   sidebarWidth: 248,
   watchedPorts: [3000, 3001, 5173, 3002],
+  weappDeploy: {
+    repoPath: "",
+    branch: "",
+    robot: "5",
+    pullLatest: false,
+  },
 };
 
 /**
@@ -20,11 +26,14 @@ const DEFAULT_APP_CONFIG = {
  */
 export const useAppConfigStore = create((set) => ({
   appConfig: DEFAULT_APP_CONFIG,
+  // 首次 init 完成前 appConfig 还是 DEFAULT。需要拿它做表单初值的页面
+  // （初值只在挂载时读一次）必须等这个标志为 true 再挂载。
+  loaded: false,
 
   /** 启动时从主进程加载一次。main.jsx 调用。 */
   init: async () => {
     const cfg = await loadConfig();
-    set({ appConfig: cfg || DEFAULT_APP_CONFIG });
+    set({ appConfig: cfg || DEFAULT_APP_CONFIG, loaded: true });
   },
 
   /** patch 进去 + 立即落盘，返回服务端规整后的 config。 */
@@ -43,6 +52,9 @@ export const useAppConfigStore = create((set) => ({
 
 /** 响应式：组件 re-render 跟随 appConfig 变化 */
 export const useAppConfig = () => useAppConfigStore((s) => s.appConfig);
+
+/** 首次 init 是否已完成（拿 config 做表单初值的页面用它决定何时挂载） */
+export const useAppConfigLoaded = () => useAppConfigStore((s) => s.loaded);
 
 /** 稳定函数，可在任意地方调用（不需要 useEffect 包） */
 export const updateAppConfig = (patch) => useAppConfigStore.getState().update(patch);

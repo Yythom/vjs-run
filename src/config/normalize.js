@@ -77,6 +77,24 @@ function normalizeSidebarWidth(value) {
 }
 
 /**
+ * 小程序发布页的表单记忆。全部字段都给兜底值，缺一个不影响其余；
+ * robot 存字符串（表单里就是文本输入），发布时由主进程再转数字校验。
+ */
+function normalizeWeappDeploy(raw = {}) {
+  const fallback = DEFAULT_CONFIG.weappDeploy;
+  const value = raw && typeof raw === "object" ? raw : {};
+  return {
+    repoPath: String(value.repoPath || fallback.repoPath).trim(),
+    branch: String(value.branch || fallback.branch).trim(),
+    robot: String(value.robot || fallback.robot).trim() || fallback.robot,
+    pullLatest:
+      value.pullLatest === undefined
+        ? fallback.pullLatest
+        : Boolean(value.pullLatest),
+  };
+}
+
+/**
  * 把任意来源的 raw 配置归一化为下游可信赖的形状。
  * 校验失败抛错；调用方（loadConfig / set-config IPC）负责接住。
  *
@@ -115,5 +133,6 @@ export function normalizeConfig(raw = {}) {
     mockVjToken: String(raw.mockVjToken || "").trim(),
     sidebarWidth: normalizeSidebarWidth(raw.sidebarWidth),
     watchedPorts,
+    weappDeploy: normalizeWeappDeploy(raw.weappDeploy),
   };
 }
