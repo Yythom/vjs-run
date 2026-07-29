@@ -76,6 +76,29 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
     refresh();
   };
 
+  // 覆盖：把当前活动规则写进已有场景（同名直接覆盖，等价于「另存为」到已存在的名字）
+  const overwriteScene = async (sceneName) => {
+    const ok = await confirm({
+      title: "覆盖场景",
+      message: `会用当前全部规则覆盖场景「${sceneName}」的内容，原内容不可恢复。继续？`,
+      confirmText: "覆盖",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    const result = await window.electronAPI.saveMockScene(sceneName);
+    setBusy(false);
+    if (!result?.success) {
+      showToast(`覆盖失败: ${result?.error || "未知错误"}`, "error");
+      return;
+    }
+    showToast(
+      `已用当前规则覆盖场景「${result.name}」（${result.count} 条规则）`,
+      "success",
+    );
+    refresh();
+  };
+
   const removeScene = async (sceneName) => {
     const ok = await confirm({
       title: "删除场景",
@@ -279,6 +302,19 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
                       className="px-2.5 py-1 rounded-md border text-xs font-medium bg-sky-400/10 text-sky-700 border-sky-400/35 hover:bg-sky-400/20 disabled:opacity-40"
                     >
                       应用
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || scene.name === editingScene}
+                      onClick={() => overwriteScene(scene.name)}
+                      title={
+                        scene.name === editingScene
+                          ? "该场景正在编辑中，请先结束编辑"
+                          : "用当前规则覆盖这个场景"
+                      }
+                      className="px-2.5 py-1 rounded-md border text-xs font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40"
+                    >
+                      覆盖
                     </button>
                     <button
                       type="button"
