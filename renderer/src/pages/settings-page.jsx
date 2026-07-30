@@ -1,9 +1,11 @@
+import { useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import PageShell from "../components/page-shell";
 import { updateAppConfig, useAppConfigStore } from "../stores/app-config-store";
 import { generateMockSpec, useGeneratingMockSpec } from "../stores/runner-store";
+import useConfirm from "../hooks/use-confirm";
 import useModalNav from "../hooks/use-modal-nav";
 import { showToast } from "../utils/toast";
 
@@ -40,6 +42,7 @@ const INPUT_CLS =
 
 export default function SettingsPage() {
   const openModal = useModalNav();
+  const { confirm, confirmDialog } = useConfirm();
 
   // 配置已经在 store 里（app 启动时 init 拉过一次），直接同步取一次作为初始值。
   // 用 getState() 而不是 useAppConfig()，避免 store 变化时把用户正在编辑的表单 reset。
@@ -49,7 +52,9 @@ export default function SettingsPage() {
     handleSubmit,
     setValue,
     getValues,
-    formState: { errors, isSubmitting },
+    reset,
+    resetField,
+    formState: { errors, isSubmitting, isDirty },
   } = useForm({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
@@ -81,6 +86,27 @@ export default function SettingsPage() {
       return;
     }
 
+    // 生成会清理目录里的旧产物。目录里若还有别的文件，多半是路径填错了（填成了
+    // 某个真实工程目录），先让用户确认一次。
+    const dirInfo = await window.electronAPI.inspectSpecDir(nextMockSpecPath);
+    if (!dirInfo?.success) {
+      showToast(`检查目录失败: ${dirInfo?.error || "未知错误"}`, "error");
+      return;
+    }
+    if (dirInfo.foreignCount > 0) {
+      const ok = await confirm({
+        title: "这个目录看起来不是专用输出目录",
+        message:
+          `${nextMockSpecPath}\n\n` +
+          `目录里有 ${dirInfo.foreignCount} 个与 Mock 无关的文件/文件夹。\n` +
+          `生成只会覆盖各服务的 json 与 api-index.json，其他文件不受影响。\n` +
+          `确认路径没填错吗？`,
+        confirmText: "继续生成",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+
     try {
       await updateAppConfig({
         mockSpecPath: nextMockSpecPath,
@@ -90,6 +116,9 @@ export default function SettingsPage() {
       showToast(`保存配置失败: ${error?.message || String(error)}`, "error");
       return;
     }
+    // 这两个字段已落盘，把基线跟上，避免它们继续被算作「未保存」
+    resetField("mockSpecPath", { defaultValue: nextMockSpecPath });
+    resetField("mockSwaggerServer", { defaultValue: nextMockSwaggerServer });
     await generateMockSpec();
   };
 
@@ -104,6 +133,31 @@ export default function SettingsPage() {
     }
   };
 
+  // 在 Finder 中打开当前填写的目录（未保存也能开，方便生成后立刻查看产物）。
+  // 目录要到生成时才会被创建，所以首次配置后大概率还不存在——问一句要不要现在建。
+  const handleOpenDirectory = async () => {
+    const dir = getValues("mockSpecPath").trim();
+    if (!dir) {
+      showToast("请先填写 OpenAPI JSON 目录", "warning");
+      return;
+    }
+
+    const info = await window.electronAPI.inspectSpecDir(dir);
+    if (info?.success && !info.exists) {
+      const ok = await confirm({
+        title: "目录还不存在",
+        message: `${dir}\n\n这个目录会在生成 OpenAPI JSON 时自动创建。要现在就创建并打开吗？`,
+        confirmText: "创建并打开",
+      });
+      if (!ok) return;
+    }
+
+    const res = await window.electronAPI.openDirectory(dir, { create: true });
+    if (!res?.success) {
+      showToast(`打开目录失败: ${res?.error || "未知错误"}`, "error");
+    }
+  };
+
   const handleSave = handleSubmit(async (values) => {
     try {
       await updateAppConfig({
@@ -115,25 +169,46 @@ export default function SettingsPage() {
         mockBackendBaseUrl: values.mockBackendBaseUrl.trim(),
         mockAll: values.mockAll,
       });
+      // 用刚提交的值当新基线，isDirty 归零（否则保存后按钮还停在「未保存」态）
+      reset(values);
       showToast("配置已保存，下次启动项目时生效", "success");
     } catch (error) {
       showToast(`保存失败: ${error?.message || String(error)}`, "error");
     }
   });
 
+  // HashRouter 下没有 useBlocker，拦不住路由跳转；退而求其次——离开时若还有未保存
+  // 的改动，明确告诉用户「丢了」，而不是静默消失。
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    dirtyRef.current = isDirty;
+  }, [isDirty]);
+  useEffect(() => {
+    return () => {
+      if (dirtyRef.current) {
+        showToast("服务配置有未保存的修改，已丢弃", "warning");
+      }
+    };
+  }, []);
+
   return (
     <PageShell
       title="服务配置"
       subtitle="配置 Swagger Mock 服务的主机、端口及后端代理地址"
       actions={
-        <button
-          type="button"
-          onClick={handleSave}
-          disabled={isSubmitting}
-          className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-40"
-        >
-          {isSubmitting ? "保存中..." : "保存"}
-        </button>
+        <div className="flex items-center gap-2">
+          {isDirty && (
+            <span className="text-[11px] text-amber-600">● 有未保存的修改</span>
+          )}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={isSubmitting || !isDirty}
+            className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30 disabled:opacity-40 disabled:cursor-default"
+          >
+            {isSubmitting ? "保存中..." : "保存"}
+          </button>
+        </div>
       }
     >
       <div className="flex flex-col gap-4">
@@ -160,6 +235,14 @@ export default function SettingsPage() {
                 className="px-3 py-2 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors flex items-center gap-1 cursor-pointer shrink-0"
               >
                 📂 选择文件夹
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenDirectory}
+                className="px-3 py-2 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                title="在访达中打开该目录"
+              >
+                🔍 打开目录
               </button>
             </div>
             <FieldError message={errors.mockSpecPath?.message} />
@@ -272,6 +355,7 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+      {confirmDialog}
     </PageShell>
   );
 }

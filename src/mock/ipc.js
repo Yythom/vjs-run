@@ -16,7 +16,7 @@ import {
   wrapSampleInEnvelope,
 } from "./server.js";
 import { mockFromSchema } from "./data.js";
-import { convertSwaggerDoc } from "./generate-spec.js";
+import { convertSwaggerDoc, isGeneratedSpecFile } from "./generate-spec.js";
 import {
   getRecommendedQueryParams,
   getRequestSchema,
@@ -168,6 +168,26 @@ export function registerMockIpc() {
 
   // 独立的「生成 OpenAPI JSON」操作：从 swagger 源服务器拉文档写入 mockSpecPath
   ipcSafe("generate-mock-spec", () => generateMockSpecs(MOCK_ID));
+
+  // 生成前给 UI 探查输出目录：是否存在、有多少旧产物、有多少与本工具无关的文件。
+  // UI 据此决定要不要提示「这个目录看起来不是专用输出目录」。
+  ipcSafe("inspect-spec-dir", async (_, dirPath) => {
+    const target = String(dirPath || "").trim();
+    if (!target) throw new Error("目录路径为空");
+    if (!fs.existsSync(target)) {
+      return { exists: false, staleCount: 0, foreignCount: 0 };
+    }
+    if (!fs.statSync(target).isDirectory()) {
+      throw new Error(`不是目录: ${target}`);
+    }
+    const entries = fs.readdirSync(target);
+    const staleCount = entries.filter(isGeneratedSpecFile).length;
+    return {
+      exists: true,
+      staleCount,
+      foreignCount: entries.length - staleCount,
+    };
+  });
 
   // 独立工具：转换单份 swagger 文档（URL 或粘贴/选中的文件内容），只返回结果不落盘
   ipcSafe("convert-swagger-spec", async (_, { sourceType, value }) => {

@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 选择文件夹，返回选择的目录绝对路径，取消返回 null
   selectDirectory: () => ipcRenderer.invoke("select-directory"),
 
+  // 在系统文件管理器中打开指定目录，options.create=true 时不存在则先创建
+  openDirectory: (dirPath, options) =>
+    ipcRenderer.invoke("open-directory", dirPath, options),
+
   // ── Swagger Mock ────────────────────────────────────────────────────────────
 
   // 启动/停止 Swagger Mock 服务：读取配置中的 OpenAPI JSON/YAML 文件或目录
@@ -40,6 +44,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 从 swagger 源服务器生成 OpenAPI JSON 到 mockSpecPath 目录（独立操作）
   generateMockSpec: () => ipcRenderer.invoke("generate-mock-spec"),
+
+  // 探查输出目录：{ exists, staleCount, foreignCount }，供生成前提示用
+  inspectSpecDir: (dirPath) => ipcRenderer.invoke("inspect-spec-dir", dirPath),
 
   // 独立转换工具：sourceType 为 "url"（拉取地址）或 "text"（文件/粘贴的 JSON 内容）
   convertSwaggerSpec: (sourceType, value) =>

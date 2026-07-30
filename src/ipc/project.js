@@ -1,4 +1,5 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { ipcMain, dialog, BrowserWindow, shell } from "electron";
+import fs from "node:fs";
 import { ipcSafe } from "./safe.js";
 import { getConfig } from "../config/store.js";
 import {
@@ -65,6 +66,19 @@ export function registerProjectIpc() {
     stopProcess(String(projectId));
   });
 
+
+  // 在系统文件管理器中打开指定目录（Finder / 资源管理器）。
+  // create=true 时目录不存在就先建出来——调用方（设置页）已经向用户确认过。
+  ipcSafe("open-directory", async (_, dirPath, options) => {
+    const target = String(dirPath || "").trim();
+    if (!target) throw new Error("目录路径为空");
+    if (!fs.existsSync(target)) {
+      if (!options?.create) throw new Error(`目录不存在: ${target}`);
+      fs.mkdirSync(target, { recursive: true });
+    }
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+  });
 
   // 打开系统文件选择器，选择一个文件夹目录
   ipcMain.handle("select-directory", async (event) => {

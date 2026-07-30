@@ -288,17 +288,32 @@ async function generateJson({ jsonPath, apiUrl, errorUrl, onLog }) {
 
 // ─── 对外入口 ────────────────────────────────────────────────────────────────
 
+/** 本工具会写入、因而生成前需要清理的产物文件名 */
+export function isGeneratedSpecFile(name) {
+  return (
+    name === "api-index.json" ||
+    PROJECT_TYPES.some((type) => name === `${type}.json`)
+  );
+}
+
 /**
  * 生成 Swagger Mock OpenAPI JSON 目录。
- * 生成前清空输出目录，再逐个服务写入 {outputDir}/{type}.json。
+ * 生成前清理旧产物（只删本工具会写的那几个 json，不动目录里的其他文件——
+ * 目录填错时不至于把别的东西删光），再逐个服务写入 {outputDir}/{type}.json。
  * 任一服务生成失败时抛错。
  */
 export async function generateSwaggerSpecs({ serverUrl, outputDir, onLog }) {
   const server = String(serverUrl || "").replace(/\/+$/, "");
   if (!server) throw new Error("未配置 swagger 接口服务器地址");
 
-  await fs.promises.rm(outputDir, { recursive: true, force: true });
   await fs.promises.mkdir(outputDir, { recursive: true });
+  const stale = (await fs.promises.readdir(outputDir)).filter(
+    isGeneratedSpecFile,
+  );
+  for (const name of stale) {
+    await fs.promises.rm(path.resolve(outputDir, name), { force: true });
+  }
+  if (stale.length) onLog?.(`清理旧产物 ${stale.length} 个文件`);
 
   const generated = [];
   const failed = [];
