@@ -23,7 +23,7 @@ const EXCLUDE_INTERFACE = [
   "/callbacks/",
   "/callback/",
   "/local/",
-  "/mgmt/",
+  // "/mgmt/", // 管理端接口需要生成，暂不排除
 ];
 
 /** 接口参数中剔除的鉴权字段 */
