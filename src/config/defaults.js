@@ -2,8 +2,7 @@
 //   - 首次启动 config.json 不存在时
 //   - 用户漏填某些字段时的兜底
 //
-// 历史上读过 /Users/yeyuteng/tool/swagger-mock/.env 来填默认 mock 字段，
-// 现在彻底去硬编码：mockSpecPath 默认为空 → 启动 mock 前会强制要求用户在
+// 这里不做任何硬编码：mockSpecPath 默认为空 → 启动 mock 前会强制要求用户在
 // Settings 里填路径；frontendProjectGroups 默认为空数组 → 引导用户在 UI 新增 Repo。
 //
 // mockDataDir / mockRulesFile 由 app.whenReady 阶段的 ensureUserMockAssets()
@@ -20,7 +19,7 @@ export const DEFAULT_CONFIG = {
   mockSpecPath: "",
   // swagger 源服务器地址（如 http://xxx/t2）。在设置页点击「生成 OpenAPI JSON」
   // 时，从该服务器拉取 swagger 文档写入 mockSpecPath
-  mockSwaggerServer: "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com",
+  mockSwaggerServer: "",
   mockHost: "127.0.0.1",
   mockPort: 3002,
   mockServiceAddress: "",

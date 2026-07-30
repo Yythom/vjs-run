@@ -4,7 +4,7 @@ import { loadConfig, saveConfig } from "../utils/config-api";
 const DEFAULT_APP_CONFIG = {
   frontendProjectGroups: [],
   mockSpecPath: "",
-  mockSwaggerServer: "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com",
+  mockSwaggerServer: "",
   mockHost: "127.0.0.1",
   mockPort: 3002,
   mockServiceAddress: "",

@@ -59,8 +59,7 @@ export default function SettingsPage() {
     resolver: zodResolver(settingsSchema),
     defaultValues: {
       mockSpecPath: cfg.mockSpecPath || "",
-      mockSwaggerServer:
-        cfg.mockSwaggerServer || "http://alb-qtjrjlj7p6s63het87.cn-shanghai.alb.aliyuncs.com",
+      mockSwaggerServer: cfg.mockSwaggerServer || "",
       mockHost: cfg.mockHost || "127.0.0.1",
       mockPort: String(cfg.mockPort || 3002),
       mockServiceAddress: cfg.mockServiceAddress || "",
@@ -260,7 +259,7 @@ export default function SettingsPage() {
               <input
                 type="text"
                 {...register("mockSwaggerServer")}
-                placeholder="http://alb-xxx.cn-shanghai.alb.aliyuncs.com/t2"
+                placeholder="http://your-swagger-server/t2"
                 className={`flex-1 ${INPUT_CLS}`}
               />
               <button
@@ -341,7 +340,7 @@ export default function SettingsPage() {
             <input
               type="text"
               {...register("mockBackendBaseUrl")}
-              placeholder="https://vapi.vjshi.cn/t2"
+              placeholder="https://your-backend-host/t2"
               className={INPUT_CLS}
             />
             <label className="mt-1 inline-flex items-center gap-2 text-xs text-slate-600">

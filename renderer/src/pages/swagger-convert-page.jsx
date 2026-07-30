@@ -162,7 +162,7 @@ export default function SwaggerConvertPage() {
                 if (e.key === "Enter") convert();
               }}
               spellCheck={false}
-              placeholder="http://your-server/vjg/v2/api-docs"
+              placeholder="http://your-server/your-service/v2/api-docs"
               className="w-full bg-white border border-border rounded-md px-3 py-2 text-xs font-mono text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
             />
             <span className="text-[10.5px] text-slate-400">

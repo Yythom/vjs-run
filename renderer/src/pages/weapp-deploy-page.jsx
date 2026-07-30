@@ -155,7 +155,6 @@ function DeployConsole() {
     defaultValues: { ...appConfig.weappDeploy },
   });
 
-  const robot = useWatch({ control, name: "robot" });
   const repoPath = useWatch({ control, name: "repoPath" });
 
   const handleSelectDirectory = async () => {
@@ -303,15 +302,7 @@ function DeployConsole() {
           </label>
 
           <div className="text-[11px] text-slate-500 bg-slate-50 border border-border rounded-md px-3 py-2 leading-relaxed">
-            仅发测试服，版本号由脚本固定为 0.0.1。发布前脚本会就地改写仓库的{" "}
-            <span className="font-mono">.env.staging</span>，把{" "}
-            <span className="font-mono">TARO_APP_API</span> 设为{" "}
-            <span className="font-mono">
-              {robot === "5"
-                ? "https://vapi.vjshi.cn"
-                : `https://vapi.vjshi.cn/t${robot || "5"}`}
-            </span>
-            ，发布结束后会自动还原成发布前的内容。
+            仅发测试服，版本号由脚本固定为 0.0.1
           </div>
 
           <div className="text-[11px] text-slate-400 flex flex-wrap gap-1.5 items-center">
