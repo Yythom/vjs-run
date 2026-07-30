@@ -174,19 +174,35 @@ export default function BackendCurlModal({
     }
   };
 
-  const { data, loading, error } = useResource(async () => {
+  // 通配规则（method = "*"）没法直接 curl，让用户在面板里挑一个真实 method
+  const isWildcardMethod = !method || String(method).trim() === "*";
+  const [pickedMethod, setPickedMethod] = useState("GET");
+  const requestMethod = isWildcardMethod
+    ? pickedMethod
+    : String(method).toUpperCase();
+
+  // 推荐数据只是「预填」，不是发请求的前提：spec 外的自定义路径查不到 schema，
+  // 这里降级成空 body / 空 params 并给个提示，而不是把整个面板置成错误态。
+  const { data, loading } = useResource(async () => {
     // If initial params are provided, we don't need to load recommendations
     if (initialParams || initialBody) return null;
     const result = await window.electronAPI.previewMockResponse({
-      method,
+      method: requestMethod,
       path,
     });
-    if (!result?.success) throw new Error(result?.error || "推荐数据生成失败");
+    if (!result?.success) {
+      return {
+        body: "",
+        params: "{}",
+        warning: result?.error || "推荐数据生成失败",
+      };
+    }
     return {
       body: JSON.stringify(result.json, null, 2),
       params: JSON.stringify(result.queryParams || {}, null, 2),
     };
-  }, [method, path, initialParams, initialBody]);
+  }, [requestMethod, path, initialParams, initialBody]);
+  const recommendWarning = data?.warning || "";
 
   const [editedBody, setEditedBody] = useState(null);
   const [bodyKey, setBodyKey] = useState(null);
@@ -211,7 +227,7 @@ export default function BackendCurlModal({
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [resultText, setResultText] = useState("");
-  const hasRequestBody = !["GET", "HEAD"].includes(method);
+  const hasRequestBody = !["GET", "HEAD"].includes(requestMethod);
 
   const handleImportCurlText = (curlText) => {
     try {
@@ -247,7 +263,7 @@ export default function BackendCurlModal({
     setResultText("");
     try {
       const result = await modeConfig.execApi({
-        method,
+        method: requestMethod,
         path,
         params,
         body: hasRequestBody ? body : "",
@@ -272,7 +288,7 @@ export default function BackendCurlModal({
       await navigator.clipboard.writeText(
         buildCurlCommand({
           baseUrl,
-          method,
+          method: requestMethod,
           path,
           params,
           body: requestBody,
@@ -293,7 +309,7 @@ export default function BackendCurlModal({
       await navigator.clipboard.writeText(
         buildFetchCommand({
           baseUrl,
-          method,
+          method: requestMethod,
           path,
           params,
           body: requestBody,
@@ -323,7 +339,7 @@ export default function BackendCurlModal({
       if (requestBody) JSON.parse(requestBody);
       return buildCurlCommand({
         baseUrl,
-        method,
+        method: requestMethod,
         path,
         params: parsedParams,
         body: requestBody,
@@ -347,7 +363,7 @@ export default function BackendCurlModal({
         <div className="text-[11px] text-slate-500 truncate">
           请求路径:{" "}
           <span className="font-semibold text-slate-700">
-            {method} {path}
+            {requestMethod} {path}
           </span>
         </div>
         <div className="text-[11px] text-slate-500 truncate flex items-center gap-1.5">
@@ -363,12 +379,34 @@ export default function BackendCurlModal({
       <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
         {loading ? (
           <div className="text-xs text-slate-500">正在生成推荐数据…</div>
-        ) : error ? (
-          <div className="text-xs text-red-600">
-            {error.message || String(error)}
-          </div>
         ) : (
           <>
+            {recommendWarning && (
+              <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
+                未能生成推荐数据（{recommendWarning}），请手动填写请求参数后执行。
+              </div>
+            )}
+            {isWildcardMethod && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-700 shrink-0">
+                  请求 Method{" "}
+                  <span className="text-slate-400 font-normal">
+                    (规则匹配所有 method，请选择本次实际发送的)
+                  </span>
+                </label>
+                <select
+                  value={pickedMethod}
+                  onChange={(e) => setPickedMethod(e.target.value)}
+                  className="bg-card border border-border rounded-md px-2 py-1 text-xs text-slate-900 outline-none focus:border-slate-500"
+                >
+                  {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-slate-700">
                 全局 VJTOKEN 参数{" "}
@@ -416,7 +454,7 @@ export default function BackendCurlModal({
               </>
             ) : (
               <div className="text-xs text-slate-500">
-                {method} 请求不携带 body；可在上方配置 Query Params。
+                {requestMethod} 请求不携带 body；可在上方配置 Query Params。
               </div>
             )}
             {resultText && (
@@ -469,7 +507,7 @@ export default function BackendCurlModal({
           <button
             type="button"
             onClick={() => setImportModalOpen(true)}
-            disabled={loading || Boolean(error)}
+            disabled={loading}
             className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40"
           >
             解析 cURL
@@ -477,7 +515,7 @@ export default function BackendCurlModal({
           <button
             type="button"
             onClick={copyCurl}
-            disabled={loading || Boolean(error)}
+            disabled={loading}
             className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40"
           >
             复制 curl
@@ -485,7 +523,7 @@ export default function BackendCurlModal({
           <button
             type="button"
             onClick={copyFetch}
-            disabled={loading || Boolean(error)}
+            disabled={loading}
             className="px-3 py-1.5 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-40"
           >
             复制 fetch
@@ -500,7 +538,7 @@ export default function BackendCurlModal({
           <button
             type="button"
             onClick={execute}
-            disabled={loading || Boolean(error) || executing}
+            disabled={loading || executing}
             className="px-3 py-1.5 rounded-md border text-xs font-medium bg-sky-400/10 text-sky-700 border-sky-400/35 hover:bg-sky-400/20 disabled:opacity-40"
           >
             {executing ? "执行中…" : "执行 curl"}

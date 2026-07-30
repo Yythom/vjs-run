@@ -243,7 +243,7 @@ function FallbackResponseTitle({ control }) {
 }
 
 /** 依赖 path 是否为空来禁用的底部按钮组 */
-function PathActions({ control, route, onRecommend, onCurl }) {
+function PathActions({ control, onRecommend, onCurl }) {
   const path = useWatch({ control, name: "path" }) || "";
   const disabled = !path.trim();
   return (
@@ -257,28 +257,24 @@ function PathActions({ control, route, onRecommend, onCurl }) {
       >
         推荐数据 ✨
       </button>
-      {route && (
-        <>
-          <button
-            type="button"
-            onClick={() => onCurl("backend")}
-            disabled={disabled}
-            title="使用推荐数据向配置的后端代理地址执行 curl"
-            className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-emerald-500/5 text-emerald-600 border-emerald-200/50 hover:bg-emerald-500/10 cursor-pointer transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            后端调试
-          </button>
-          <button
-            type="button"
-            onClick={() => onCurl("local")}
-            disabled={disabled}
-            title="请求本机已启动的 mock 服务，验证当前接口的实际返回"
-            className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-sky-500/5 text-sky-600 border-sky-200/50 hover:bg-sky-500/10 cursor-pointer transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            本地验证
-          </button>
-        </>
-      )}
+      <button
+        type="button"
+        onClick={() => onCurl("backend")}
+        disabled={disabled}
+        title="使用推荐数据向配置的后端代理地址执行 curl"
+        className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-emerald-500/5 text-emerald-600 border-emerald-200/50 hover:bg-emerald-500/10 cursor-pointer transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        后端调试
+      </button>
+      <button
+        type="button"
+        onClick={() => onCurl("local")}
+        disabled={disabled}
+        title="请求本机已启动的 mock 服务，验证当前接口的实际返回"
+        className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-sky-500/5 text-sky-600 border-sky-200/50 hover:bg-sky-500/10 cursor-pointer transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        本地验证
+      </button>
     </>
   );
 }
@@ -340,7 +336,7 @@ function EditorModals({
         onClose={() => setRecommendTarget(null)}
         onApply={applyRecommend}
       />
-      {route && curlTarget && (
+      {curlTarget && (
         <BackendCurlModal
           open
           mode={curlTarget.mode}
@@ -351,7 +347,7 @@ function EditorModals({
           onViewLogs={onViewLogs}
         />
       )}
-      {route && variantCurl && (
+      {variantCurl && (
         <BackendCurlModal
           open
           mode={variantCurl.mode}
@@ -588,7 +584,6 @@ function VariantCard({ control, register, errors, index, onRemove, onVariantCurl
           启用
         </label>
         <div className="flex gap-1.5 ml-auto shrink-0 items-center">
-          {/* 自定义规则没有 route，curl 调试弹窗打不开，这两个入口直接不渲染 */}
           {onVariantCurl && (
             <>
               <button
@@ -926,7 +921,7 @@ export default function MockRuleEditor({
             control={control}
             register={register}
             errors={errors}
-            onVariantCurl={route ? handleVariantCurl : null}
+            onVariantCurl={handleVariantCurl}
             requestSchema={requestSchema}
           />
           <div className="border border-slate-200/70 rounded-xl bg-white shadow-sm overflow-hidden p-3.5 flex flex-col gap-2.5 shrink-0">
@@ -971,7 +966,6 @@ export default function MockRuleEditor({
             )}
             <PathActions
               control={control}
-              route={route}
               onRecommend={() => modalOpenersRef.current?.openRecommend()}
               onCurl={(mode) => modalOpenersRef.current?.openCurl(mode)}
             />
