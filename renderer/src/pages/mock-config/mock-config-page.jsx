@@ -455,9 +455,9 @@ export default function MockConfigPage() {
       showToast(`已应用场景「${sceneName}」`, "success");
     });
 
-  // server 的 findMockRule 是按 mock-rules.json 的数组顺序取第一条匹配的规则，
-  // 这里必须用同样的顺序：同一 path 既有 "*" 又有具体 method 时，若按「精确优先」
-  // 去找，编辑器里打开的会是没生效的那条（server 用的是排在前面的）。
+  // 与 server 的 findMockRule 保持一致：按 method 精确匹配，并按 mock-rules.json 的
+  // 数组顺序取第一条。顺序很重要——同一 path 有多条规则时，若按别的优先级去找，
+  // 编辑器里打开的会是没生效的那条。
   // 按 path 分组只是为了保持 O(1) 查找，组内顺序仍是文件顺序。
   const rulesByPath = new Map();
   for (const rule of rules) {
@@ -468,8 +468,7 @@ export default function MockConfigPage() {
   const lookupRule = (method, path) => {
     const wanted = method.toUpperCase();
     return (rulesByPath.get(path) || []).find((rule) => {
-      const ruleMethod = (rule.method || "*").toUpperCase();
-      return ruleMethod === "*" || ruleMethod === wanted;
+      return (rule.method || "").toUpperCase() === wanted;
     });
   };
 
@@ -492,7 +491,7 @@ export default function MockConfigPage() {
     .filter((rule) => !matchedRuleKeys.has(ruleKey(rule)))
     .map((rule) => ({
       key: ruleKey(rule),
-      method: rule.method || "*",
+      method: rule.method || "",
       path: rule.path,
       summary: "自定义 mock 规则",
       source: "mock-rules",
@@ -504,7 +503,7 @@ export default function MockConfigPage() {
   let selectedItem = allItems.find((item) => item.key === selectedKey) || null;
   if (selectedKey === DRAFT_KEY && draft) {
     // 草稿命中已有规则（同 method+path）时把已有变体带上，避免一次保存把变体清空
-    const existingForDraft = lookupRule(draft.method || "*", draft.path);
+    const existingForDraft = lookupRule(draft.method || "GET", draft.path);
     selectedItem = {
       key: DRAFT_KEY,
       rule: {
@@ -746,7 +745,7 @@ export default function MockConfigPage() {
           srOnly={false}
           title={
             selectedItem
-              ? `${(selectedItem.method || selectedItem.rule?.method || "*").toUpperCase()} ${
+              ? `${(selectedItem.method || selectedItem.rule?.method || "").toUpperCase()} ${
                   selectedItem.path || selectedItem.rule?.path || ""
                 }`
               : "新增 Mock 规则"

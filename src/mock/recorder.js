@@ -32,7 +32,7 @@ export function sceneFilePath(scenesDir, name) {
 }
 
 function ruleKey(rule) {
-  return `${(rule.method || "*").toUpperCase()} ${rule.path}`;
+  return `${(rule.method || "").toUpperCase()} ${rule.path}`;
 }
 
 // ─── 录制 ─────────────────────────────────────────────────────────────────────

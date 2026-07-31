@@ -19,7 +19,7 @@ vjtools 的 mock 服务按「规则」拦截请求并返回自定义 JSON。规�
    - 场景名规则：非空、≤60 字符，不能含 `/ \ : * ? " < > |`。
 2. **建场景**：`node scripts/mock-rule.mjs new-scene --scene <名>`。
    - 若报「场景已存在」→ 停下来告诉用户，请其换个名字（或确认要往已有场景里加接口，那就跳过这步直接第 3 步）。
-3. **逐个把本次接口写进场景**：对每个接口用 `set --scene <名> …`（见下）。
+3. **逐个把本次接口写进场景**：对每个接口用 `set --scene <名> --method <M> --path <P> …`（见下）。
 4. **收尾**：`list --scene <名>` 把场景内容展示给用户，并提示：
    **去 vjtools 的 mock 配置页「应用」这个场景后才会生效**（场景文件本身不影响当前活动规则）。
 
@@ -105,9 +105,10 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 - `set` 按 **method + path 幂等定位**：命中则覆盖 response、未命中则追加，**绝不动其它规则**。
 - `set` 可选项：`--status <整数>`、`--delay <毫秒>`（响应延迟，模拟慢接口）、`--disabled`/`--enabled`。
   覆盖已有规则时，**本次没传的字段保留原值**（比如只改 response 不会丢 delay）。
-- `--method` 缺省为 `*`（匹配该 path 的所有请求方法）。但**通配已不推荐**——很难看出一条
-  `*` 规则到底会盖住哪些接口，排障成本高，软件的新建规则界面已移除该选项（存量 `*` 规则
-  仍然生效）。能确定 method 就显式传，别依赖缺省。
+- `--method` **必填**且必须是具体方法。mock server 只匹配具体 method——OpenAPI 里每个
+  操作本来就绑定在某个 method 上，规则没理由更宽松。
+- `method` 写成 `"*"` 或干脆没写的规则**一条都不会命中**，mock 服务加载规则时会打
+  警告点名是哪条。CLI 也拒收 `--method '*'`，从源头堵住。
 - 匹配是 **first-match**：按数组顺序逐条试，第一条命中即生效。`/api/user/{id}` 与
   `/api/user/123` 并存时排前面的赢——「改了规则却没生效」先 `list` 看顺序有没有被截胡。
 - 只带 `status`/`delay`、**不带 `response` 的规则，仅对 swagger spec 里已有的路径生效**
@@ -166,7 +167,7 @@ node scripts/mock-rule.mjs rm-variant --scene 订单联调 --method GET --path /
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `path` | string | 是 | 必须以 `/` 开头。支持 OpenAPI 风格占位符，如 `/api/user/{id}` |
-| `method` | string | 否 | 大写；缺省/`"*"` 匹配所有方法（通配已不推荐，能确定就写具体 method） |
+| `method` | string | **是** | 大写的具体方法（`GET`/`POST`/…）。缺省或 `"*"` 的规则不会被命中，只会在启动日志里收到一条警告 |
 | `response` | any(JSON) | 否 | 命中时返回的 body。**这就是你要定制的接口数据** |
 | `status` | integer | 否 | HTTP 状态码，缺省走默认 |
 | `delay` | integer | 否 | 响应延迟毫秒数（≥0），返回前先等待，用于模拟慢接口 |
@@ -290,7 +291,7 @@ curl -fsS "$BASE/__mock/search?q=user"
 |---|---|
 | curl 全部连不上 | `/__mock/health`；不通就是 server 没跑，让用户启动，别改文件 |
 | `/__mock/rules` 里没有你写的规则 | 写进场景了但没「应用」（最常见）；或 `--file`/`--scene` 指向了别处 |
-| 规则在 `/__mock/rules` 里但没生效 | `list` 看顺序，是否被前面的规则 first-match 截胡 |
+| 规则在 `/__mock/rules` 里但没生效 | 先看 `method` 是不是 `"*"` 或没写——这类规则一条都不会命中（mock 启动日志有警告）；再 `list` 看顺序，是否被前面的规则 first-match 截胡 |
 | 返回的 body 比你写的多了一层 `{rc,code,message,data}` | 正常，见「信封化」一节；要原样就自己写成完整信封 |
 | 响应头 `x-mock-source: proxy`（或 `x-mock-proxy: true`） | 走的是真实后端，没命中 mock，回到上面三条 |
 | 分不清命中的是规则、变体、override 还是生成样本 | 看 `x-mock-source` / `x-mock-rule` / `x-mock-variant` 响应头（取值与编码见「处置顺序」第 4-5 条） |
@@ -329,7 +330,7 @@ override 命中时同样走上一节的信封化，但**不做**分页/长度调
 
 改完至少做一步验证，别只写不看：
 1. `list --scene <名>` 确认接口都在、enabled/status 对。
-2. `get --scene <名> --path <P>` 核对 `response` 内容完整。
+2. `get --scene <名> --method <M> --path <P>` 核对 `response` 内容完整。
 3. 提醒用户：**在软件里「应用」该场景**后才生效。
 4. 已应用/直接改活动规则时，watcher 已自动热载，可用 `curl -fsS "$BASE/__mock/rules"`（`$BASE`
    的解析见「调试接口」一节）确认 server 读到的就是你写的那份，再请求 `$BASE<path>`

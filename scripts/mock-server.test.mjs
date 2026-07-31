@@ -214,6 +214,41 @@ test("enabled:false 的规则不参与命中：退回 502 而不是走 mock", as
   });
 });
 
+test("method 必须具体：\"*\" / 缺省 / 字符串简写的规则一律不命中", async () => {
+  // OpenAPI 里每个操作本来就绑定 method，规则没理由比 spec 更宽松。
+  // 这类规则不该悄悄生效，也不该悄悄「半生效」——直接当没有，落回 502。
+  for (const rule of [
+    { method: "*", path: "/api/users", response: { wild: true } },
+    { path: "/api/users", response: { noMethod: true } }, // 缺省 method
+    "/api/users", // 字符串简写：只有 path，给不出 method
+  ]) {
+    const { specPath, mockRulesFile } = fixture({ rules: [rule] });
+    await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+      assert.equal(
+        (await get("/api/users")).status,
+        502,
+        `不该命中: ${JSON.stringify(rule)}`,
+      );
+    });
+  }
+
+  // 同一份文件里具体 method 的规则照常生效，不受上面那些坏规则连累
+  const mixed = fixture({
+    rules: [
+      { method: "*", path: "/api/users", response: { wild: true } },
+      { method: "GET", path: "/api/users", response: { ok: true } },
+    ],
+  });
+  await withServer(
+    { specPath: mixed.specPath, mockRulesFile: mixed.mockRulesFile },
+    async ({ get }) => {
+      const res = await get("/api/users");
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { ok: true });
+    },
+  );
+});
+
 test("规则路径支持 {param} 占位，且 method 不匹配时不命中", async () => {
   const { specPath, mockRulesFile } = fixture({
     rules: [{ method: "GET", path: "/api/users/{id}", response: { hit: true } }],

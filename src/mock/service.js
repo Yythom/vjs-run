@@ -242,7 +242,7 @@ export function normalizeRulesForSave(rules = []) {
         : [];
     return {
       enabled: normalized.enabled !== false,
-      method: (normalized.method || "*").toUpperCase(),
+      method: normalized.method,
       path: normalized.path,
       ...(status !== undefined ? { status } : {}),
       ...(delay !== undefined ? { delay } : {}),

@@ -29,7 +29,7 @@
 //   node scripts/mock-rule.mjs new-scene --scene 登录联调       # 新建空场景（同名报错）
 //   node scripts/mock-rule.mjs rm-scene  --scene 登录联调       # 删除整个场景文件
 //   node scripts/mock-rule.mjs rename-scene --scene 登录联调 --to 登录联调v2   # 重命名场景
-//   echo '{...}' | node scripts/mock-rule.mjs set --scene 登录联调 --path /api/login  # 往场景里加接口
+//   echo '{...}' | node scripts/mock-rule.mjs set --scene 登录联调 --method POST --path /api/login  # 往场景里加接口
 //   node scripts/mock-rule.mjs list --scene 登录联调            # 查看场景内容
 //
 // set 按 method+path 幂等定位：命中则覆盖，未命中则追加，绝不动其它规则。
@@ -124,7 +124,7 @@ function saveRules(file, rules) {
 // ─── 校验 / 规整（等价 service.js 的 normalizeRulesForSave）─────────────────────
 
 function normalizeRule(rule) {
-  const method = String(rule.method || "*").toUpperCase();
+  const method = String(rule.method || "").toUpperCase();
   const rulePath = typeof rule.path === "string" ? rule.path.trim() : "";
   if (!rulePath) fail("规则缺少 path");
   if (!rulePath.startsWith("/")) fail(`path 必须以 / 开头：${rulePath}`);
@@ -243,7 +243,7 @@ function readStdin() {
 
 function sameRule(rule, method, rulePath) {
   return (
-    String(rule.method || "*").toUpperCase() === method &&
+    String(rule.method || "").toUpperCase() === method &&
     rule.path === rulePath
   );
 }
@@ -265,9 +265,20 @@ const applyHint = isScene
   : "（mock server 将自动热载）";
 
 function requireTarget() {
-  const method = String(flags.method || "*").toUpperCase();
   const rulePath = flags.path && String(flags.path).trim();
   if (!rulePath) fail("缺少 --path");
+
+  // method 必填且必须具体：mock server 只按具体 method 匹配，写 "*" 或不写的规则
+  // 一条都不会命中。parseFlags 对「--method 后面没跟值」会给 true，一并挡掉。
+  if (flags.method === undefined || flags.method === true) {
+    fail("缺少 --method（如 --method GET）");
+  }
+  const method = String(flags.method).trim().toUpperCase();
+  if (!method) fail("--method 不能为空");
+  if (method === "*") {
+    fail('--method 不能是 "*"：mock server 只匹配具体 method，通配规则不会命中');
+  }
+
   return { method, rulePath };
 }
 
@@ -283,8 +294,12 @@ switch (command) {
       const flag = r.enabled === false ? "○" : "●";
       const status = r.status ? ` [${r.status}]` : "";
       const delay = r.delay ? ` +${r.delay}ms` : "";
+      // method 无效的规则不会被 mock server 命中，而 CLI 又拒收 --method '*'、
+      // 定位不到它们，只能手改文件。列出来时说清楚，免得用户对着它反复试命令。
+      const method = String(r.method || "").toUpperCase();
+      const bad = !method || method === "*" ? "  ← method 无效，不会命中（需手改文件删除）" : "";
       console.log(
-        `${flag} ${String(r.method || "*").toUpperCase().padEnd(6)} ${r.path}${status}${delay}`,
+        `${flag} ${(method || "?").padEnd(6)} ${r.path}${status}${delay}${bad}`,
       );
       if (Array.isArray(r.variants) && r.variants.length) {
         const summary = r.variants

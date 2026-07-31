@@ -9,7 +9,7 @@ import JsonEditor from "../../components/json-editor";
 import RecommendMockModal from "./recommend-mock-modal";
 import BackendCurlModal from "./backend-curl-modal";
 import RequestSchemaPanel, { ScopeTag, formatExample } from "./request-schema-panel";
-import { METHODS, WILDCARD_METHOD, prettyJson } from "./utils";
+import { METHODS, prettyJson } from "./utils";
 import useModalNav from "../../hooks/use-modal-nav";
 import useResource from "../../hooks/use-resource";
 
@@ -172,11 +172,19 @@ function valuesToVariant(values) {
   };
 }
 
+// 表单的 Method 只提供 METHODS 里的选项。规则里存着别的值时（手改文件写错、
+// 早期留下的 "*"），select 会掉到第一项显示成 GET，而 RHF 内部还留着原值——
+// 界面和「保存后写进去的东西」就对不上了。先归一，保证所见即所存。
+function toFormMethod(raw) {
+  const method = String(raw || "").toUpperCase();
+  return METHODS.includes(method) ? method : METHODS[0];
+}
+
 function ruleToValues(rule, route) {
   if (!rule) {
     return {
       enabled: false,
-      method: route?.method || "GET",
+      method: toFormMethod(route?.method),
       path: route?.path || "",
       status: "",
       delay: "",
@@ -191,7 +199,7 @@ function ruleToValues(rule, route) {
   }
   return {
     enabled: rule.enabled !== false,
-    method: (rule.method || route?.method || "*").toUpperCase(),
+    method: toFormMethod(rule.method || route?.method),
     path: rule.path || route?.path || "",
     status: rule.status === undefined ? "" : String(rule.status),
     delay: rule.delay === undefined ? "" : String(rule.delay),
@@ -202,7 +210,7 @@ function ruleToValues(rule, route) {
 
 function valuesToRule(values) {
   const path = values.path.trim();
-  const method = (values.method || "*").toUpperCase();
+  const method = values.method.toUpperCase();
   const status = values.status.trim();
   const delay = values.delay.trim();
   const responseText = values.responseText.trim();
@@ -299,7 +307,7 @@ function EditorModals({
 
   // 弹窗打开瞬间捕获 method/path，打开期间改 Path 输入框不影响已开的弹窗
   const captureTarget = () => ({
-    method: (getValues("method") || route?.method || "*").toUpperCase(),
+    method: (getValues("method") || route?.method || "GET").toUpperCase(),
     path: getValues("path").trim(),
   });
 
@@ -331,7 +339,7 @@ function EditorModals({
     <>
       <RecommendMockModal
         open={recommendTarget !== null}
-        method={recommendTarget?.method || "*"}
+        method={recommendTarget?.method || "GET"}
         path={recommendTarget?.path || ""}
         onClose={() => setRecommendTarget(null)}
         onApply={applyRecommend}
@@ -747,18 +755,6 @@ export default function MockRuleEditor({
     reset(ruleToValues(rule, route));
   }
 
-  // 新建规则不再提供 "*"，但 mock-rules.json 里可能有存量的通配规则：下拉里没有
-  // 对应 option 时 select 会掉到第一项，用户随手一保存就把 "*" 静默改成 GET，
-  // 规则从「命中所有 method」缩成「只命中 GET」。所以按当前表单值补回该项。
-  //
-  // 必须用 useWatch 订阅，不能图省事读 getValues()：React Compiler 会把结果按
-  // [getValues, METHODS] 缓存，而这两个引用恒定不变 —— 表单值再怎么变都不重算。
-  // 那样只有靠「编辑器有 key={selectedKey} 必定重挂」才碰巧是对的，太脆。
-  // method 是个 select，重渲染频率跟 Path 输入框不是一个量级，订阅得起。
-  const currentMethod = useWatch({ control, name: "method" });
-  const methodOptions =
-    currentMethod === WILDCARD_METHOD ? [WILDCARD_METHOD, ...METHODS] : METHODS;
-
   // 把「表单有未保存改动」上报给父组件，用于切换选中项时拦截丢失。
   // 回调经 ref 转发：即使父组件某天传了不稳定的回调，卸载清理也只在真正卸载时跑。
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -836,7 +832,7 @@ export default function MockRuleEditor({
     try {
       const choice = await confirm({
         title: "保存 Mock 规则",
-        message: `请选择您想如何保存对该接口的 Mock 修改？\n\n${(values.method || "*").toUpperCase()} ${values.path || ""}`,
+        message: `请选择您想如何保存对该接口的 Mock 修改？\n\n${(values.method || "").toUpperCase()} ${values.path || ""}`,
         confirmText: "保存并启用",
         altText: "仅保存",
         cancelText: "取消",
@@ -872,14 +868,14 @@ export default function MockRuleEditor({
       >
         <div className="p-4 border-b border-border bg-slate-50/40 shrink-0 flex flex-col gap-3">
           <div className="grid grid-cols-[120px_1fr_90px_100px] gap-3">
-            <FieldShell label="Method">
+            <FieldShell label="Method" error={errors.method?.message}>
               <select
                 {...register("method")}
                 className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none shadow-sm focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-all w-full appearance-none cursor-pointer font-semibold"
               >
-                {methodOptions.map((m) => (
+                {METHODS.map((m) => (
                   <option key={m} value={m}>
-                    {m === WILDCARD_METHOD ? "*（通配，已不推荐）" : m}
+                    {m}
                   </option>
                 ))}
               </select>

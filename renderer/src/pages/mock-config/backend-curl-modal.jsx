@@ -5,7 +5,6 @@ import JsonEditor from "../../components/json-editor";
 import useResource from "../../hooks/use-resource";
 import { showToast } from "../../utils/toast";
 import { useAppConfig, updateAppConfig } from "../../stores/app-config-store";
-import { METHODS, WILDCARD_METHOD } from "./utils";
 
 function parseQueryParams(text) {
   const params = JSON.parse(text || "{}");
@@ -240,12 +239,7 @@ export default function BackendCurlModal({
     }
   };
 
-  // 通配规则（method = "*"）没法直接 curl，让用户在面板里挑一个真实 method
-  const isWildcardMethod = !method || String(method).trim() === WILDCARD_METHOD;
-  const [pickedMethod, setPickedMethod] = useState("GET");
-  const requestMethod = isWildcardMethod
-    ? pickedMethod
-    : String(method).toUpperCase();
+  const requestMethod = String(method || "GET").toUpperCase();
 
   // 推荐数据只是「预填」，不是发请求的前提：spec 外的自定义路径查不到 schema，
   // 这里降级成空 body / 空 params 并给个提示，而不是把整个面板置成错误态。
@@ -454,27 +448,6 @@ export default function BackendCurlModal({
             {recommendWarning && (
               <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2.5 py-1.5">
                 未能生成推荐数据（{recommendWarning}），请手动填写请求参数后执行。
-              </div>
-            )}
-            {isWildcardMethod && (
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-slate-700 shrink-0">
-                  请求 Method{" "}
-                  <span className="text-slate-400 font-normal">
-                    (规则匹配所有 method，请选择本次实际发送的)
-                  </span>
-                </label>
-                <select
-                  value={pickedMethod}
-                  onChange={(e) => setPickedMethod(e.target.value)}
-                  className="bg-card border border-border rounded-md px-2 py-1 text-xs text-slate-900 outline-none focus:border-slate-500"
-                >
-                  {METHODS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
               </div>
             )}
             <div className="flex flex-col gap-1.5">

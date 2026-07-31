@@ -53,65 +53,79 @@ test("set 新增规则：stdin response + status + delay 全部落盘，enabled 
 
 test("set 幂等覆盖：只改 response 时保留原有 status/delay，且不动其它规则", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/a", "--status", "500", "--delay", "100"], '{"v":1}');
-  run(ud, ["set", "--path", "/api/b"], '{"v":2}');
-  const r = run(ud, ["set", "--path", "/api/a"], '{"v":9}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a", "--status", "500", "--delay", "100"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/b"], '{"v":2}');
+  const r = run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"v":9}');
   assert.equal(r.code, 0, r.err);
   assert.match(r.out, /已更新/);
   const rules = readJson(rulesFile(ud));
   assert.equal(rules.length, 2);
-  assert.deepEqual(rules[0], { enabled: true, method: "*", path: "/api/a", status: 500, delay: 100, response: { v: 9 } });
+  assert.deepEqual(rules[0], { enabled: true, method: "GET", path: "/api/a", status: 500, delay: 100, response: { v: 9 } });
   assert.deepEqual(rules[1].response, { v: 2 });
 });
 
 test("set --disabled 建禁用规则；enable/disable 只翻转 enabled", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/x", "--disabled"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/x", "--disabled"], '{"v":1}');
   assert.equal(readJson(rulesFile(ud))[0].enabled, false);
-  assert.equal(run(ud, ["enable", "--path", "/api/x"]).code, 0);
+  assert.equal(run(ud, ["enable", "--method", "GET", "--path", "/api/x"]).code, 0);
   assert.equal(readJson(rulesFile(ud))[0].enabled, true);
-  assert.equal(run(ud, ["disable", "--path", "/api/x"]).code, 0);
+  assert.equal(run(ud, ["disable", "--method", "GET", "--path", "/api/x"]).code, 0);
   const rule = readJson(rulesFile(ud))[0];
   assert.equal(rule.enabled, false);
   assert.deepEqual(rule.response, { v: 1 }); // 其余字段不受影响
 });
 
-test("set 幂等定位区分 method；--method 缺省为 *", () => {
+test("set 幂等定位区分 method；--method 必填且不接受 *", () => {
   const ud = freshUserData();
   run(ud, ["set", "--path", "/api/a", "--method", "GET"], '{"m":"get"}');
-  run(ud, ["set", "--path", "/api/a"], '{"m":"star"}');
+  run(ud, ["set", "--path", "/api/a", "--method", "POST"], '{"m":"post"}');
   const rules = readJson(rulesFile(ud));
   assert.equal(rules.length, 2);
-  assert.deepEqual(rules.map((r) => r.method).sort(), ["*", "GET"]);
+  assert.deepEqual(rules.map((r) => r.method).sort(), ["GET", "POST"]);
+
+  // mock server 只按具体 method 匹配，这三种写法都造不出会命中的规则，一律挡在写盘前
+  const rejected = [
+    [["set", "--path", "/api/b"], /缺少 --method/], // 漏传
+    [["set", "--path", "/api/b", "--method"], /缺少 --method/], // 后面没跟值（parseFlags 给 true）
+    [["set", "--path", "/api/b", "--method", "*"], /不能是 "\*"/], // 通配
+  ];
+  for (const [args, pattern] of rejected) {
+    const r = run(ud, args, '{"v":1}');
+    assert.notEqual(r.code, 0, args.join(" "));
+    assert.match(r.err, pattern);
+  }
+  // 全部失败，不该有任何新规则落盘
+  assert.equal(readJson(rulesFile(ud)).length, 2);
 });
 
 test("get 输出规则 JSON；未命中非 0 退出", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/user/{id}"], '{"id":1}');
-  const hit = run(ud, ["get", "--path", "/api/user/{id}"]);
+  run(ud, ["set", "--method", "GET", "--path", "/api/user/{id}"], '{"id":1}');
+  const hit = run(ud, ["get", "--method", "GET", "--path", "/api/user/{id}"]);
   assert.equal(hit.code, 0);
-  assert.deepEqual(JSON.parse(hit.out), { enabled: true, method: "*", path: "/api/user/{id}", response: { id: 1 } });
+  assert.deepEqual(JSON.parse(hit.out), { enabled: true, method: "GET", path: "/api/user/{id}", response: { id: 1 } });
   // 占位符规则必须字面定位，具体路径定位不到
-  assert.notEqual(run(ud, ["get", "--path", "/api/user/123"]).code, 0);
+  assert.notEqual(run(ud, ["get", "--method", "GET", "--path", "/api/user/123"]).code, 0);
 });
 
 test("list 展示开关/状态码/延迟标记；空文件显示 (空)", () => {
   const ud = freshUserData();
   assert.match(run(ud, ["list"]).out, /\(空\)/);
-  run(ud, ["set", "--path", "/api/a", "--status", "500", "--delay", "200"], '{"v":1}');
-  run(ud, ["set", "--path", "/api/b", "--disabled"], '{"v":2}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a", "--status", "500", "--delay", "200"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/b", "--disabled"], '{"v":2}');
   const out = run(ud, ["list"]).out;
-  assert.match(out, /● \*\s+\/api\/a \[500\] \+200ms/);
-  assert.match(out, /○ \*\s+\/api\/b/);
+  assert.match(out, /● GET\s+\/api\/a \[500\] \+200ms/);
+  assert.match(out, /○ GET\s+\/api\/b/);
 });
 
 test("rm 只删目标规则；未命中非 0 退出", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/a"], '{"v":1}');
-  run(ud, ["set", "--path", "/api/b"], '{"v":2}');
-  assert.equal(run(ud, ["rm", "--path", "/api/a"]).code, 0);
+  run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/b"], '{"v":2}');
+  assert.equal(run(ud, ["rm", "--method", "GET", "--path", "/api/a"]).code, 0);
   assert.deepEqual(readJson(rulesFile(ud)).map((r) => r.path), ["/api/b"]);
-  assert.notEqual(run(ud, ["rm", "--path", "/api/a"]).code, 0);
+  assert.notEqual(run(ud, ["rm", "--method", "GET", "--path", "/api/a"]).code, 0);
 });
 
 // ─── 校验失败路径 ─────────────────────────────────────────────────────────────
@@ -120,11 +134,11 @@ test("校验失败均非 0 退出并带原因", () => {
   const ud = freshUserData();
   const cases = [
     [["set"], "缺少 --path"],
-    [["set", "--path", "api/no-slash"], "必须以 \\/ 开头"],
-    [["set", "--path", "/api/a", "--status", "abc"], "status 必须是整数"],
-    [["set", "--path", "/api/a", "--status"], "--status 需要一个整数值"],
-    [["set", "--path", "/api/a", "--delay", "-1"], "delay 必须是大于等于 0 的整数"],
-    [["set", "--path", "/api/a", "--delay"], "--delay 需要一个毫秒数"],
+    [["set", "--method", "GET", "--path", "api/no-slash"], "必须以 \\/ 开头"],
+    [["set", "--method", "GET", "--path", "/api/a", "--status", "abc"], "status 必须是整数"],
+    [["set", "--method", "GET", "--path", "/api/a", "--status"], "--status 需要一个整数值"],
+    [["set", "--method", "GET", "--path", "/api/a", "--delay", "-1"], "delay 必须是大于等于 0 的整数"],
+    [["set", "--method", "GET", "--path", "/api/a", "--delay"], "--delay 需要一个毫秒数"],
   ];
   for (const [args, msg] of cases) {
     const r = run(ud, args, '{"v":1}');
@@ -132,7 +146,7 @@ test("校验失败均非 0 退出并带原因", () => {
     assert.match(r.err, new RegExp(msg));
   }
   // stdin 非法 JSON
-  const bad = run(ud, ["set", "--path", "/api/a"], "not-json");
+  const bad = run(ud, ["set", "--method", "GET", "--path", "/api/a"], "not-json");
   assert.equal(bad.code, 1);
   assert.match(bad.err, /stdin 不是合法 JSON/);
   // 全部失败后不产生规则文件残留
@@ -143,7 +157,7 @@ test("规则文件损坏时报错而不是清空重建", () => {
   const ud = freshUserData();
   fs.mkdirSync(path.dirname(rulesFile(ud)), { recursive: true });
   fs.writeFileSync(rulesFile(ud), "{broken");
-  const r = run(ud, ["set", "--path", "/api/a"], '{"v":1}');
+  const r = run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"v":1}');
   assert.equal(r.code, 1);
   assert.match(r.err, /不是合法 JSON/);
   assert.equal(fs.readFileSync(rulesFile(ud), "utf8"), "{broken"); // 原文件未被动过
@@ -153,7 +167,7 @@ test("规则文件损坏时报错而不是清空重建", () => {
 
 test("set-variant：规则不存在时报错并提示先 set", () => {
   const ud = freshUserData();
-  const r = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"], '{"v":1}');
+  const r = run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"], '{"v":1}');
   assert.equal(r.code, 1);
   assert.match(r.err, /未找到规则/);
   assert.match(r.err, /先用 set 创建/);
@@ -193,33 +207,33 @@ test("set-variant 新建：when 三域落盘（header key 小写、body 值 JSON
 
 test("set-variant 新建校验：缺 --name / 缺 stdin response / 缺 when 条件均报错", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/a"], '{"v":1}');
-  const noName = run(ud, ["set-variant", "--path", "/api/a", "--when-query", "p=1"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  const noName = run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--when-query", "p=1"], '{"v":1}');
   assert.equal(noName.code, 1);
   assert.match(noName.err, /缺少 --name/);
-  const noResp = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"]);
+  const noResp = run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"]);
   assert.equal(noResp.code, 1);
   assert.match(noResp.err, /必须从 stdin 提供 response/);
-  const noWhen = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1"], '{"v":1}');
+  const noWhen = run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1"], '{"v":1}');
   assert.equal(noWhen.code, 1);
   assert.match(noWhen.err, /至少要一个条件/);
-  const badPair = run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "novalue"], '{"v":1}');
+  const badPair = run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--when-query", "novalue"], '{"v":1}');
   assert.equal(badPair.code, 1);
   assert.match(badPair.err, /key=value 形式/);
 });
 
 test("set-variant 幂等更新：没传的字段保留，--when-* 整体替换，--disabled 只翻开关", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/a"], '{"fallback":1}');
-  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1", "--status", "500"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"fallback":1}');
+  run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--when-query", "p=1", "--status", "500"], '{"v":1}');
   // 只换 when：response/status 保留
-  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=2"]);
+  run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--when-query", "p=2"]);
   let v = readJson(rulesFile(ud))[0].variants[0];
   assert.deepEqual(v.when, { query: { p: "2" } }); // 整体替换，不合并
   assert.deepEqual(v.response, { v: 1 });
   assert.equal(v.status, 500);
   // 只停用：其余全保留
-  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--disabled"]);
+  run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--disabled"]);
   v = readJson(rulesFile(ud))[0].variants[0];
   assert.equal(v.enabled, false);
   assert.deepEqual(v.when, { query: { p: "2" } });
@@ -229,31 +243,31 @@ test("set-variant 幂等更新：没传的字段保留，--when-* 整体替换�
 
 test("set（规则级）不丢已有 variants；rm-variant 删单个、删空后字段消失", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/a"], '{"fallback":1}');
-  run(ud, ["set-variant", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"], '{"v":1}');
-  run(ud, ["set-variant", "--path", "/api/a", "--name", "v2", "--when-query", "p=2"], '{"v":2}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"fallback":1}');
+  run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v1", "--when-query", "p=1"], '{"v":1}');
+  run(ud, ["set-variant", "--method", "GET", "--path", "/api/a", "--name", "v2", "--when-query", "p=2"], '{"v":2}');
   // 规则级 set 只改顶层 response，变体原样保留
-  run(ud, ["set", "--path", "/api/a"], '{"fallback":2}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"fallback":2}');
   let rule = readJson(rulesFile(ud))[0];
   assert.deepEqual(rule.response, { fallback: 2 });
   assert.deepEqual(rule.variants.map((v) => v.name), ["v1", "v2"]);
   // rm-variant 只删目标
-  assert.equal(run(ud, ["rm-variant", "--path", "/api/a", "--name", "v1"]).code, 0);
+  assert.equal(run(ud, ["rm-variant", "--method", "GET", "--path", "/api/a", "--name", "v1"]).code, 0);
   rule = readJson(rulesFile(ud))[0];
   assert.deepEqual(rule.variants.map((v) => v.name), ["v2"]);
   // 未命中报错
-  assert.notEqual(run(ud, ["rm-variant", "--path", "/api/a", "--name", "v1"]).code, 0);
+  assert.notEqual(run(ud, ["rm-variant", "--method", "GET", "--path", "/api/a", "--name", "v1"]).code, 0);
   // 删空后 variants 字段整个消失
-  run(ud, ["rm-variant", "--path", "/api/a", "--name", "v2"]);
+  run(ud, ["rm-variant", "--method", "GET", "--path", "/api/a", "--name", "v2"]);
   assert.equal("variants" in readJson(rulesFile(ud))[0], false);
 });
 
 test("list 展示变体摘要（●启用 ○停用）；--scene 下 set-variant 可用且不碰活动规则", () => {
   const ud = freshUserData();
   run(ud, ["new-scene", "--scene", "联调"]);
-  run(ud, ["set", "--scene", "联调", "--path", "/api/a"], '{"fallback":1}');
-  run(ud, ["set-variant", "--scene", "联调", "--path", "/api/a", "--name", "命中", "--when-query", "p=1"], '{"v":1}');
-  run(ud, ["set-variant", "--scene", "联调", "--path", "/api/a", "--name", "停用", "--when-query", "p=2", "--disabled"], '{"v":2}');
+  run(ud, ["set", "--scene", "联调", "--method", "GET", "--path", "/api/a"], '{"fallback":1}');
+  run(ud, ["set-variant", "--scene", "联调", "--method", "GET", "--path", "/api/a", "--name", "命中", "--when-query", "p=1"], '{"v":1}');
+  run(ud, ["set-variant", "--scene", "联调", "--method", "GET", "--path", "/api/a", "--name", "停用", "--when-query", "p=2", "--disabled"], '{"v":2}');
   assert.equal(fs.existsSync(rulesFile(ud)), false); // 活动规则未被创建
   const out = run(ud, ["list", "--scene", "联调"]).out;
   assert.match(out, /▸ 变体×2：●命中 ○停用/);
@@ -287,7 +301,7 @@ test("场景生命周期：new-scene → set --scene → scenes/list → rm-scen
 test("rename-scene：正常改名保留内容；同名幂等；源缺失/目标已存在/缺 --to 报错", () => {
   const ud = freshUserData();
   run(ud, ["new-scene", "--scene", "旧名"]);
-  run(ud, ["set", "--scene", "旧名", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["set", "--scene", "旧名", "--method", "GET", "--path", "/api/a"], '{"v":1}');
 
   assert.equal(run(ud, ["rename-scene", "--scene", "旧名", "--to", "新名"]).code, 0);
   assert.equal(fs.existsSync(sceneFile(ud, "旧名")), false);
@@ -328,12 +342,12 @@ test("场景名清洗：非法字符剔除、空名/超长报错（对齐 record
 test("--file / MOCK_RULES_FILE 覆盖活动规则文件路径", () => {
   const ud = freshUserData();
   const custom = path.join(ud, "custom-rules.json");
-  run(ud, ["set", "--file", custom, "--path", "/api/a"], '{"v":1}');
+  run(ud, ["set", "--file", custom, "--method", "GET", "--path", "/api/a"], '{"v":1}');
   assert.equal(readJson(custom).length, 1);
   assert.equal(fs.existsSync(rulesFile(ud)), false);
 
   const viaEnv = path.join(ud, "env-rules.json");
-  const r = spawnSync(process.execPath, [CLI, "set", "--path", "/api/b"], {
+  const r = spawnSync(process.execPath, [CLI, "set", "--method", "GET", "--path", "/api/b"], {
     input: '{"v":2}',
     encoding: "utf8",
     env: { ...process.env, VJTOOLS_USER_DATA_DIR: ud, MOCK_RULES_FILE: viaEnv },
@@ -344,7 +358,7 @@ test("--file / MOCK_RULES_FILE 覆盖活动规则文件路径", () => {
 
 test("写盘原子性：不残留 .tmp 文件", () => {
   const ud = freshUserData();
-  run(ud, ["set", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"v":1}');
   const dir = path.dirname(rulesFile(ud));
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp")), []);
 });

@@ -1,11 +1,9 @@
-// 新建规则时不再提供 "*"：通配规则很难看出到底会盖住哪些接口，排障成本高。
-// server 侧仍然认 "*"（mock-rules.json 里的存量规则照常生效），编辑器打开这类
-// 存量规则时会临时把 "*" 补进下拉，见 MockRuleEditor 的 methodOptions。
+// method 必须具体：OpenAPI 里每个操作本来就绑定在某个 method 上，规则没理由更宽松。
+// mock server 的 findMockRule 也只匹配具体 method。
 export const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
-export const WILDCARD_METHOD = "*";
 
 export function ruleKey(rule) {
-  return `${(rule?.method || "*").toUpperCase()} ${rule?.path || ""}`;
+  return `${(rule?.method || "").toUpperCase()} ${rule?.path || ""}`;
 }
 
 export function prettyJson(value) {

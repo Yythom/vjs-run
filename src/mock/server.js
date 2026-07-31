@@ -1055,10 +1055,23 @@ function loadMockRules(mockRulesFile) {
   return rules || [];
 }
 
+// 规则必须带具体 method——OpenAPI 里每个操作本来就绑定在某个 method 上，规则没理由
+// 比 spec 更宽松。缺 method 或写 "*" 的规则一律不再命中，但**不能静默跳过**：
+// 「规则明明写了却不生效」是最难查的一类问题。loadMockRules 按 mtime 缓存，
+// 同一份文件只会归一化一次，所以这里喊一次就够，不会每个请求刷屏。
+function warnMissingMethod(rulePath) {
+  console.warn(
+    `[mock] 规则 ${rulePath || "(缺 path)"} 没有具体 method（缺省或 "*"），` +
+      `不会命中任何请求。请改成 GET / POST 等具体方法。`,
+  );
+}
+
 function normalizeMockRule(rule) {
+  // 字符串简写只给得出 path、给不出 method，因此不再是可命中的规则
   if (typeof rule === "string") {
+    warnMissingMethod(rule);
     return {
-      method: "*",
+      method: "",
       path: rule,
       enabled: true,
     };
@@ -1069,8 +1082,11 @@ function normalizeMockRule(rule) {
     ? rule.variants.map(normalizeVariantLoose).filter(Boolean)
     : [];
 
+  const method = String(rule.method ?? "").trim().toUpperCase();
+  if (!method || method === "*") warnMissingMethod(rule.path);
+
   return {
-    method: (rule.method || "*").toUpperCase(),
+    method,
     path: rule.path,
     response: rule.response,
     status: rule.status,
@@ -1098,8 +1114,10 @@ function getRuleRegex(rule) {
 function findMockRule(mockRulesFile, method, pathname) {
   const normalizedMethod = method.toUpperCase();
   return loadMockRules(mockRulesFile).find((rule) => {
-    if (!rule.enabled || !rule.path) return false;
-    if (rule.method !== "*" && rule.method !== normalizedMethod) return false;
+    // method 为空的（缺省 / "*" / 字符串简写）在 normalizeMockRule 里已经警告过，
+    // 这里让它匹配不上任何请求即可
+    if (!rule.enabled || !rule.path || !rule.method) return false;
+    if (rule.method !== normalizedMethod) return false;
     return getRuleRegex(rule).test(pathname);
   });
 }
