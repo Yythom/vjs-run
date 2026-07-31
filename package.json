@@ -10,7 +10,7 @@
     "wait:renderer": "wait-on tcp:5100",
     "build": "pnpm renderer:build && electron-builder",
     "build:mac": "pnpm renderer:build && electron-builder --mac",
-    "release:mac": "npm version patch --no-git-tag-version && pnpm renderer:build && electron-builder --mac --publish always && git add package.json && git commit -m \"chore(release): v$(node -p \\\"require('./package.json').version\\\")\" && git push",
+    "release:mac": "npm version patch --no-git-tag-version && pnpm renderer:build && electron-builder --mac --publish always && git add package.json && git commit -m \"chore(release): v$(node -p \"require('./package.json').version\")\" && git push",
     "renderer:dev": "pnpm --dir renderer dev",
     "renderer:build": "pnpm --dir renderer build",
     "lint": "eslint \"src/**/*.{js,cjs}\"",
