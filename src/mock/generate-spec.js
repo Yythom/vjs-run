@@ -30,7 +30,7 @@ const EXCLUDE_INTERFACE = [
 const EXCLUDE_PARAMETERS = ["Authorization", "mgmtauth"];
 
 /** swagger2 转 openapi3 的转换服务地址 */
-const OPENAPI_CONVERT_SERVER = "https://converter.vjshi.cn/api/convert";
+const OPENAPI_CONVERT_SERVER = "http://converter.vjshi.cn/api/convert";
 
 const FETCH_TIMEOUT_MS = 30_000;
 
