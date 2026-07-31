@@ -156,7 +156,17 @@ export function registerDiagnosticsIpc() {
   });
 
   // 单端口 kill（端口查看器中逐行操作使用）
-  ipcSafe("kill-single-port", (_, { port }) => killPort(port));
+  ipcSafe("kill-single-port", async (_, { port }) => {
+    // mock server 在主进程内跑，killPort 会排除 process.pid（否则杀掉自己闪退），
+    // 这里提前识别并给出提示，避免"什么都没杀却提示已释放"。
+    const info = await inspectOnePort(port);
+    if (info.inUse && info.pid === process.pid) {
+      throw new Error(
+        `端口 ${port} 被本应用的 Mock 服务占用，请到 Mock 页面停止服务来释放`,
+      );
+    }
+    return killPort(port);
+  });
 
   // 在项目目录执行调试命令（注意保留原 ipcMain.handle 形态以维持 { success, code } 返回）
   ipcMain.handle("run-project-command", execDebugCommand);
