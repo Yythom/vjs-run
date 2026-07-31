@@ -5,6 +5,7 @@ import JsonEditor from "../../components/json-editor";
 import useResource from "../../hooks/use-resource";
 import { showToast } from "../../utils/toast";
 import { useAppConfig, updateAppConfig } from "../../stores/app-config-store";
+import { METHODS, WILDCARD_METHOD } from "./utils";
 
 function parseQueryParams(text) {
   const params = JSON.parse(text || "{}");
@@ -151,6 +152,71 @@ const MODE_CONFIG = {
   },
 };
 
+// x-mock-source 的取值 → 人话。file:xxx / 未知值走兜底分支。
+const SOURCE_LABEL = {
+  proxy: "回源后端（没有命中任何 mock 规则）",
+  "rule-variant": "命中规则变体",
+  "rule-custom": "命中自定义规则",
+  "rule-response": "命中规则的兜底 response",
+  "rule-control": "命中规则（只改了 status/delay）",
+  "openapi-sample": "swagger schema 自动生成",
+};
+
+function describeSource(source) {
+  if (!source) return "";
+  if (SOURCE_LABEL[source]) return SOURCE_LABEL[source];
+  if (source.startsWith("file:")) return `mock-data 文件：${source.slice(5)}`;
+  return source;
+}
+
+/** 执行结果上方的一行元信息：状态码 / 命中来源 / 变体名 / 耗时 */
+function ResultMetaStrip({ meta }) {
+  const ok = meta.status >= 200 && meta.status < 400;
+  const isProxy = meta.source === "proxy";
+  return (
+    <div className="flex items-center gap-2 flex-wrap text-[11px]">
+      {meta.status && (
+        <span
+          className={`font-mono font-bold px-1.5 py-0.5 rounded border ${
+            ok
+              ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+              : "text-red-700 bg-red-50 border-red-200"
+          }`}
+        >
+          HTTP {meta.status}
+        </span>
+      )}
+      {meta.source && (
+        <span
+          className={`px-1.5 py-0.5 rounded border font-medium ${
+            isProxy
+              ? "text-amber-700 bg-amber-50 border-amber-200"
+              : "text-violet-700 bg-violet-50 border-violet-200"
+          }`}
+        >
+          {describeSource(meta.source)}
+        </span>
+      )}
+      {meta.variant && (
+        <span className="px-1.5 py-0.5 rounded border border-violet-200 bg-violet-50/60 text-violet-700 font-medium">
+          变体：{meta.variant}
+        </span>
+      )}
+      {meta.rule && (
+        <span
+          className="text-slate-400 font-mono truncate max-w-[240px]"
+          title={meta.rule}
+        >
+          {meta.rule}
+        </span>
+      )}
+      {meta.timeMs !== null && (
+        <span className="text-slate-400 ml-auto">{meta.timeMs}ms</span>
+      )}
+    </div>
+  );
+}
+
 export default function BackendCurlModal({
   open,
   mode = "backend",
@@ -175,7 +241,7 @@ export default function BackendCurlModal({
   };
 
   // 通配规则（method = "*"）没法直接 curl，让用户在面板里挑一个真实 method
-  const isWildcardMethod = !method || String(method).trim() === "*";
+  const isWildcardMethod = !method || String(method).trim() === WILDCARD_METHOD;
   const [pickedMethod, setPickedMethod] = useState("GET");
   const requestMethod = isWildcardMethod
     ? pickedMethod
@@ -227,6 +293,8 @@ export default function BackendCurlModal({
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [resultText, setResultText] = useState("");
+  // { status, timeMs, source, rule, variant }：mock server 通过 x-mock-* 响应头回传
+  const [resultMeta, setResultMeta] = useState(null);
   const hasRequestBody = !["GET", "HEAD"].includes(requestMethod);
 
   const handleImportCurlText = (curlText) => {
@@ -261,6 +329,7 @@ export default function BackendCurlModal({
     }
     setExecuting(true);
     setResultText("");
+    setResultMeta(null);
     try {
       const result = await modeConfig.execApi({
         method: requestMethod,
@@ -270,6 +339,7 @@ export default function BackendCurlModal({
       });
       if (!result?.success) throw new Error(result?.error || "curl 执行失败");
       setResultText(result.output || "curl 已完成（无输出）");
+      setResultMeta(result.meta || null);
       showToast("后端请求已执行，详情已写入 Mock 日志", "success");
     } catch (err) {
       const message = err?.message || String(err);
@@ -399,7 +469,7 @@ export default function BackendCurlModal({
                   onChange={(e) => setPickedMethod(e.target.value)}
                   className="bg-card border border-border rounded-md px-2 py-1 text-xs text-slate-900 outline-none focus:border-slate-500"
                 >
-                  {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
+                  {METHODS.map((m) => (
                     <option key={m} value={m}>
                       {m}
                     </option>
@@ -478,6 +548,7 @@ export default function BackendCurlModal({
                     一键复制
                   </button>
                 </div>
+                {resultMeta && <ResultMetaStrip meta={resultMeta} />}
                 <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-slate-900 border border-slate-800 p-3.5 font-mono text-[10.5px] text-emerald-400 shadow-inner">
                   {resultText}
                 </pre>

@@ -47,6 +47,9 @@ function getMethodBadgeClass(method) {
       return "text-method-patch-text bg-method-patch-bg border-method-patch-border";
     case "DELETE":
       return "text-method-delete-text bg-method-delete-bg border-method-delete-border";
+    case "*":
+      // 通配规则会命中任意 method，给个和具体 method 明显不同的样式
+      return "text-violet-600 bg-violet-50 border-violet-200";
     default:
       return "text-slate-500 bg-card border-border";
   }

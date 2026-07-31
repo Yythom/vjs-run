@@ -15,8 +15,10 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 
 import { startMockServer } from "../src/mock/server.js";
+import { CURL_WRITE_OUT, parseCurlMeta } from "../src/mock/curl-meta.js";
 
 // ─── 夹具 ────────────────────────────────────────────────────────────────────
 
@@ -521,6 +523,90 @@ test("onRecord：变体命中时带上 variant 名", async () => {
   });
 });
 
+// ─── x-mock-* 响应头（curl 调试面板 / devtools 靠它判断这次是谁给的响应）─────
+
+test("x-mock-* 响应头：变体命中时带来源、规则路径和变体名（中文经 URI 编码）", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/users",
+        response: { fallback: true },
+        variants: [
+          { name: "未登录用户", when: { query: { t: "1" } }, response: { vip: true } },
+        ],
+      },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const hit = await get("/api/users?t=1");
+    assert.equal(hit.headers.get("x-mock-source"), "rule-variant");
+    assert.equal(hit.headers.get("x-mock-rule"), encodeURIComponent("/api/users"));
+    assert.equal(
+      decodeURIComponent(hit.headers.get("x-mock-variant")),
+      "未登录用户",
+    );
+
+    // 变体没命中回落到规则顶层：source 变了，且不该残留 variant 头
+    const miss = await get("/api/users");
+    assert.equal(miss.headers.get("x-mock-source"), "rule-response");
+    assert.equal(miss.headers.get("x-mock-variant"), null);
+  });
+});
+
+test("x-mock-* 响应头：swagger 外的自定义规则 / schema 采样 / 回源各有来源标记", async () => {
+  const custom = fixture({
+    rules: [{ method: "GET", path: "/outside", response: { ok: 1 } }],
+  });
+  await withServer(
+    { specPath: custom.specPath, mockRulesFile: custom.mockRulesFile },
+    async ({ get }) => {
+      const res = await get("/outside");
+      assert.equal(res.headers.get("x-mock-source"), "rule-custom");
+      assert.equal(res.headers.get("x-mock-rule"), encodeURIComponent("/outside"));
+    },
+  );
+
+  const sampled = fixture();
+  await withServer({ specPath: sampled.specPath, mockAll: true }, async ({ get }) => {
+    const res = await get("/api/users");
+    assert.equal(res.headers.get("x-mock-source"), "openapi-sample");
+    // 没有规则命中就不该有 x-mock-rule，否则会被误读成「有条规则在生效」
+    assert.equal(res.headers.get("x-mock-rule"), null);
+  });
+
+  const proxied = fixture();
+  await withBackend(null, async ({ url }) => {
+    await withServer(
+      { specPath: proxied.specPath, backendBaseUrl: url },
+      async ({ get }) => {
+        const res = await get("/api/users");
+        assert.equal(res.headers.get("x-mock-source"), "proxy");
+        assert.equal(res.headers.get("x-mock-proxy"), "true");
+      },
+    );
+  });
+});
+
+test("x-mock-source：override 命中时值是 file:<路径>，中文路径不能把请求搞成 500", async () => {
+  // 头值只允许 latin1，setHeader 遇到中文会抛 ERR_INVALID_CHAR 并被兜成 500。
+  // 用户目录 / mockDataDir 含中文是很常见的，这里锁死编码行为。
+  const { dir, specPath } = fixture();
+  const mockDataDir = path.join(dir, "中文目录");
+  const file = path.join(mockDataDir, "api", "users.get.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ hi: 1 }));
+
+  await withServer({ specPath, mockDataDir }, async ({ get }) => {
+    const res = await get("/api/users");
+    assert.equal(res.status, 200);
+    assert.deepEqual((await res.json()).data, { hi: 1 });
+    const source = decodeURIComponent(res.headers.get("x-mock-source"));
+    assert.match(source, /^file:/);
+    assert.ok(source.includes("中文目录"), source);
+  });
+});
+
 test("onRecord：proxy 与 miss 各自记录对应 kind", async () => {
   const { specPath } = fixture();
   await withBackend(null, async ({ url }) => {
@@ -768,4 +854,66 @@ test("spec 里没有任何可 mock 路由时启动报错", async () => {
     spec: { openapi: "3.0.0", info: { title: "t", version: "1" }, paths: {} },
   });
   await assert.rejects(() => startMockServer({ specPath, port: 0 }), /No mockable routes/);
+});
+
+// ─── curl 调试面板的元信息链路（server 写头 → curl 取头 → 前端解析）─────────
+
+test("端到端：真实 curl 打真实 mock server，状态码与 x-mock-* 能被 parseCurlMeta 还原", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/users",
+        response: { fallback: true },
+        variants: [
+          {
+            name: "空列表·中文变体名",
+            when: { query: { t: "1" } },
+            response: { data: [] },
+            status: 418,
+          },
+        ],
+      },
+    ],
+  });
+
+  const runCurl = (url) =>
+    new Promise((resolve, reject) => {
+      const child = spawn("curl", [
+        "--silent",
+        "--show-error",
+        "--write-out",
+        CURL_WRITE_OUT,
+        "-X",
+        "GET",
+        url,
+      ]);
+      let out = "";
+      child.stdout.on("data", (c) => { out += c; });
+      child.stderr.on("data", (c) => { out += c; });
+      child.on("error", reject);
+      child.on("close", () => resolve(out));
+    });
+
+  await withServer({ specPath, mockRulesFile }, async ({ base }) => {
+    const hit = parseCurlMeta(await runCurl(`${base}/api/users?t=1`));
+    // body 必须是干净 JSON——元信息不能漏进「响应结果」区
+    assert.deepEqual(JSON.parse(hit.output), { data: [] });
+    assert.equal(hit.meta.status, 418);
+    assert.equal(hit.meta.source, "rule-variant");
+    assert.equal(hit.meta.variant, "空列表·中文变体名");
+    assert.equal(hit.meta.rule, "/api/users");
+    assert.ok(hit.meta.timeMs !== null);
+
+    // 变体没命中：回落到规则顶层，不该残留上一次的 variant
+    const miss = parseCurlMeta(await runCurl(`${base}/api/users`));
+    assert.deepEqual(JSON.parse(miss.output), { fallback: true });
+    assert.equal(miss.meta.status, 200);
+    assert.equal(miss.meta.source, "rule-response");
+    assert.equal(miss.meta.variant, "");
+
+    // 非 2xx 不能让 curl 以非 0 退出（否则面板只会显示报错，看不到状态码）
+    const notFound = parseCurlMeta(await runCurl(`${base}/api/nope`));
+    assert.equal(notFound.meta.status, 404);
+  });
 });

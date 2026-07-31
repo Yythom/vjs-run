@@ -455,9 +455,23 @@ export default function MockConfigPage() {
       showToast(`已应用场景「${sceneName}」`, "success");
     });
 
-  const ruleMap = new Map(rules.map((rule) => [ruleKey(rule), rule]));
-  const lookupRule = (method, path) =>
-    ruleMap.get(`${method.toUpperCase()} ${path}`) || ruleMap.get(`* ${path}`);
+  // server 的 findMockRule 是按 mock-rules.json 的数组顺序取第一条匹配的规则，
+  // 这里必须用同样的顺序：同一 path 既有 "*" 又有具体 method 时，若按「精确优先」
+  // 去找，编辑器里打开的会是没生效的那条（server 用的是排在前面的）。
+  // 按 path 分组只是为了保持 O(1) 查找，组内顺序仍是文件顺序。
+  const rulesByPath = new Map();
+  for (const rule of rules) {
+    const list = rulesByPath.get(rule.path);
+    if (list) list.push(rule);
+    else rulesByPath.set(rule.path, [rule]);
+  }
+  const lookupRule = (method, path) => {
+    const wanted = method.toUpperCase();
+    return (rulesByPath.get(path) || []).find((rule) => {
+      const ruleMethod = (rule.method || "*").toUpperCase();
+      return ruleMethod === "*" || ruleMethod === wanted;
+    });
+  };
 
   // 合并 routes 与「未对应任何 route 的自定义 rule」为统一列表
   const matchedRuleKeys = new Set();

@@ -36,9 +36,31 @@ const corsMiddleware = cors({
     "x-mock-delay",
     "x-mock-empty",
   ],
-  exposedHeaders: ["x-backend-reqid", "X-Request-Id", "x-mock-proxy"],
+  exposedHeaders: [
+    "x-backend-reqid",
+    "X-Request-Id",
+    "x-mock-proxy",
+    "x-mock-source",
+    "x-mock-rule",
+    "x-mock-variant",
+  ],
   optionsSuccessStatus: 204,
 });
+
+// 把「本次响应是谁给的」写进响应头：curl 调试面板、浏览器 devtools 都能直接看到
+// 走的是 mock 还是回源、命中哪条规则、命中哪个变体。
+//
+// 三个值都必须 encodeURIComponent：HTTP 头只允许 latin1，setHeader 遇到中文会抛
+// ERR_INVALID_CHAR，被外层 catch 兜成 500——本来能正常返回的请求反而挂掉。
+// source 看着像枚举，其实 override 命中时是 `file:<绝对路径>`，用户目录或
+// mockDataDir 含中文就会踩到；variantName 是用户自己起的名字，中文更是常态。
+function setMockMetaHeaders(res, { source, rulePath, variantName }) {
+  if (res.headersSent) return;
+  res.setHeader("x-mock-source", encodeURIComponent(source));
+  if (rulePath) res.setHeader("x-mock-rule", encodeURIComponent(rulePath));
+  if (variantName)
+    res.setHeader("x-mock-variant", encodeURIComponent(variantName));
+}
 
 async function startMockServer({
   specPath,
@@ -211,10 +233,15 @@ function createMockServer({
             });
             await sleep(requestControls.delay);
             const status = Number(variant?.status ?? customRule.status) || 200;
-            const responseText = sendJson(res, status, effectiveResponse);
             const mockSource = variant ? "rule-variant" : "rule-custom";
+            setMockMetaHeaders(res, {
+              source: mockSource,
+              rulePath: customRule.path,
+              variantName: variant?.name,
+            });
+            const responseText = sendJson(res, status, effectiveResponse);
             logRequest(
-              `MOCK:${mockSource}`,
+              `MOCK:${mockSource}${variant ? `(${variant.name})` : ""}`,
               req.method,
               status,
               Date.now() - requestStart,
@@ -383,9 +410,17 @@ function createMockServer({
               ? `file:${overridePayload.filePath}`
               : "openapi-sample";
 
+      // rulePath 只在真有规则命中时才发：openapi-sample / file: override 这些
+      // 来源压根没有「规则」，拿 route.fullPath 顶上会让 x-mock-rule 变成
+      // 「这次匹配到的路由」，与头的名字对不上，排障时容易误判成有规则在生效。
+      setMockMetaHeaders(res, {
+        source: mockSource,
+        rulePath: mockRule?.path,
+        variantName: variant?.name,
+      });
       const responseText = sendPayload(res, response.status, payload, contentType);
       logRequest(
-        `MOCK:${mockSource}`,
+        `MOCK:${mockSource}${variant ? `(${variant.name})` : ""}`,
         req.method,
         response.status,
         Date.now() - requestStart,
@@ -1149,6 +1184,8 @@ async function proxyRequest(
       }
     });
     res.setHeader("x-mock-proxy", "true");
+    // 与 mock 分支统一：消费方只看 x-mock-source 就能判断这次是回源还是 mock
+    res.setHeader("x-mock-source", "proxy");
     res.writeHead(response.status);
     const responseBuffer = Buffer.from(await response.arrayBuffer());
     res.end(responseBuffer);

@@ -105,7 +105,9 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 - `set` 按 **method + path 幂等定位**：命中则覆盖 response、未命中则追加，**绝不动其它规则**。
 - `set` 可选项：`--status <整数>`、`--delay <毫秒>`（响应延迟，模拟慢接口）、`--disabled`/`--enabled`。
   覆盖已有规则时，**本次没传的字段保留原值**（比如只改 response 不会丢 delay）。
-- `--method` 缺省为 `*`（匹配该 path 的所有请求方法）。
+- `--method` 缺省为 `*`（匹配该 path 的所有请求方法）。但**通配已不推荐**——很难看出一条
+  `*` 规则到底会盖住哪些接口，排障成本高，软件的新建规则界面已移除该选项（存量 `*` 规则
+  仍然生效）。能确定 method 就显式传，别依赖缺省。
 - 匹配是 **first-match**：按数组顺序逐条试，第一条命中即生效。`/api/user/{id}` 与
   `/api/user/123` 并存时排前面的赢——「改了规则却没生效」先 `list` 看顺序有没有被截胡。
 - 只带 `status`/`delay`、**不带 `response` 的规则，仅对 swagger spec 里已有的路径生效**
@@ -164,7 +166,7 @@ node scripts/mock-rule.mjs rm-variant --scene 订单联调 --method GET --path /
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `path` | string | 是 | 必须以 `/` 开头。支持 OpenAPI 风格占位符，如 `/api/user/{id}` |
-| `method` | string | 否 | 大写；缺省/`"*"` 匹配所有方法 |
+| `method` | string | 否 | 大写；缺省/`"*"` 匹配所有方法（通配已不推荐，能确定就写具体 method） |
 | `response` | any(JSON) | 否 | 命中时返回的 body。**这就是你要定制的接口数据** |
 | `status` | integer | 否 | HTTP 状态码，缺省走默认 |
 | `delay` | integer | 否 | 响应延迟毫秒数（≥0），返回前先等待，用于模拟慢接口 |
@@ -244,7 +246,15 @@ spec 之外的路径（`findRoute` 未命中）不做任何加工，`response` �
    否则有后端就**透传**，没后端则返回 **502**（故意暴露配置问题，而不是静默给一份假数据）。
 3. 路径**不在 spec 里**（后端独有接口、录制来的接口）：只认**带 `response` 的规则**
    （或有变体命中）。命中即返回；否则有后端就透传、没后端返回 **404 `No mock route matched`**。
-4. 透传的响应会带上 `x-mock-proxy: true` 响应头——**判断「这条到底走没走 mock」就看它在不在**。
+4. **每个响应都带 `x-mock-source` 响应头，直接说明「这次是谁给的响应」**：
+   `proxy`（回源后端）/ `rule-variant`（命中变体）/ `rule-custom`（spec 外自定义规则）/
+   `rule-response`（规则顶层 `response`）/ `rule-control`（规则只改了 status/delay）/
+   `file:<路径>`（`mock-data/` override）/ `openapi-sample`（schema 生成样本）。
+   命中规则时还有 `x-mock-rule`（规则 path），命中变体时还有 `x-mock-variant`（变体名）。
+   透传另保留 `x-mock-proxy: true`（与 `x-mock-source: proxy` 等价，旧判断依然可用）。
+5. 这三个头的值做过 `encodeURIComponent`：curl 里中文变体名长成 `%E6%9C%AA%E7%99%BB%E5%BD%95`、
+   `file:` 前缀长成 `file%3A%2F…`——**不是头的值写错了**，
+   `node -p 'decodeURIComponent("…")'` 解一下即可。
 
 透传时 server 会替你补 token：从 cookie 里取，但**只在请求头没有**
 `Authorization` / `Mgmtauth` 时才注入，不覆盖前端显式发送的值。
@@ -282,10 +292,11 @@ curl -fsS "$BASE/__mock/search?q=user"
 | `/__mock/rules` 里没有你写的规则 | 写进场景了但没「应用」（最常见）；或 `--file`/`--scene` 指向了别处 |
 | 规则在 `/__mock/rules` 里但没生效 | `list` 看顺序，是否被前面的规则 first-match 截胡 |
 | 返回的 body 比你写的多了一层 `{rc,code,message,data}` | 正常，见「信封化」一节；要原样就自己写成完整信封 |
-| 响应头有 `x-mock-proxy: true` | 走的是真实后端，没命中 mock，回到上面三条 |
+| 响应头 `x-mock-source: proxy`（或 `x-mock-proxy: true`） | 走的是真实后端，没命中 mock，回到上面三条 |
+| 分不清命中的是规则、变体、override 还是生成样本 | 看 `x-mock-source` / `x-mock-rule` / `x-mock-variant` 响应头（取值与编码见「处置顺序」第 4-5 条） |
 | 502 + 没配后端 | 没有任何启用的规则/override/控制参数命中，`shouldUseMock` 闸门拦住了 |
 | 404 `No mock route matched` | spec 外路径且规则没带 `response`（只有 status/delay 的规则对 spec 外无效） |
-| 变体死活不命中 | 先确认变体没被**静默丢弃**（见变体要点末条），再核对 when 的相等语义 |
+| 变体死活不命中 | 先 curl 看 `x-mock-source` / `x-mock-variant` 头确认这次实际命中了谁；再确认变体没被**静默丢弃**（见变体要点末条），最后核对 when 的相等语义 |
 
 ## override 文件（`mock-data/`，规则的低优先级备胎）
 
@@ -323,4 +334,5 @@ override 命中时同样走上一节的信封化，但**不做**分页/长度调
 4. 已应用/直接改活动规则时，watcher 已自动热载，可用 `curl -fsS "$BASE/__mock/rules"`（`$BASE`
    的解析见「调试接口」一节）确认 server 读到的就是你写的那份，再请求 `$BASE<path>`
    看实际返回——注意响应体可能被信封化，
-   且响应头有没有 `x-mock-proxy: true` 决定了它到底走的 mock 还是后端。
+   且响应头 `x-mock-source` 直接告诉你这次是命中规则/变体、走了 override、
+   还是回源后端（`proxy`），取值见「一个请求的完整处置顺序」第 4 条。

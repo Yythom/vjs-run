@@ -31,6 +31,7 @@ import {
   stopMockService,
 } from "./service.js";
 import { clearMockHistory, getMockHistory } from "./history.js";
+import { CURL_WRITE_OUT, parseCurlMeta } from "./curl-meta.js";
 import {
   deleteScene,
   getRecordingStatus,
@@ -239,7 +240,17 @@ export function registerMockIpc() {
     const body = String(payload.body || "");
     const config = getConfig();
     const url = getBackendUrl(baseUrl, requestPath, payload.params);
-    const args = ["--silent", "--show-error", "--max-time", "30", "-X", method, url];
+    const args = [
+      "--silent",
+      "--show-error",
+      "--max-time",
+      "30",
+      "--write-out",
+      CURL_WRITE_OUT,
+      "-X",
+      method,
+      url,
+    ];
     if (!["GET", "HEAD"].includes(method) && body) {
       JSON.parse(body);
       args.push("-H", "Content-Type: application/json", "--data-binary", body);
@@ -253,9 +264,17 @@ export function registerMockIpc() {
 
     sendLog(MOCK_ID, `\x1b[35m▶ curl ${method} ${url}\x1b[0m\n`);
     try {
-      const output = await runCurl(args);
-      sendLog(MOCK_ID, `\x1b[32m✔ curl 完成\x1b[0m\n${output}\n`);
-      return { output };
+      const { output, meta } = parseCurlMeta(await runCurl(args));
+      const summary = meta
+        ? `HTTP ${meta.status}${meta.source ? ` · ${meta.source}` : ""}${
+            meta.variant ? `(${meta.variant})` : ""
+          } · ${meta.timeMs}ms`
+        : "";
+      sendLog(
+        MOCK_ID,
+        `\x1b[32m✔ curl 完成${summary ? ` ${summary}` : ""}\x1b[0m\n${output}\n`,
+      );
+      return { output, meta };
     } catch (err) {
       sendLog(MOCK_ID, `\x1b[31m✗ curl 失败: ${err.message}\x1b[0m\n`);
       throw err;

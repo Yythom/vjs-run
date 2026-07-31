@@ -9,7 +9,7 @@ import JsonEditor from "../../components/json-editor";
 import RecommendMockModal from "./recommend-mock-modal";
 import BackendCurlModal from "./backend-curl-modal";
 import RequestSchemaPanel, { ScopeTag, formatExample } from "./request-schema-panel";
-import { METHODS, prettyJson } from "./utils";
+import { METHODS, WILDCARD_METHOD, prettyJson } from "./utils";
 import useModalNav from "../../hooks/use-modal-nav";
 import useResource from "../../hooks/use-resource";
 
@@ -747,6 +747,18 @@ export default function MockRuleEditor({
     reset(ruleToValues(rule, route));
   }
 
+  // 新建规则不再提供 "*"，但 mock-rules.json 里可能有存量的通配规则：下拉里没有
+  // 对应 option 时 select 会掉到第一项，用户随手一保存就把 "*" 静默改成 GET，
+  // 规则从「命中所有 method」缩成「只命中 GET」。所以按当前表单值补回该项。
+  //
+  // 必须用 useWatch 订阅，不能图省事读 getValues()：React Compiler 会把结果按
+  // [getValues, METHODS] 缓存，而这两个引用恒定不变 —— 表单值再怎么变都不重算。
+  // 那样只有靠「编辑器有 key={selectedKey} 必定重挂」才碰巧是对的，太脆。
+  // method 是个 select，重渲染频率跟 Path 输入框不是一个量级，订阅得起。
+  const currentMethod = useWatch({ control, name: "method" });
+  const methodOptions =
+    currentMethod === WILDCARD_METHOD ? [WILDCARD_METHOD, ...METHODS] : METHODS;
+
   // 把「表单有未保存改动」上报给父组件，用于切换选中项时拦截丢失。
   // 回调经 ref 转发：即使父组件某天传了不稳定的回调，卸载清理也只在真正卸载时跑。
   const onDirtyChangeRef = useRef(onDirtyChange);
@@ -865,9 +877,9 @@ export default function MockRuleEditor({
                 {...register("method")}
                 className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800 outline-none shadow-sm focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-all w-full appearance-none cursor-pointer font-semibold"
               >
-                {METHODS.map((m) => (
+                {methodOptions.map((m) => (
                   <option key={m} value={m}>
-                    {m}
+                    {m === WILDCARD_METHOD ? "*（通配，已不推荐）" : m}
                   </option>
                 ))}
               </select>
