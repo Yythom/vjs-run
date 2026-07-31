@@ -1,6 +1,6 @@
 {
   "name": "vjtools",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "桌面端项目启动控制台",
   "type": "module",
   "main": "src/main.js",
@@ -10,7 +10,7 @@
     "wait:renderer": "wait-on tcp:5100",
     "build": "pnpm renderer:build && electron-builder",
     "build:mac": "pnpm renderer:build && electron-builder --mac",
-    "release:mac": "npm version patch --no-git-tag-version && pnpm renderer:build && electron-builder --mac --publish always",
+    "release:mac": "npm version patch --no-git-tag-version && pnpm renderer:build && electron-builder --mac --publish always && git add package.json && git commit -m \"chore(release): v$(node -p \\\"require('./package.json').version\\\")\" && git push",
     "renderer:dev": "pnpm --dir renderer dev",
     "renderer:build": "pnpm --dir renderer build",
     "lint": "eslint \"src/**/*.{js,cjs}\"",
