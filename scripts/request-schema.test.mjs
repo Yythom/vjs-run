@@ -7,6 +7,7 @@ import { buildRoutes } from "../src/mock/server.js";
 import {
   getRequestSchema,
   getRecommendedQueryParams,
+  getResponseSchema,
 } from "../src/mock/request-schema.js";
 
 function routeFrom(operation, { method = "post", path = "/api/orders", components } = {}) {
@@ -319,3 +320,86 @@ test("getRequestSchema：参数采样失败或 body 解析失败时，优雅降�
   assert.equal(schema.body, null);
 });
 
+
+test("响应示例：挑 2xx 响应，采样 + 字段描述", () => {
+  const response = getResponseSchema(
+    routeFrom({
+      responses: {
+        400: { description: "错误", content: { "application/json": { schema: { type: "string" } } } },
+        200: {
+          description: "成功",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  total: { type: "integer", description: "总数" },
+                  list: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: { id: { type: "string", description: "订单号" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(response.status, "200");
+  assert.equal(response.contentType, "application/json");
+  assert.equal(typeof response.sample.total, "number");
+  assert.equal(response.descriptions.total, "总数");
+  // 数组内对象的描述按 `.0.` 约定建索引
+  assert.equal(response.descriptions["list.0.id"], "订单号");
+});
+
+test("响应示例：套信封时字段描述整体加 data. 前缀", () => {
+  const route = routeFrom({
+    responses: {
+      200: {
+        description: "成功",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: { total: { type: "integer", description: "总数" } },
+            },
+          },
+        },
+      },
+    },
+  });
+  const response = getResponseSchema(route, {
+    wrapSample: (sample) => ({ rc: 0, code: "SUCCESS", message: "success", data: sample }),
+  });
+
+  assert.equal(response.sample.rc, 0);
+  assert.equal(response.descriptions["data.total"], "总数");
+  assert.equal(response.descriptions.total, undefined);
+  const totalField = response.fields.find((f) => f.path === "data.total");
+  assert.equal(totalField?.description, "总数");
+});
+
+test("响应示例：没有 responses / 没有 schema 都返回 null，不抛错", () => {
+  assert.equal(getResponseSchema(routeFrom({ responses: {} })), null);
+  assert.equal(
+    getResponseSchema(routeFrom({ responses: { 204: { description: "无内容" } } })),
+    null,
+  );
+  // schema 解析失败也降级成 null
+  assert.equal(
+    getResponseSchema(
+      routeFrom({
+        responses: {
+          200: { content: { "application/json": { schema: { $ref: "external.json" } } } },
+        },
+      }),
+    ),
+    null,
+  );
+});
