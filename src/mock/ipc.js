@@ -20,6 +20,7 @@ import { convertSwaggerDoc, isGeneratedSpecFile } from "./generate-spec.js";
 import {
   getRecommendedQueryParams,
   getRequestSchema,
+  getResponseSchema,
 } from "./request-schema.js";
 import {
   MOCK_ID,
@@ -469,10 +470,15 @@ export function registerMockIpc() {
   });
 
   // 接口的请求侧 schema：参数表 + requestBody 采样，供规则编辑器展示并一键
-  // 填成变体匹配条件。响应侧没定义 schema 的接口也能正常返回。
-  ipcSafe("get-mock-request-schema", async (_, payload = {}) =>
-    getRequestSchema(await resolveRouteFromPayload(payload)),
-  );
+  // 填成变体匹配条件；同时附带响应示例（response，没定义就是 null），
+  // 让编辑器在 Response 面板里展示 swagger 定义的响应结构。
+  ipcSafe("get-mock-request-schema", async (_, payload = {}) => {
+    const route = await resolveRouteFromPayload(payload);
+    return {
+      ...getRequestSchema(route),
+      response: getResponseSchema(route, { wrapSample: wrapSampleInEnvelope }),
+    };
+  });
 
   // 根据 OpenAPI schema 推荐一份 mock JSON（不写盘，仅返回供用户复制）。
   // 入参 { method, path }：path 必须是接入了 service prefix 的完整 path

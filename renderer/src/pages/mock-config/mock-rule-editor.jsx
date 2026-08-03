@@ -9,6 +9,7 @@ import JsonEditor from "../../components/json-editor";
 import RecommendMockModal from "./recommend-mock-modal";
 import BackendCurlModal from "./backend-curl-modal";
 import RequestSchemaPanel, { ScopeTag, formatExample } from "./request-schema-panel";
+import AnnotatedJson, { CopyJsonButton } from "./annotated-json";
 import { METHODS, prettyJson } from "./utils";
 import useModalNav from "../../hooks/use-modal-nav";
 import useResource from "../../hooks/use-resource";
@@ -246,6 +247,76 @@ function FallbackResponseTitle({ control }) {
   return (
     <div className="text-xs font-bold text-slate-700">
       {variants?.length ? "Response JSON（兜底：无变体命中时返回）" : "Response JSON"}
+    </div>
+  );
+}
+
+/**
+ * 底部 Response 区块：「编辑」页是可写的 JSON 编辑器（真正会被保存的内容），
+ * 「响应示例」页是 swagger 定义推导出的只读响应结构（带类型/描述注释），
+ * 和上方请求 Body 的 JSON 视图同一套渲染。swagger 没定义响应时不显示该标签。
+ */
+function ResponseSection({ control, errors, responseSchema }) {
+  const [tab, setTab] = useState("edit");
+  const hasExample = responseSchema?.sample !== undefined;
+  const showExample = hasExample && tab === "example";
+
+  const tabClass = (active) =>
+    clsx(
+      "px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors duration-150 cursor-pointer border",
+      active
+        ? "bg-violet-500/10 text-violet-700 border-violet-200/70"
+        : "bg-white text-slate-500 border-slate-200 hover:bg-slate-50",
+    );
+
+  // 根节点的 flex-1：吃掉滚动区里 请求参数/变体 之后剩下的高度（底部按钮栏是
+  // 滚动区的兄弟节点，不在这块里，不会被盖住）；min-h 保证上方内容多到要滚动时，
+  // 这块也不会被压扁成一条。
+  return (
+    <div className="border border-slate-200/70 rounded-xl bg-white shadow-sm overflow-hidden p-3.5 flex flex-col gap-2.5 flex-1 min-h-[280px]">
+      <div className="flex items-center gap-2 shrink-0">
+        <FallbackResponseTitle control={control} />
+        {errors.responseText && (
+          <div className="text-[11px] text-red-600 font-medium">
+            {errors.responseText.message}
+          </div>
+        )}
+        {hasExample && (
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {showExample && (
+              <>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  {responseSchema.status} · {responseSchema.contentType}
+                </span>
+                <CopyJsonButton text={JSON.stringify(responseSchema.sample, null, 2)} />
+              </>
+            )}
+            <button type="button" onClick={() => setTab("edit")} className={tabClass(!showExample)}>
+              MOCK 编辑
+            </button>
+            <button type="button" onClick={() => setTab("example")} className={tabClass(showExample)}>
+              响应示例
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="flex-1 min-h-0 border border-slate-200/80 rounded-lg overflow-hidden bg-[#fafbfc]">
+        {showExample ? (
+          <AnnotatedJson
+            sample={responseSchema.sample}
+            descriptions={responseSchema.descriptions}
+            fields={responseSchema.fields}
+          />
+        ) : (
+          <Controller
+            name="responseText"
+            control={control}
+            render={({ field }) => (
+              <JsonEditor value={field.value} onChange={field.onChange} height="100%" />
+            )}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -932,29 +1003,11 @@ export default function MockRuleEditor({
             onVariantCurl={handleVariantCurl}
             requestSchema={requestSchema}
           />
-          <div className="border border-slate-200/70 rounded-xl bg-white shadow-sm overflow-hidden p-3.5 flex flex-col gap-2.5 shrink-0">
-            <div className="flex items-center gap-2 shrink-0">
-              <FallbackResponseTitle control={control} />
-              {errors.responseText && (
-                <div className="text-[11px] text-red-600 font-medium">
-                  {errors.responseText.message}
-                </div>
-              )}
-            </div>
-            <div className="h-[280px] shrink-0 border border-slate-200/80 rounded-lg overflow-hidden bg-[#fafbfc]">
-              <Controller
-                name="responseText"
-                control={control}
-                render={({ field }) => (
-                  <JsonEditor
-                    value={field.value}
-                    onChange={field.onChange}
-                    height="100%"
-                  />
-                )}
-              />
-            </div>
-          </div>
+          <ResponseSection
+            control={control}
+            errors={errors}
+            responseSchema={requestSchema?.response}
+          />
         </div>
 
         <div className="shrink-0 border-t border-border px-4 py-3 flex items-center justify-between bg-slate-50/60">

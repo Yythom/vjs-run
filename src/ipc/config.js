@@ -54,6 +54,8 @@ export function registerConfigIpc() {
       }
     }
 
-    return { config: next };
+    // 渲染进程拿到返回值后会整体替换 config state，这里必须把 _appVersion 一起带上，
+    // 否则侧边栏的版本号会在保存配置后丢失、回落到兜底值。
+    return { config: { ...next, _appVersion: app.getVersion() } };
   });
 }

@@ -1,4 +1,5 @@
-// 接口「请求侧」schema 的提取：parameters（query/path/header）+ requestBody 采样。
+// 接口「请求侧」schema 的提取：parameters（query/path/header）+ requestBody 采样，
+// 外加「响应侧」示例（getResponseSchema），两者共用同一套采样 / 描述抽取逻辑。
 //
 // 供规则编辑器展示请求参数表，并把参数一键填成变体的匹配条件；
 // getRecommendedQueryParams 另外供 curl 调试弹窗预填 Query Params。
@@ -143,4 +144,66 @@ export function getRequestSchema(route) {
     parameters,
     body,
   };
+}
+
+/** 挑一条用来做示例的响应定义：优先 2xx，其次任意具名状态，最后 default */
+function pickResponseKey(responses) {
+  const keys = Object.keys(responses);
+  return (
+    keys.find((key) => /^2\d\d$/.test(key)) ||
+    keys.find((key) => key !== "default") ||
+    (responses.default ? "default" : null)
+  );
+}
+
+/**
+ * 接口「响应侧」示例。结构与 body 一致（sample + fields + descriptions），
+ * 编辑器直接复用请求 Body 的注释化 JSON 视图渲染。
+ *
+ * wrapSample 可选：传入时用它给采样值套 mock server 的默认信封（与「推荐数据」
+ * 一致），此时原采样落到 data 下，字段描述路径要整体加 `data.` 前缀才对得上。
+ *
+ * 与 previewMockResponse 不同：这里响应没定义 schema 只返回 null，不抛错——
+ * 它只是编辑器里的一块参考信息，不该让整个 schema 请求失败。
+ */
+export function getResponseSchema(route, { wrapSample } = {}) {
+  const responses = route.operation.responses || {};
+  const responseKey = pickResponseKey(responses);
+  if (!responseKey) return null;
+
+  const definition = responses[responseKey];
+  const content = definition?.content || {};
+  const contentType =
+    Object.keys(content).find((type) => type.includes("json")) ||
+    Object.keys(content)[0] ||
+    "application/json";
+  // content[...] 是 OpenAPI 3；definition.schema 是 swagger 2 的写法
+  const schema = content[contentType]?.schema || definition?.schema;
+  if (!schema) return null;
+
+  try {
+    const raw = mockFromSchema(schema, route.spec, {});
+    let descriptions = extractBodyDescriptions(schema, route.spec);
+    let sample = raw;
+
+    if (typeof wrapSample === "function") {
+      const wrapped = wrapSample(raw, definition, responseKey);
+      // 采样被原样塞进 data（引用相等即可判定）时才加前缀；schema 本身就是
+      // 信封结构的接口，套信封只补外层字段，路径不变。
+      if (wrapped && wrapped.data === raw) {
+        descriptions = Object.fromEntries(
+          Object.entries(descriptions).map(([path, desc]) => [`data.${path}`, desc]),
+        );
+      }
+      if (wrapped !== undefined) sample = wrapped;
+    }
+
+    const fields = flattenBodyFields(sample).map((f) => ({
+      ...f,
+      description: descriptions[f.path] || "",
+    }));
+    return { contentType, status: responseKey, sample, fields, descriptions };
+  } catch {
+    return null; // 响应 schema 解析不了就当没有，不阻断请求参数面板
+  }
 }
