@@ -70,6 +70,28 @@ function validateFrontendProjectGroups(groups = []) {
   }
 }
 
+/**
+ * node 版本号归一化："v20.11.0" / "20.11.0" → "20.11.0"，非法值一律回落空串
+ * （空 = 跟随系统 PATH）。统一去掉 v 前缀，因为 nvm 的目录名带 v（v20.11.0）而
+ * n 的不带（24.15.0），对外必须用同一种写法。
+ *
+ * 定义在这里而不是 node-manager.js，是为了让 node-manager → normalize 单向依赖，
+ * 避免 normalize ↔ store ↔ node-manager 成环。
+ */
+export function normalizeNodeVersion(value) {
+  const raw = String(value || "").trim().replace(/^v/, "");
+  return /^\d+\.\d+\.\d+$/.test(raw) ? raw : "";
+}
+
+/** 支持的 node 版本管理器 */
+export const NODE_PROVIDERS = ["nvm"];
+
+/** 非法/未指定的管理器一律回落空串（空 = 不限定管理器） */
+export function normalizeNodeProvider(value) {
+  const raw = String(value || "").trim();
+  return NODE_PROVIDERS.includes(raw) ? raw : "";
+}
+
 function normalizeSidebarWidth(value) {
   const width = Number(value || DEFAULT_CONFIG.sidebarWidth);
   if (!Number.isFinite(width)) return DEFAULT_CONFIG.sidebarWidth;
@@ -131,6 +153,8 @@ export function normalizeConfig(raw = {}) {
     mockAll:
       raw.mockAll === undefined ? DEFAULT_CONFIG.mockAll : Boolean(raw.mockAll),
     mockVjToken: String(raw.mockVjToken || "").trim(),
+    nodeProvider: normalizeNodeProvider(raw.nodeProvider),
+    nodeVersion: normalizeNodeVersion(raw.nodeVersion),
     sidebarWidth: normalizeSidebarWidth(raw.sidebarWidth),
     watchedPorts,
     weappDeploy: normalizeWeappDeploy(raw.weappDeploy),

@@ -30,6 +30,10 @@ export const DEFAULT_CONFIG = {
   mockAll: false,
   mockVjToken: "",
 
+  // 体检页选中的 node 版本管理器与版本号。默认使用 nvm
+  nodeProvider: "nvm",
+  nodeVersion: "",
+
   // UI 偏好
   sidebarWidth: 248,
 

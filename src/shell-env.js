@@ -6,6 +6,7 @@
 import path from "node:path";
 import os from "node:os";
 import { execSync } from "node:child_process";
+import { getSelectedNodeInfo } from "./node-manager.js";
 
 let cachedShellEnv = null;
 
@@ -49,6 +50,12 @@ function getHydratedShellEnv() {
     // 读不到 shell env 不致命，退化为空对象继续走 PATH 兜底
   }
 
+  // 回写 NVM_DIR / N_PREFIX：GUI 启动的 Electron 主进程 process.env 里没有它们，而
+  // node-manager.js 为了避免循环依赖只读 process.env。这里补上，自定义安装位置的
+  // 用户才能被正确识别。
+  if (env.NVM_DIR && !process.env.NVM_DIR) process.env.NVM_DIR = env.NVM_DIR;
+  if (env.N_PREFIX && !process.env.N_PREFIX) process.env.N_PREFIX = env.N_PREFIX;
+
   cachedShellEnv = env;
   return cachedShellEnv;
 }
@@ -72,7 +79,17 @@ export function buildSpawnEnv(extra = {}) {
     "/usr/sbin",
     "/sbin",
   ].filter(Boolean);
-  const hydratedPath = mergePathSegments(basePath, shellPath, guessed);
+  // 体检页选中的 node 版本要压过 shell 启动文件里的默认版本，所以放在最前面
+  // （mergePathSegments 去重时保留首次出现，前置即生效）。未选中时为空数组，
+  // PATH 与改造前完全一致。
+  const selectedNode = getSelectedNodeInfo();
+  const selectedNodeBin = selectedNode?.binDir || "";
+  const hydratedPath = mergePathSegments(
+    selectedNodeBin ? [selectedNodeBin] : [],
+    basePath,
+    shellPath,
+    guessed,
+  );
   const env = {
     ...process.env,
     ...shellEnv,
@@ -81,6 +98,16 @@ export function buildSpawnEnv(extra = {}) {
     TERM: "xterm-256color",
     ...extra,
   };
+
+  // 放在 shellEnv 展开之后，否则会被 shell 启动文件里的旧值盖回去。
+  // node-gyp / node-addon-api 靠这两个变量找头文件，漏了会编到别的版本上。
+  // 清除 npm_config_prefix 避免 nvm 与自定义 npm 前缀设置冲突
+  if (selectedNode?.provider === "nvm") {
+    env.NVM_BIN = selectedNodeBin;
+    env.NVM_INC = path.join(path.dirname(selectedNodeBin), "include", "node");
+    delete env.npm_config_prefix;
+    delete env.NPM_CONFIG_PREFIX;
+  }
 
   if (!env.PNPM_HOME) {
     const pnpmHome = env.PATH.split(path.delimiter).find((p) =>

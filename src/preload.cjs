@@ -153,6 +153,28 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 开发环境体检：并发检测 node / pnpm / git / brew / pm2 版本，返回结果数组
   checkEnv: () => ipcRenderer.invoke("check-env"),
 
+  // 切换全局 node 版本。provider 为管理器（"nvm" / "n"），version 传空串 = 跟随系统
+  setNodeVersion: (provider, version) =>
+    ipcRenderer.invoke("set-node-version", { provider, version }),
+
+  // 一键安装 nvm + 最新 LTS。过程日志走 onProcessLog，projectId 为 "__env-install__"
+  installNvm: () => ipcRenderer.invoke("install-nvm"),
+
+  // 一键卸载 nvm
+  uninstallNvm: () => ipcRenderer.invoke("uninstall-nvm"),
+
+  // 通过 nvm 安装指定 Node 版本
+  installNodeVersion: (provider, version) =>
+    ipcRenderer.invoke("install-node-version", { provider, version }),
+
+  // 通过 nvm 卸载指定 Node 版本
+  uninstallNodeVersion: (version) =>
+    ipcRenderer.invoke("uninstall-node-version", { version }),
+
+  // 安装/指定 pnpm 版本号
+  installPnpmVersion: (version) =>
+    ipcRenderer.invoke("install-pnpm-version", { version }),
+
   // 端口占用查看：传入端口数组，返回每个端口的占用状态、进程名、PID
   checkPorts: (ports) => ipcRenderer.invoke("check-ports", { ports }),
 
