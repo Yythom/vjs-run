@@ -23,6 +23,9 @@ import { MOCK_ID, stopMockService } from "./mock/service.js";
 import { registerAllIpc } from "./ipc/index.js";
 import { buildSpawnEnv } from "./shell-env.js";
 import { stopAllProcesses } from "./process-manager.js";
+import { stopListener } from "./feishu/listener.js";
+import { stopRun } from "./feishu/runner.js";
+import { setDataDir } from "./feishu/task-store.js";
 
 // ─── 全局兜底 ────────────────────────────────────────────────────────────────
 // 任何异步路径上未处理的错误都不要让 main 进程整体崩掉。
@@ -77,6 +80,8 @@ app
     }
 
     // b) electron-store 构造必须在 app.whenReady 之后（内部要读 userData 路径）
+    //    对接任务库同样落 userData，这里把真实路径注入进去（e2e 隔离也走这条）
+    setDataDir(app.getPath("userData"));
     try {
       initStore();
     } catch (err) {
@@ -124,4 +129,7 @@ app.on("activate", () => {
 app.on("before-quit", () => {
   stopAllProcesses();
   stopMockService(MOCK_ID).catch((err) => console.error("[stopMock]", err));
+  // 常驻的 lark-cli event consume 子进程，不收会变孤儿进程继续占着事件订阅
+  stopListener();
+  stopRun();
 });

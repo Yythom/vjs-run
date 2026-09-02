@@ -4,6 +4,7 @@ import { Route, Routes, useLocation } from "react-router";
 import { Toaster } from "sonner";
 import TitleBar from "./components/title-bar";
 import Sidebar from "./pages/sidebar";
+import DockingFloatingBar from "./components/docking-floating-bar";
 
 // ─── 按需 chunk ────────────────────────────────────────────────────────────────
 // Welcome / TitleBar / Sidebar 走主 chunk（首屏必需）。
@@ -22,6 +23,7 @@ import PortCheckerPage from "./pages/port-checker-page";
 import CleanupPage from "./pages/cleanup-page";
 import CodecPage from "./pages/codec-page";
 import WeappDeployPage from "./pages/weapp-deploy-page";
+import DockingPage from "./pages/docking-page";
 import RepoEditorModal from "./modals/repo-editor-modal";
 import CleanModal from "./modals/clean-modal";
 
@@ -37,6 +39,7 @@ function MainRoutes() {
   return (
     <Routes location={backgroundLocation || location}>
       <Route index element={<ProjectDashboard />} />
+      <Route path="/docking" element={<DockingPage />} />
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
       <Route path="/swagger-convert" element={<SwaggerConvertPage />} />
@@ -97,6 +100,9 @@ export default function AppShell() {
       <Suspense fallback={null}>
         <ModalRoutes />
       </Suspense>
+
+      {/* 赛博牛马全局 AI 执行悬浮条 */}
+      <DockingFloatingBar />
 
       {createPortal(
         <Toaster
