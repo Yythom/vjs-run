@@ -55,6 +55,20 @@ body,
   pointer-events: auto !important;
 }
 
+/* 全局输入框文字与占位符默认底色增强（低特异度，允许组件类名与暗色样式正常覆盖） */
+:where(input:not([type="checkbox"]):not([type="radio"]), textarea, select) {
+  color: #0f172a;
+}
+
+:where(input, textarea)::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+:where(input:not([type="checkbox"]):not([type="radio"]), textarea, select):focus {
+  color: #020617;
+}
+
 /* 全局极简微型滚动条 */
 ::-webkit-scrollbar {
   width: 5px;

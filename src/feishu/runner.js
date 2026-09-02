@@ -1,0 +1,1076 @@
+// 把勾选的需求交给无头 Agent（Claude Code / Antigravity / Codex）自动处理。
+//
+// 闭环靠 MCP：Agent 通过 mcp-server.mjs 暴露的工具读任务详情、回写状态、
+// 需求含糊时直接飞书反问提出人。所以「标记完成」「自动反问」不是我们写死的
+// 后处理，而是它自己在处理过程中该做就做。
+//
+// 三档执行力度（面板可选，默认最保守的 analyze）：
+//   analyze —— 能读代码、能标状态、能反问，但不许改文件、不许跑命令
+//   edit    —— 允许改文件，仍不给 Bash
+//   full    —— 全放开，无人值守
+// 越往下越自动，也越意味着「外部飞书消息能直接驱动本地改动」，慎选。
+//
+// 支持三个引擎：
+//   claude —— MCP 走 --mcp-config 临时注入，用完即走，不落任何配置文件；
+//             力度靠 --allowedTools / --disallowedTools 精确控制。
+//   agy    —— 没有 --mcp-config，MCP 必须预先注册到全局配置并在 settings.json
+//             里放行（面板上的「配置 agy」按钮干这事）；力度只能靠 --mode，
+//             analyze 档借力于「headless 无法弹权限确认，写操作会被自动拒绝」。
+//   codex  —— OpenAI Codex CLI，MCP 预先注册到全局 ~/.codex/config.toml
+//             （面板上的「配置 codex」按钮干这事）；以 exec --json 驱动。
+
+import fs from "node:fs";
+import path from "node:path";
+import readline from "node:readline";
+import crypto from "node:crypto";
+import { spawn, execFileSync } from "node:child_process";
+import electron from "electron";
+const app = electron?.app || (typeof electron === "object" ? electron.default?.app : null);
+import PQueue from "p-queue";
+import { SRC_DIR } from "../paths.js";
+import { buildSpawnEnv } from "../shell-env.js";
+import { sendToAllWindows } from "../ui-channel.js";
+import { buildPrompt } from "./prompt.js";
+import { appendThread, getTask, updateTask } from "./task-store.js";
+import { saveJobRun } from "./history-store.js";
+import { showDesktopNotification } from "./listener.js";
+
+let spawnImpl = spawn;
+export function setSpawnImpl(fn) {
+  spawnImpl = fn || spawn;
+}
+
+export function sanitizeBranchSlug(text) {
+  return String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\u4e00-\u9fa5-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 30);
+}
+
+/**
+ * 执行前切隔离分支。
+ *
+ * 返回 { ok, branchName, error }：
+ *   - 不需要分支（没开开关 / analyze 只读档）→ ok:true, branchName:""
+ *   - 不在 git 仓库里 → ok:true, branchName:""，只记一条日志，照跑
+ *   - 工作区有未提交改动 / checkout 失败 → ok:false，**调用方必须中止本次 job**。
+ *     隔离开着却切不过去，还硬在当前分支上让 AI 改代码，比不隔离更危险。
+ *
+ * 任务已经有 branchName（澄清后恢复执行的第二轮）时优先回到那条分支，
+ * 否则按 tasks[0] 的短号+标题新建。
+ */
+export function setupGitBranch({ cwd, tasks, createBranch, mode, emitLog = () => {} }) {
+  if (!createBranch || mode === "analyze" || !tasks || tasks.length === 0) {
+    return { ok: true, branchName: "" };
+  }
+
+  const git = (args) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+  // 1. 检查是否在 Git 仓库内。不是仓库就没得隔离，但也没必要拦着不跑
+  try {
+    if (git(["rev-parse", "--is-inside-work-tree"]).trim() !== "true") {
+      emitLog("meta", "⚠️ 该目录不是 Git 仓库，跳过隔离分支");
+      return { ok: true, branchName: "" };
+    }
+  } catch (_) {
+    emitLog("meta", "⚠️ 该目录不是 Git 仓库，跳过隔离分支");
+    return { ok: true, branchName: "" };
+  }
+
+  // 2. 已跟踪文件必须干净。脏着切分支会把别人没提交的改动一起拖过去，
+  //    等 AI 再改一轮，就再也分不清哪些是谁动的了。
+  //    但未跟踪文件（??）不算脏：它们不属于任何分支，git diff 看不到，
+  //    切分支时原地不动，混不进 AI 的改动里。工具生成物、本地草稿目录
+  //    常年躺在工作区，把它们也算脏会让派活 100% 失败。
+  //    真出现同名冲突时 checkout 自己会拒绝，下面的 catch 兜得住。
+  try {
+    const dirty = git(["status", "--porcelain", "--untracked-files=no"]).trim();
+    if (dirty) {
+      const files = dirty.split("\n").slice(0, 5).join("\n");
+      return {
+        ok: false,
+        branchName: "",
+        error:
+          `工作区有未提交改动，无法安全切到隔离分支：\n${files}` +
+          `${dirty.split("\n").length > 5 ? "\n…" : ""}\n` +
+          "请先提交或 stash，或关掉「自动创建隔离分支」再派活。",
+      };
+    }
+  } catch (err) {
+    return { ok: false, branchName: "", error: `检查工作区状态失败: ${err.message}` };
+  }
+
+  // 3. 构造分支名。恢复执行时沿用任务上已有的那条
+  const firstTask = tasks[0];
+  const existing = tasks.find((t) => t.branchName)?.branchName || "";
+  const slug = sanitizeBranchSlug(firstTask.title) || "docking-task";
+  const branchName = existing || `docking/seq-${firstTask.seq || 1}-${slug}`;
+
+  try {
+    const current = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+    if (current === branchName) {
+      emitLog("meta", `🌿 已在隔离分支上: ${branchName}`);
+    } else {
+      let branchExists = false;
+      try {
+        git(["rev-parse", "--verify", branchName]);
+        branchExists = true;
+      } catch (_) {}
+
+      git(branchExists ? ["checkout", branchName] : ["checkout", "-b", branchName]);
+      emitLog(
+        "meta",
+        branchExists
+          ? `🌿 检出既有隔离分支: ${branchName}`
+          : `🌿 已创建并切入隔离分支: ${branchName}`,
+      );
+    }
+
+    // 回写 branchName 到任务库中
+    for (const t of tasks) {
+      updateTask(t.id, { branchName });
+      t.branchName = branchName;
+    }
+
+    return { ok: true, branchName };
+  } catch (err) {
+    return {
+      ok: false,
+      branchName: "",
+      error: `切换隔离分支 ${branchName} 失败: ${err.message}`,
+    };
+  }
+}
+
+const MCP_SERVER = path.join(SRC_DIR, "feishu", "mcp-server.mjs");
+
+const MCP_TOOLS = [
+  "mcp__docking__get_task",
+  "mcp__docking__update_task",
+  "mcp__docking__ask_requester",
+];
+
+// 只读档：显式禁掉所有会动到工作区的工具，MCP 工具照常可用。
+// 名单必须写全——漏一个（比如 MultiEdit）只读档就穿了。
+// 不用 --permission-mode plan：plan 档会把 MCP 工具一起挡掉，
+// update_task / ask_requester 一没了，整个闭环就断了。
+const READONLY_DENY = [
+  "Edit",
+  "MultiEdit",
+  "Write",
+  "NotebookEdit",
+  "Bash",
+  "BashOutput",
+  "KillShell",
+  "KillBash",
+];
+
+// 可改代码档：只挡命令执行
+const EDIT_DENY = ["Bash", "BashOutput", "KillShell", "KillBash"];
+
+const EDIT_TOOLS = new Set([
+  "Edit",
+  "Write",
+  "NotebookEdit",
+  "replace_file_content",
+  "write_to_file",
+]);
+
+function extractFilePath(input, cwd) {
+  if (!input || typeof input !== "object") return null;
+  const rawPath =
+    input.file_path ||
+    input.TargetFile ||
+    input.path ||
+    input.file ||
+    input.filePath ||
+    input.targetFile;
+  if (!rawPath || typeof rawPath !== "string") return null;
+
+  if (cwd && path.isAbsolute(rawPath)) {
+    if (rawPath.startsWith(cwd)) {
+      return path.relative(cwd, rawPath) || rawPath;
+    }
+  }
+  return rawPath;
+}
+
+const MODES = {
+  analyze: { permissionMode: "acceptEdits", deny: READONLY_DENY },
+  edit: { permissionMode: "acceptEdits", deny: EDIT_DENY },
+  full: { permissionMode: "bypassPermissions", deny: [] },
+};
+
+/**
+ * agy 的力度映射。无头（-p）模式下无法交互式确认权限，统一使用 --dangerously-skip-permissions，
+ * 具体力度通过 buildInstructions 中的 Prompt 指令强约束控制。
+ */
+const AGY_MODES = {
+  analyze: ["--dangerously-skip-permissions"],
+  edit: ["--dangerously-skip-permissions"],
+  full: ["--dangerously-skip-permissions"],
+};
+
+/**
+ * codex 的力度映射。无头（exec）模式下统一 bypass approval 并允许跳过 git 仓库检查，
+ * 具体力度通过 buildInstructions 中的 Prompt 指令强约束控制。
+ */
+const CODEX_MODES = {
+  analyze: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
+  edit: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
+  full: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
+};
+
+// ─── 调度队列与任务池 ────────────────────────────────────────────────────────
+// 单个 job 的墙钟上限。claude 侧没有 agy 的 --print-timeout 那种参数，
+// 卡住的话会一直占着 concurrency 里的一个名额，后面排队的永远轮不上
+const JOB_TIMEOUT_MS = 60 * 60 * 1000;
+// SIGTERM 之后等这么久还没退，就 SIGKILL
+const KILL_GRACE_MS = 10 * 1000;
+// 已结束的 job 留多少条在内存里（面板只展示最近 30 条）
+const MAX_FINISHED_JOBS = 50;
+// 单个 job 最多留多少条日志，防止长跑把内存撑爆
+const MAX_JOB_LOGS = 5000;
+
+const queue = new PQueue({ concurrency: 2 });
+const jobs = new Map(); // jobId -> Job
+const repoLocks = new Map(); // cwd -> Promise chain (写操作互斥锁)
+let lastEngine = "claude";
+
+/** 结束的 job 攒太多会一直占着内存（每个还挂着几千条日志），按结束时间淘汰 */
+function pruneFinishedJobs() {
+  const finished = Array.from(jobs.values())
+    .filter((j) => j.status === "done" || j.status === "error" || j.status === "aborted")
+    .sort((a, b) => (b.endTime || 0) - (a.endTime || 0));
+  for (const job of finished.slice(MAX_FINISHED_JOBS)) {
+    jobs.delete(job.id);
+  }
+}
+
+/** 先礼后兵：SIGTERM 给它收尾的机会，超时不退再 SIGKILL */
+function killProc(job) {
+  const proc = job.proc;
+  if (!proc) return;
+  try {
+    proc.kill("SIGTERM");
+  } catch (_) {}
+  const timer = setTimeout(() => {
+    if (job.proc === proc) {
+      try {
+        proc.kill("SIGKILL");
+      } catch (_) {}
+    }
+  }, KILL_GRACE_MS);
+  if (typeof timer.unref === "function") timer.unref();
+}
+
+/**
+ * 某个任务当前是否已经有 job 在排队或运行。
+ *
+ * 同一个任务同时只允许一个 AI 在跑：一个话题就是一条任务，话题里连发两条指令
+ * 不该起两个进程去抢同一份上下文和同一个工作区。跨任务（跨话题）才走并行。
+ */
+export function hasActiveJobForTask(taskId) {
+  if (!taskId) return false;
+  for (const job of jobs.values()) {
+    if (
+      (job.status === "queued" || job.status === "running") &&
+      Array.isArray(job.taskIds) &&
+      job.taskIds.includes(taskId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// job 收尾回调。listener 用它把本轮运行期间攒下的追问合并成下一轮。
+// 做成注册式而不是让 runner 反向 import listener，避免两个模块循环依赖。
+let jobSettledHook = null;
+export function setJobSettledHook(fn) {
+  jobSettledHook = typeof fn === "function" ? fn : null;
+}
+
+/** 通知 listener 这个 job 收尾了。调用点都放在 job.status 落定之后 */
+function fireJobSettled(job) {
+  if (!jobSettledHook) return;
+  try {
+    jobSettledHook({ jobId: job.id, taskIds: job.taskIds, status: job.status });
+  } catch (err) {
+    console.error("[runner] job 收尾回调失败:", err);
+  }
+}
+
+function serializeJob(job) {
+  if (!job) return null;
+  return {
+    id: job.id,
+    taskIds: job.taskIds || [],
+    cwd: job.cwd || "",
+    mode: job.mode || "analyze",
+    engine: job.engine || "claude",
+    createBranch: Boolean(job.createBranch),
+    branchName: job.branchName || "",
+    status: job.status, // "queued" | "running" | "done" | "error" | "aborted"
+    createdAt: job.createdAt || 0,
+    startTime: job.startTime || 0,
+    endTime: job.endTime || 0,
+    exitCode: job.exitCode,
+    error: job.error || "",
+    modifiedFiles: job.modifiedFiles ? Array.from(job.modifiedFiles) : [],
+  };
+}
+
+export function getQueueStatus() {
+  const all = Array.from(jobs.values()).map(serializeJob);
+  const running = all.filter((j) => j.status === "running");
+  const queued = all.filter((j) => j.status === "queued");
+  const history = all
+    .filter((j) => j.status === "done" || j.status === "error" || j.status === "aborted")
+    .sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
+    .slice(0, 30);
+  return {
+    running,
+    queued,
+    history,
+    size: queue.size,
+    pending: queue.pending,
+    jobs: all,
+  };
+}
+
+export function getRunStatus() {
+  const allJobs = Array.from(jobs.values());
+  const running = allJobs.find((j) => j.status === "running");
+  const queued = allJobs.filter((j) => j.status === "queued");
+
+  return {
+    running: Boolean(running),
+    jobId: running?.id || null,
+    taskIds: running?.taskIds || [],
+    cwd: running?.cwd || "",
+    engine: running?.engine || lastEngine,
+    mode: running?.mode || "analyze",
+    createBranch: Boolean(running?.createBranch),
+    branchName: running?.branchName || "",
+    startTime: running?.startTime || 0,
+    modifiedFiles: running?.modifiedFiles ? Array.from(running.modifiedFiles) : [],
+    queueLength: queued.length,
+  };
+}
+
+/**
+ * 在 spawn 用的 PATH 里解析 bin 的绝对路径（纯查表，不额外起进程）。
+ * 只用于日志诊断，找不到返回空字符串。
+ */
+function resolveBinPath(bin) {
+  try {
+    const env = buildSpawnEnv();
+    for (const dir of String(env.PATH || "").split(path.delimiter)) {
+      if (!dir) continue;
+      const full = path.join(dir, bin);
+      if (fs.existsSync(full)) return full;
+    }
+  } catch (_) {}
+  return "";
+}
+
+function emitQueueStatus() {
+  sendToAllWindows("docking-queue-status", getQueueStatus());
+}
+
+function emitRunStatus() {
+  sendToAllWindows("docking-run-status", getRunStatus());
+}
+
+function emitJobLog(jobId, kind, text) {
+  const job = jobs.get(jobId);
+  if (job) {
+    if (!job.logs) job.logs = [];
+    job.logs.push({ at: Date.now(), kind, text });
+    if (job.logs.length > MAX_JOB_LOGS) {
+      job.logs.splice(0, job.logs.length - MAX_JOB_LOGS);
+    }
+  }
+  sendToAllWindows("docking-job-log", { jobId, kind, text, at: Date.now() });
+}
+
+/**
+ * 把一次 job 的完整记录落到 AI 调用历史。
+ *
+ * finish（子进程跑完/异常退出）和 bail（还没起子进程就失败，比如切分支失败、
+ * 启动失败）都必须走这里——否则失败得越早的 job 在历史里越查不到，
+ * 而那恰恰是最需要回看日志定位的一类。
+ */
+function persistJobRun(job, code, modifiedFiles = []) {
+  const taskTitles = job.taskIds
+    .map((tid) => {
+      const t = getTask(tid);
+      return t ? `#${t.seq} ${t.title}` : "";
+    })
+    .filter(Boolean);
+
+  try {
+    saveJobRun({
+      id: job.id,
+      taskIds: job.taskIds,
+      taskTitles,
+      engine: job.engine,
+      mode: job.mode,
+      cwd: job.cwd,
+      branchName: job.branchName,
+      status: job.status,
+      exitCode: code,
+      error: job.error,
+      createdAt: job.createdAt,
+      startTime: job.startTime,
+      endTime: job.endTime,
+      durationMs: (job.endTime || Date.now()) - (job.startTime || Date.now()),
+      prompt: job.prompt || "",
+      logs: job.logs || [],
+      modifiedFiles,
+      resultNote: job.resultNote || "",
+    });
+  } catch (err) {
+    console.error("[runner] 持久化历史记录失败:", err);
+  }
+
+  sendToAllWindows("docking-history-updated", { jobId: job.id });
+}
+
+/**
+ * job 没能正常跑完时，把还停在 doing 的任务放回 inbox。
+ * 否则任务会永远显示「进行中」——队列里其实什么都没有，面板和飞书两头都看不出异常。
+ */
+function rollbackDoingTasks(taskIds = [], reason = "") {
+  for (const tid of taskIds) {
+    const task = getTask(tid);
+    if (!task || task.status !== "doing") continue;
+    updateTask(tid, { status: "inbox" });
+    if (reason) {
+      appendThread(tid, { role: "system", text: `本次自动处理未完成：${reason}`, at: Date.now() });
+    }
+  }
+}
+
+/** 给 Agent 的执行指引。需求正文由 buildPrompt 生成，并根据 mode 注入约束与收尾规则 */
+function buildInstructions(tasks, mode = "analyze") {
+  const modeGuidelines = {
+    analyze: [
+      "【当前为「只读分析 / 逻辑排查」模式】",
+      "- 严禁修改、创建或删除任何代码与文件，严禁执行任何产生变更副作用的命令。",
+      "- 专用于代码逻辑排查、业务疑问解答或改动方案可行性分析。",
+      "- 分析完成后，必须调用 update_task 把排查解答结论详细写入 note（包含关键文件路径、函数名、流转逻辑与最终结论），并将状态置为 done；如需求或疑问不明用 ask_requester 反问提出人。",
+    ],
+    edit: [
+      "【当前为「允许改代码」模式】",
+      "- 允许直接修改代码实现需求或修复问题，但不要随意执行外部非必要命令。",
+      "- 修改完成后，必须调用 update_task 在 note 中清晰说明改动了哪些文件、做了什么修改，并标记完成状态（done）。",
+    ],
+    full: [
+      "【当前为「全自动」模式】",
+      "- 无人值守全自动处理，允许修改代码文件、执行测试及验证命令。",
+      "- 处理完成后，必须调用 update_task 在 note 中总结改动内容与测试结果，并标记完成状态（done）。",
+    ],
+  };
+
+  const guidelines = modeGuidelines[mode] || modeGuidelines.analyze;
+
+  return [
+    buildPrompt(tasks),
+    "",
+    "---",
+    "",
+    ...guidelines,
+    "",
+    "处理约定：",
+    `- 这些任务的短号分别是：${tasks.map((t) => `#${t.seq}`).join("、")}`,
+    "- 需要更完整的上下文（含历次澄清记录）时，用 get_task 按短号取。",
+    "- **信息不足或逻辑疑问未明确时不要猜**：用 ask_requester 直接飞书问提出人，问完这条就停在那，等他回复。",
+    "- 每条任务处理完，必须用 update_task 回写：做完/答复完毕置 done，做不了置 ignored；",
+    "  note 里写清楚逻辑排查解答、或者改了哪些文件做了什么修改、或者为什么做不了。",
+  ].join("\n");
+}
+
+/** claude：MCP 配置直接拼进命令行，不落文件 */
+function claudeArgs(prompt, mode) {
+  const conf = MODES[mode] || MODES.analyze;
+  const mcpConfig = JSON.stringify({
+    mcpServers: {
+      docking: {
+        command: process.execPath,
+        args: [MCP_SERVER],
+        // Electron 当 node 用，才读得到打包进 asar 的 mcp-server
+        env: {
+          ELECTRON_RUN_AS_NODE: "1",
+          VJTOOLS_USER_DATA_DIR:
+            typeof app?.getPath === "function" ? app.getPath("userData") : process.cwd(),
+        },
+      },
+    },
+  });
+
+  const args = [
+    "-p",
+    prompt,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--mcp-config",
+    mcpConfig,
+    "--permission-mode",
+    conf.permissionMode,
+    "--allowedTools",
+    ...MCP_TOOLS,
+  ];
+  if (conf.deny.length) args.push("--disallowedTools", ...conf.deny);
+  return args;
+}
+
+/** agy：MCP 靠预先注册（面板配置过），这里只管力度与超时保护（放宽至 1 小时） */
+function agyArgs(prompt, mode) {
+  return [
+    "-p",
+    prompt,
+    "--output-format",
+    "stream-json",
+    "--print-timeout",
+    "60m",
+    ...(AGY_MODES[mode] || AGY_MODES.analyze),
+  ];
+}
+
+/** codex：MCP 靠预先注册在 ~/.codex/config.toml，通过 exec --json 驱动 */
+function codexArgs(prompt, mode) {
+  return [
+    "exec",
+    "--json",
+    "--ephemeral",
+    ...(CODEX_MODES[mode] || CODEX_MODES.analyze),
+    prompt,
+  ];
+}
+
+/**
+ * 压入调度队列
+ */
+export function enqueueJob({
+  ids = [],
+  cwd,
+  mode = "analyze",
+  engine = "claude",
+  createBranch = false,
+}) {
+  if (!cwd) throw new Error("必须指定工作目录");
+  const tasks = ids.map((id) => getTask(id)).filter(Boolean);
+  if (!tasks.length) throw new Error("没有勾选任何任务");
+
+  lastEngine = engine;
+  const jobId = crypto.randomUUID();
+  const job = {
+    id: jobId,
+    taskIds: ids,
+    cwd,
+    mode,
+    engine,
+    createBranch: Boolean(createBranch),
+    branchName: "",
+    status: "queued",
+    createdAt: Date.now(),
+    startTime: 0,
+    endTime: 0,
+    exitCode: null,
+    error: "",
+    modifiedFiles: new Set(),
+    proc: null,
+  };
+
+  jobs.set(jobId, job);
+  emitQueueStatus();
+  emitRunStatus();
+
+  // 记录任务运行配置与关联 repoPath，方便后续澄清回复后自动恢复
+  for (const t of tasks) {
+    updateTask(t.id, {
+      lastRunConfig: {
+        cwd,
+        mode,
+        engine,
+        createBranch: Boolean(createBranch),
+        branchName: t.branchName || "",
+      },
+      repoPath: cwd,
+    });
+  }
+
+  // 压入 p-queue 异步执行池
+  queue.add(async () => {
+    if (job.status === "aborted") return;
+
+    // Repo 互斥锁：如果当前 job 涉及修改文件（edit / full），同一 cwd 必须串行
+    let releaseLock = () => {};
+    if (mode !== "analyze") {
+      const prevLock = repoLocks.get(cwd) || Promise.resolve();
+      let currentRelease;
+      const currentLock = new Promise((resolve) => {
+        currentRelease = resolve;
+      });
+      const chain = prevLock.then(() => currentLock);
+      repoLocks.set(cwd, chain);
+      releaseLock = () => {
+        currentRelease();
+        // 我是这条 cwd 上最后一个排队的，就把 key 一起清掉，
+        // 否则 promise 链和 Map 只增不减
+        if (repoLocks.get(cwd) === chain) repoLocks.delete(cwd);
+      };
+      await prevLock;
+    }
+
+    if (job.status === "aborted") {
+      releaseLock();
+      return;
+    }
+
+    try {
+      await runJobProcess(job, tasks);
+    } finally {
+      releaseLock();
+    }
+  });
+
+  return { jobId, status: job.status, queue: getQueueStatus() };
+}
+
+/**
+ * 实际运行子进程
+ */
+function runJobProcess(job, tasks) {
+  return new Promise((resolve) => {
+    job.status = "running";
+    job.startTime = Date.now();
+    emitQueueStatus();
+    emitRunStatus();
+
+    // 还没起子进程就失败的统一出口：标错、回滚任务状态、通知渲染层
+    const bail = (message) => {
+      job.status = "error";
+      job.error = message;
+      job.endTime = Date.now();
+      emitJobLog(job.id, "error", message);
+      rollbackDoingTasks(job.taskIds, message);
+      emitQueueStatus();
+      emitRunStatus();
+      persistJobRun(job, 1, []);
+      const payload = {
+        jobId: job.id,
+        code: 1,
+        taskIds: job.taskIds,
+        engine: job.engine,
+        modifiedFiles: [],
+        error: message,
+      };
+      sendToAllWindows("docking-job-done", payload);
+      sendToAllWindows("docking-run-done", payload);
+      pruneFinishedJobs();
+      // 放在最后：此时 job.status 已落定，hasActiveJobForTask 不再把它算作占用，
+      // 回调里可以直接派下一轮
+      fireJobSettled(job);
+      resolve();
+    };
+
+    // 先切隔离分支，再起 Agent。切不过去就别跑——宁可不做，也不能闷头改在用户当前分支上
+    const branch = setupGitBranch({
+      cwd: job.cwd,
+      tasks,
+      createBranch: job.createBranch,
+      mode: job.mode,
+      emitLog: (kind, text) => emitJobLog(job.id, kind, text),
+    });
+    if (!branch.ok) {
+      bail(branch.error || "切换隔离分支失败");
+      return;
+    }
+    job.branchName = branch.branchName;
+
+    const prompt = buildInstructions(tasks, job.mode);
+    job.prompt = prompt;
+    const isAgy = job.engine === "agy";
+    const isCodex = job.engine === "codex";
+    const bin = isAgy ? "agy" : isCodex ? "codex" : "claude";
+    const args = isAgy
+      ? agyArgs(prompt, job.mode)
+      : isCodex
+        ? codexArgs(prompt, job.mode)
+        : claudeArgs(prompt, job.mode);
+
+    let proc;
+    try {
+      proc = spawnImpl(bin, args, {
+        cwd: job.cwd,
+        env: buildSpawnEnv(),
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      job.proc = proc;
+    } catch (err) {
+      bail(`启动失败: ${err.message}`);
+      return;
+    }
+
+    emitJobLog(
+      job.id,
+      "meta",
+      `${bin} ${isCodex ? "exec" : "-p"}（${job.mode} 模式）· ${job.cwd}${
+        job.branchName ? ` · 🌿 ${job.branchName}` : ""
+      }`,
+    );
+    // 异常退出时第一件要排除的事：跑的到底是不是我们以为的那个二进制。
+    // 打包后的 Electron PATH 和登录 shell 的 PATH 未必一致，解析结果要能回看。
+    emitJobLog(job.id, "meta", `可执行文件: ${resolveBinPath(bin) || "未在 PATH 中找到"}`);
+
+    // 兜底超时。agy 有 --print-timeout，claude 没有，统一在这层管
+    const timeoutTimer = setTimeout(() => {
+      if (job.status !== "running") return;
+      job.status = "aborted";
+      job.error = `超过 ${Math.round(JOB_TIMEOUT_MS / 60000)} 分钟未结束，已强制中断`;
+      emitJobLog(job.id, "error", job.error);
+      killProc(job);
+    }, JOB_TIMEOUT_MS);
+    if (typeof timeoutTimer.unref === "function") timeoutTimer.unref();
+
+    const textBuffer = new Map();
+    const rl = readline.createInterface({ input: proc.stdout });
+    rl.on("line", (line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed[0] !== "{") return;
+      try {
+        const evt = JSON.parse(trimmed);
+        if (isAgy) renderAgyEvent(evt, job, textBuffer);
+        else if (isCodex) renderCodexEvent(evt, job);
+        else renderEvent(evt, job);
+      } catch {
+        // 忽略非 JSON 行
+      }
+    });
+
+    const stderrTail = [];
+    proc.stderr.on("data", (chunk) => {
+      const t = chunk.toString().trim();
+      if (!t) return;
+      emitJobLog(job.id, "error", t);
+      stderrTail.push(t);
+      if (stderrTail.length > 20) stderrTail.shift();
+    });
+
+    let settled = false;
+    const finish = (code = 0) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      try {
+        rl.close();
+      } catch {}
+      job.proc = null;
+      job.endTime = Date.now();
+      job.exitCode = code;
+
+      if (job.status !== "aborted") {
+        job.status = code === 0 ? "done" : "error";
+      }
+
+      // 历史列表只展示 error 字段，非零退出时它却一直是空的——
+      // 把 stderr 尾巴带上，不用点进详情就知道死在哪
+      if (code !== 0 && !job.error) {
+        const tail = stderrTail.join("\n").slice(-2000);
+        job.error = tail ? `异常退出（${code}）：${tail}` : `异常退出（${code}）`;
+      }
+
+      emitJobLog(
+        job.id,
+        code === 0 ? "meta" : "error",
+        code === 0 ? "处理结束" : `异常退出（${code}）`,
+      );
+
+      // 异常退出或被中断时，AI 多半没来得及用 update_task 回写状态，
+      // 任务会一直挂在 doing。放回 inbox，人才看得见它需要重新派
+      if (job.status !== "done") {
+        rollbackDoingTasks(
+          job.taskIds,
+          job.status === "aborted" ? "已被手动中断" : job.error || `异常退出（${code}）`,
+        );
+      }
+
+      const modifiedFilesArr = Array.from(job.modifiedFiles);
+
+      // 将改动文件持久化写入关联任务中并同步至会话流
+      if (modifiedFilesArr.length > 0) {
+        for (const tid of job.taskIds) {
+          const existing = getTask(tid);
+          if (existing) {
+            const merged = Array.from(
+              new Set([...(existing.modifiedFiles || []), ...modifiedFilesArr]),
+            );
+            const latestThread = existing.thread || [];
+            const lastEntry = latestThread[latestThread.length - 1];
+            if (
+              !lastEntry ||
+              lastEntry.role !== "assistant" ||
+              (lastEntry.at || 0) < job.startTime
+            ) {
+              const fileListText = modifiedFilesArr
+                .map((f) => `- \`${f}\``)
+                .join("\n");
+              appendThread(tid, {
+                role: "assistant",
+                text: `已根据指令完成代码修改，共改动 ${modifiedFilesArr.length} 个文件：\n${fileListText}`,
+                at: Date.now(),
+              });
+            }
+            updateTask(tid, { modifiedFiles: merged });
+          }
+        }
+      }
+
+      if (code === 0 && job.status === "done") {
+        const taskNames = job.taskIds
+          .map((tid) => {
+            const t = getTask(tid);
+            return t ? `#${t.seq} ${t.title}` : "";
+          })
+          .filter(Boolean)
+          .join("、");
+        showDesktopNotification({
+          title: "【AI 处理完成】",
+          body: `${taskNames || "任务处理完成"}${
+            modifiedFilesArr.length > 0
+              ? ` · 改动了 ${modifiedFilesArr.length} 个文件`
+              : ""
+          }`,
+        });
+      }
+
+      emitQueueStatus();
+      emitRunStatus();
+
+      // 持久化保存本次 AI 调用的完整记录（指令、参数、清洗后的日志、改动文件）
+      persistJobRun(job, code, modifiedFilesArr);
+
+      const donePayload = {
+        jobId: job.id,
+        code,
+        taskIds: job.taskIds,
+        engine: job.engine,
+        modifiedFiles: modifiedFilesArr,
+      };
+      sendToAllWindows("docking-job-done", donePayload);
+      sendToAllWindows("docking-run-done", donePayload);
+
+      pruneFinishedJobs();
+      // 放在最后：此时 job.status 已落定，hasActiveJobForTask 不再把它算作占用，
+      // 回调里可以直接派下一轮
+      fireJobSettled(job);
+      resolve();
+    };
+
+    proc.on("error", (err) => {
+      job.error = err.message;
+      emitJobLog(job.id, "error", `进程错误: ${err.message}`);
+      finish(1);
+    });
+
+    proc.on("close", (code) => {
+      finish(code ?? 0);
+    });
+  });
+}
+
+export function onQueueIdle() {
+  return queue.onIdle();
+}
+
+/**
+ * 取消指定 Job
+ */
+export function cancelJob(jobId) {
+  const job = jobs.get(jobId);
+  if (!job) return false;
+
+  if (job.status === "queued") {
+    job.status = "aborted";
+    job.endTime = Date.now();
+    emitJobLog(job.id, "meta", "已从排队队列中取消");
+    rollbackDoingTasks(job.taskIds, "已从排队队列中取消");
+    emitQueueStatus();
+    emitRunStatus();
+    return true;
+  }
+
+  if (job.status === "running" && job.proc) {
+    job.status = "aborted";
+    job.endTime = Date.now();
+    emitJobLog(job.id, "error", "任务被用户手动中断");
+    killProc(job);
+    emitQueueStatus();
+    emitRunStatus();
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * 停止所有正在运行或排队中的任务
+ */
+export function stopAllJobs() {
+  let count = 0;
+  for (const job of jobs.values()) {
+    if (job.status === "queued" || job.status === "running") {
+      cancelJob(job.id);
+      count++;
+    }
+  }
+  return count > 0;
+}
+
+/**
+ * 向下兼容的 startRun / stopRun 接口
+ */
+export function startRun({
+  ids = [],
+  cwd,
+  mode = "analyze",
+  engine = "claude",
+  createBranch = false,
+}) {
+  enqueueJob({ ids, cwd, mode, engine, createBranch });
+  return getRunStatus();
+}
+
+export function stopRun() {
+  return stopAllJobs();
+}
+
+/** 把 stream-json 事件翻译成人能看的一行 */
+function renderEvent(evt, job) {
+  if (evt.type === "assistant") {
+    for (const block of evt.message?.content || []) {
+      if (block.type === "text" && block.text.trim()) {
+        emitJobLog(job.id, "text", block.text.trim());
+      } else if (block.type === "tool_use") {
+        const name = String(block.name || "").replace(/^mcp__docking__/, "");
+        if (EDIT_TOOLS.has(name) || EDIT_TOOLS.has(block.name)) {
+          const fp = extractFilePath(block.input, job.cwd);
+          if (fp) job.modifiedFiles.add(fp);
+        }
+        emitJobLog(job.id, "tool", `${name} ${summarizeInput(block.input)}`.trim());
+      }
+    }
+  } else if (evt.type === "result") {
+    if (evt.is_error) emitJobLog(job.id, "error", evt.result || "执行出错");
+  }
+}
+
+function renderAgyEvent(evt, job, textBuffer) {
+  if (evt.event === "step_update") {
+    const su = evt.step_update || {};
+
+    if (su.step_type === "tool" && su.state === "ACTIVE") {
+      const params = su.tool_info?.parameters || {};
+      const name = su.tool_name === "call_mcp_tool" ? params.ToolName : su.tool_name;
+      const input = su.tool_name === "call_mcp_tool" ? params.Arguments : params;
+      if (EDIT_TOOLS.has(name) || EDIT_TOOLS.has(su.tool_name)) {
+        const fp = extractFilePath(input, job.cwd);
+        if (fp) job.modifiedFiles.add(fp);
+      }
+      emitJobLog(job.id, "tool", `${name || "tool"} ${summarizeInput(input)}`.trim());
+      return;
+    }
+
+    if (su.step_type === "agent_response") {
+      const key = su.step_index;
+      if (su.text_delta) {
+        textBuffer.set(key, (textBuffer.get(key) || "") + su.text_delta);
+      }
+      if (su.state === "DONE") {
+        const text = (textBuffer.get(key) || "").trim();
+        textBuffer.delete(key);
+        if (text) emitJobLog(job.id, "text", text);
+      }
+    }
+    return;
+  }
+
+  if (evt.event === "result") {
+    textBuffer.clear();
+    const r = evt.result || {};
+    if (r.status && r.status !== "SUCCESS") {
+      emitJobLog(job.id, "error", r.response || `执行结束：${r.status}`);
+    }
+  }
+}
+
+function renderCodexEvent(evt, job) {
+  if (evt.type === "item.completed") {
+    const item = evt.item || {};
+    if (item.type === "agent_message" && item.text) {
+      const text = item.text.trim();
+      if (text) emitJobLog(job.id, "text", text);
+    } else if (item.type === "mcp_tool_call") {
+      const name = String(item.tool || item.name || "").replace(/^mcp__docking__/, "");
+      const input = item.arguments || item.input || {};
+      if (EDIT_TOOLS.has(name) || EDIT_TOOLS.has(item.tool || item.name)) {
+        const fp = extractFilePath(input, job.cwd);
+        if (fp) job.modifiedFiles.add(fp);
+      }
+      emitJobLog(job.id, "tool", `${name || "mcp"} ${summarizeInput(input)}`.trim());
+    } else if (item.type === "apply_patch" || item.type === "file_change" || item.type === "patch") {
+      const fp = extractFilePath(item, job.cwd);
+      if (fp) job.modifiedFiles.add(fp);
+      emitJobLog(job.id, "tool", `apply_patch ${fp || summarizeInput(item)}`.trim());
+    } else if (item.type === "command_execution") {
+      if (item.exit_code !== null && item.exit_code !== 0) {
+        emitJobLog(
+          job.id,
+          "error",
+          `命令执行失败 (${item.exit_code}): ${item.command || ""}`.trim(),
+        );
+      }
+    }
+    return;
+  }
+
+  if (evt.type === "item.started") {
+    const item = evt.item || {};
+    if (item.type === "command_execution" && item.command) {
+      emitJobLog(job.id, "tool", `bash: ${item.command}`.trim());
+    } else if (item.type === "mcp_tool_call") {
+      const name = String(item.tool || item.name || "").replace(/^mcp__docking__/, "");
+      const input = item.arguments || item.input || {};
+      emitJobLog(job.id, "tool", `${name || "mcp"} ${summarizeInput(input)}`.trim());
+    }
+    return;
+  }
+
+  if (evt.type === "error" || evt.type === "turn.failed") {
+    const msg = evt.message || evt.error?.message || "执行出错";
+    job.error = msg;
+    emitJobLog(job.id, "error", msg);
+  }
+}
+
+function summarizeInput(input) {
+  if (!input || typeof input !== "object") return "";
+  const parts = [];
+  if (input.seq) parts.push(`#${input.seq}`);
+  if (input.status) parts.push(input.status);
+  if (input.question) parts.push(`「${String(input.question).slice(0, 40)}」`);
+  if (input.file_path) parts.push(path.basename(String(input.file_path)));
+  return parts.join(" ");
+}

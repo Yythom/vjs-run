@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import TitleBar from "./components/title-bar";
 import Sidebar from "./pages/sidebar";
 import ProjectDashboard from "./pages/project-dashboard";
+import DockingFloatingBar from "./components/docking-floating-bar";
 
 // ─── 按需 chunk ────────────────────────────────────────────────────────────────
 // TitleBar / Sidebar / ProjectDashboard（默认首页）走主 chunk（首屏必需）。
@@ -21,6 +22,7 @@ const PortCheckerPage = lazy(() => import("./pages/port-checker-page"));
 const CleanupPage = lazy(() => import("./pages/cleanup-page"));
 const CodecPage = lazy(() => import("./pages/codec-page"));
 const WeappDeployPage = lazy(() => import("./pages/weapp-deploy-page"));
+const DockingPage = lazy(() => import("./pages/docking-page"));
 const RepoEditorModal = lazy(() => import("./modals/repo-editor-modal"));
 const CleanModal = lazy(() => import("./modals/clean-modal"));
 
@@ -36,6 +38,7 @@ function MainRoutes() {
   return (
     <Routes location={backgroundLocation || location}>
       <Route index element={<ProjectDashboard />} />
+      <Route path="/docking" element={<DockingPage />} />
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
       <Route path="/swagger-convert" element={<SwaggerConvertPage />} />
@@ -96,6 +99,9 @@ export default function AppShell() {
       <Suspense fallback={null}>
         <ModalRoutes />
       </Suspense>
+
+      {/* 赛博牛马全局 AI 执行悬浮条 */}
+      <DockingFloatingBar />
 
       {createPortal(
         <Toaster

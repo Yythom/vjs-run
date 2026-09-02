@@ -13,7 +13,7 @@
     "release:mac": "npm version patch --no-git-tag-version && pnpm renderer:build && electron-builder --mac --publish always && git add package.json && git commit -m \"chore(release): v$(node -p \"require('./package.json').version\")\" && git push",
     "renderer:dev": "pnpm --dir renderer dev",
     "renderer:build": "pnpm --dir renderer build",
-    "lint": "eslint \"src/**/*.{js,cjs}\"",
+    "lint": "eslint \"src/**/*.{js,cjs,mjs}\"",
     "lint:all": "pnpm lint && pnpm --dir renderer lint",
     "test": "node --test 'scripts/**/*.test.mjs'"
   },
@@ -29,6 +29,7 @@
     "wait-on": "^8.0.5"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@uiw/codemirror-theme-github": "^4.25.10",
     "chokidar": "^5.0.0",
     "cookie": "^1.1.1",
@@ -40,7 +41,9 @@
     "jieba-wasm": "^2.4.0",
     "js-yaml": "^4.1.0",
     "lodash-es": "^4.18.1",
-    "openapi-sampler": "^1.7.3"
+    "openapi-sampler": "^1.7.3",
+    "p-queue": "^9.3.3",
+    "zod": "^4.4.3"
   },
   "build": {
     "appId": "com.xieyuteng.vjtools",

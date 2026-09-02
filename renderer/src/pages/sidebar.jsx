@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import clsx from "../utils/clsx";
 import { useAppConfig, updateAppConfig } from "../stores/app-config-store";
+import { useDockingTasks } from "../stores/docking-store";
 import {
   startMock,
   stopMock,
@@ -21,7 +22,7 @@ function clampSidebarWidth(width) {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
 }
 
-function NavigationMenuItem({ icon, label, path, activePath }) {
+function NavigationMenuItem({ icon, label, path, activePath, badge }) {
   const navigate = useNavigate();
   const openModal = useModalNav();
   // 精确匹配或者当 path="/" 时匹配以 /projects 开头的子路径，或者非根路径的前缀匹配
@@ -53,6 +54,11 @@ function NavigationMenuItem({ icon, label, path, activePath }) {
       )}
       <span className="text-[13px] shrink-0">{icon}</span>
       <span className="flex-1 truncate">{label}</span>
+      {typeof badge === "number" && badge > 0 && (
+        <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-sky-500 text-white min-w-[18px] text-center leading-none shadow-xs">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </div>
   );
 }
@@ -112,6 +118,14 @@ export default function Sidebar() {
   );
   const [resizing, setResizing] = useState(false);
   const asideRef = useRef(null);
+  const dockingTasks = useDockingTasks();
+  const pendingDockingCount = useMemo(
+    () =>
+      dockingTasks.filter(
+        (t) => t.status === "inbox" || t.status === "awaiting",
+      ).length,
+    [dockingTasks],
+  );
 
 
 
@@ -172,6 +186,13 @@ export default function Sidebar() {
           label="项目管理"
           path="/"
           activePath={activePath}
+        />
+        <NavigationMenuItem
+          icon="🐂"
+          label="赛博牛马"
+          path="/docking"
+          activePath={activePath}
+          badge={pendingDockingCount}
         />
 
         {/* Mock 服务区 */}
