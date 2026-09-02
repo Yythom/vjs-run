@@ -265,4 +265,146 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("update-progress", handler);
     return () => ipcRenderer.removeListener("update-progress", handler);
   },
+
+  // ── 赛博牛马（飞书需求面板）────────────────────────────────────────────────────
+
+  // 探测 lark-cli 是否安装、事件总线是否在跑
+  dockingProbe: () => ipcRenderer.invoke("docking-probe"),
+
+  // 探测 Claude Code CLI 是否安装
+  dockingClaudeProbe: () => ipcRenderer.invoke("docking-claude-probe"),
+
+  // 一键安装指定 CLI 包（如 lark-cli 或 claude）
+  dockingInstallCli: (name) => ipcRenderer.invoke("docking-install-cli", { name }),
+
+  // 飞书消息监听器的启停与当前状态
+  dockingGetStatus: () => ipcRenderer.invoke("docking-get-status"),
+  dockingStart: () => ipcRenderer.invoke("docking-start"),
+  dockingStop: () => ipcRenderer.invoke("docking-stop"),
+
+  // 运行时开关（目前只有「收到 /r 是否自动回执」）
+  dockingGetSettings: () => ipcRenderer.invoke("docking-get-settings"),
+  dockingSetSettings: (patch) =>
+    ipcRenderer.invoke("docking-set-settings", { patch }),
+
+  // 任务列表读写
+  dockingListTasks: () => ipcRenderer.invoke("docking-list-tasks"),
+  dockingAddTask: (payload) =>
+    ipcRenderer.invoke("docking-add-task", payload || {}),
+  dockingUpdateTask: (id, patch) =>
+    ipcRenderer.invoke("docking-update-task", { id, patch }),
+  dockingDeleteTask: (id) => ipcRenderer.invoke("docking-delete-task", { id }),
+
+  // 批量删除（勾选后一次删掉），一次写盘
+  dockingDeleteTasks: (ids) =>
+    ipcRenderer.invoke("docking-delete-tasks", { ids }),
+
+  // 勾选的任务拼成 prompt，copy=true 时同时写入系统剪贴板
+  dockingBuildPrompt: (ids, copy) =>
+    ipcRenderer.invoke("docking-build-prompt", { ids, copy }),
+
+  // 用飞书原路回问提出人（仅由用户在面板显式触发）
+  dockingAsk: (id, question) =>
+    ipcRenderer.invoke("docking-ask", { id, question }),
+
+  // 人工一键飞书回复排查解答给提出人
+  dockingReplySolution: (id, text, markDone) =>
+    ipcRenderer.invoke("docking-reply-solution", { id, text, markDone }),
+
+  // ── 自动处理（无头 Agent） ──────────────────────────────────────────────────────
+
+  // 在 cwd 起一个无头会话处理需求
+  // mode: analyze | edit | full；engine: claude | agy；createBranch: boolean
+  dockingRunStart: (ids, cwd, mode, engine, createBranch) =>
+    ipcRenderer.invoke("docking-run-start", {
+      ids,
+      cwd,
+      mode,
+      engine,
+      createBranch,
+    }),
+
+  // agy 接入：检测 / 配置 / 撤销（会动全局 MCP 注册和 settings.json）
+  dockingAgyProbe: () => ipcRenderer.invoke("docking-agy-probe"),
+  dockingAgySetup: () => ipcRenderer.invoke("docking-agy-setup"),
+  dockingAgyTeardown: () => ipcRenderer.invoke("docking-agy-teardown"),
+
+  // codex 接入：检测 / 配置 / 撤销（会动全局 MCP 注册 ~/.codex/config.toml）
+  dockingCodexProbe: () => ipcRenderer.invoke("docking-codex-probe"),
+  dockingCodexSetup: () => ipcRenderer.invoke("docking-codex-setup"),
+  dockingCodexTeardown: () => ipcRenderer.invoke("docking-codex-teardown"),
+  dockingRunStop: (jobId) => ipcRenderer.invoke("docking-run-stop", { jobId }),
+  dockingRunStatus: () => ipcRenderer.invoke("docking-run-status"),
+  dockingJobCancel: (jobId) => ipcRenderer.invoke("docking-job-cancel", { jobId }),
+  dockingQueueStatus: () => ipcRenderer.invoke("docking-queue-status"),
+
+  // 调度队列全量状态推送
+  onDockingQueueStatus: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-queue-status", handler);
+    return () => ipcRenderer.removeListener("docking-queue-status", handler);
+  },
+
+  // Job 独立日志流
+  onDockingJobLog: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-job-log", handler);
+    return () => ipcRenderer.removeListener("docking-job-log", handler);
+  },
+
+  // Job 独立完成推送
+  onDockingJobDone: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-job-done", handler);
+    return () => ipcRenderer.removeListener("docking-job-done", handler);
+  },
+
+  // 处理过程的日志行（向下兼容）
+  onDockingRunLog: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-run-log", handler);
+    return () => ipcRenderer.removeListener("docking-run-log", handler);
+  },
+
+  // 运行状态变化（向下兼容）
+  onDockingRunStatus: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-run-status", handler);
+    return () => ipcRenderer.removeListener("docking-run-status", handler);
+  },
+
+  // 运行完成推送（向下兼容）
+  onDockingRunDone: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-run-done", handler);
+    return () => ipcRenderer.removeListener("docking-run-done", handler);
+  },
+
+  // 监听任务变化推送（created / updated / replied）
+  onDockingTask: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-task", handler);
+    return () => ipcRenderer.removeListener("docking-task", handler);
+  },
+
+  // 监听监听器状态推送（running / retrying / lastError）
+  onDockingStatus: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-status", handler);
+    return () => ipcRenderer.removeListener("docking-status", handler);
+  },
+
+  // ── AI 调用历史记录 ────────────────────────────────────────────────────────
+  dockingGetHistory: (params) =>
+    ipcRenderer.invoke("docking-history-list", params || {}),
+  dockingGetHistoryDetail: (jobId) =>
+    ipcRenderer.invoke("docking-history-get", { jobId }),
+  dockingDeleteHistory: (jobId) =>
+    ipcRenderer.invoke("docking-history-delete", { jobId }),
+  dockingClearHistory: () => ipcRenderer.invoke("docking-history-clear"),
+  onDockingHistoryUpdated: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("docking-history-updated", handler);
+    return () => ipcRenderer.removeListener("docking-history-updated", handler);
+  },
 });
