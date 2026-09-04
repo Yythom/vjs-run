@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import clsx from "../utils/clsx";
 import PageShell from "../components/page-shell";
 import Modal from "../components/modal";
@@ -25,7 +25,6 @@ import {
   removeTask,
   removeTasks,
   saveSettings,
-  setActiveJobId,
   setRunModalOpen,
   setRunTargets,
   setSelectedIds,
@@ -33,11 +32,8 @@ import {
   startRun,
   stopListening,
   toggleSelected,
-  useDockingActiveJobId,
   useDockingJobLogs,
   useDockingQueue,
-  useDockingRunLog,
-  useDockingRunModalOpen,
   useDockingRunTargets,
   useDockingSelectedIds,
   useDockingSettings,
@@ -189,6 +185,12 @@ function formatTime(ts) {
   return new Date(ts).toLocaleString("zh-CN", { hour12: false });
 }
 
+function formatDuration(seconds) {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 // 可用的无头引擎
 const ENGINES = [
   { key: "claude", label: "Claude Code", desc: "临时注入 MCP，用完即走" },
@@ -215,36 +217,7 @@ const RUN_MODES = [
   },
 ];
 
-// ─── 处理过程日志 ────────────────────────────────────────────────────────────
-function RunLog({ entries, running }) {
-  const endRef = useRef(null);
 
-  // 新日志进来自动滚到底
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [entries.length]);
-
-  return (
-    <div className="h-[420px] overflow-y-auto rounded bg-slate-50 border border-border p-3 space-y-1.5 font-mono">
-      {entries.map((entry, i) => (
-        <div
-          key={i}
-          className={clsx(
-            "text-[12px] whitespace-pre-wrap break-words",
-            entry.kind === "tool" && "text-sky-700 font-semibold",
-            entry.kind === "error" && "text-rose-700 font-semibold",
-            entry.kind === "meta" && "text-slate-600 font-mono",
-            entry.kind === "text" && "text-slate-800 font-sans",
-          )}
-        >
-          {entry.kind === "tool" ? `▸ ${entry.text}` : entry.text}
-        </div>
-      ))}
-      {running && <div className="text-[12px] text-slate-600 font-bold">…</div>}
-      <div ref={endRef} />
-    </div>
-  );
-}
 
 // ─── 话题详情弹窗 ────────────────────────────────────────────────────────────
 /**
@@ -263,7 +236,8 @@ function TaskThreadModal({
   onReplySolution,
   onRun,
   onDelete,
-  onOpenJob,
+  onCancelJob,
+  onViewHistory,
 }) {
   if (!task) return null;
 
@@ -295,17 +269,54 @@ function TaskThreadModal({
       srOnly={false}
       className="w-[1080px] max-w-[95vw] h-[88vh] p-0"
       headerAction={
-        <span
-          className={clsx(
-            "text-[10px] px-1.5 py-0.5 rounded border mr-1",
-            badge.cls,
+        <div className="flex items-center gap-1.5 mr-1">
+          <span
+            className={clsx(
+              "text-[10px] px-1.5 py-0.5 rounded border",
+              badge.cls,
+            )}
+          >
+            {badge.text}
+          </span>
+          {onViewHistory && (
+            <button
+              type="button"
+              className="text-[10px] text-slate-700 hover:text-sky-800 bg-slate-100 hover:bg-sky-50 border border-slate-300 hover:border-sky-300 px-2 py-0.5 rounded font-medium transition cursor-pointer flex items-center gap-1"
+              title="查看该需求的历次 AI 调用历史记录（指令与结果）"
+              onClick={() => onViewHistory(task.id)}
+            >
+              <span>📜</span>
+              <span>调用历史</span>
+            </button>
           )}
-        >
-          {badge.text}
-        </span>
+        </div>
       }
     >
       <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3.5 space-y-3">
+        {/* 正在执行状态横幅 */}
+        {runningJob && (
+          <div className="rounded-lg bg-emerald-50/80 border border-emerald-300 p-2.5 flex items-center justify-between text-emerald-900 shadow-2xs">
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse shrink-0" />
+              <span className="font-bold">⚡ AI 正在后台分析处理中</span>
+              <span className="text-emerald-700 font-medium">
+                ({runningJob.engine === "agy" ? "Antigravity" : runningJob.engine === "codex" ? "Codex" : "Claude Code"} · {RUN_MODES.find((m) => m.key === runningJob.mode)?.label || runningJob.mode})
+              </span>
+              {runningJob.branchName && (
+                <span className="font-mono text-[11px] bg-white border border-emerald-300 px-1.5 py-0.5 rounded text-emerald-800">
+                  🌿 {runningJob.branchName}
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="text-xs px-2.5 py-1 rounded border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 font-semibold cursor-pointer shadow-2xs transition shrink-0"
+              onClick={() => onCancelJob?.(runningJob.id)}
+            >
+              中断执行
+            </button>
+          </div>
+        )}
         {/* 提出人 / 时间 / 项目 / 分支 等元信息，弹窗里看不到卡片了得补一行 */}
         <div className="flex items-center gap-2 flex-wrap text-[11px] text-slate-600">
           <span className="text-slate-800 font-medium">
@@ -536,25 +547,6 @@ function TaskThreadModal({
             </div>
           );
         })}
-
-        {/* 正在执行状态气泡 */}
-        {runningJob && (
-          <div className="rounded-lg bg-emerald-50/70 border border-emerald-300 p-2.5 flex items-center justify-between text-emerald-900">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
-              <span className="text-xs font-bold">
-                ⚡ AI 正在根据最新对话流处理中…
-              </span>
-            </div>
-            <button
-              type="button"
-              className="text-xs px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold cursor-pointer shadow-xs"
-              onClick={() => onOpenJob(runningJob)}
-            >
-              查看实时进度
-            </button>
-          </div>
-        )}
       </div>
 
       {/* 累计改动文件列表 */}
@@ -658,14 +650,22 @@ function TaskCard({
   runningJob,
   queuedJob,
   onCancelJob,
-  onOpenJob,
+  now,
+  latestLog = null,
 }) {
   const [expanded, setExpanded] = useState(false);
   const badge = STATUS_BADGE[task.status] || STATUS_BADGE.inbox;
   const clarifications = (task.thread || []).slice(1);
+  const elapsed =
+    runningJob?.startTime && now
+      ? Math.max(0, Math.floor((now - runningJob.startTime) / 1000))
+      : 0;
 
   return (
-    <div className="border border-border rounded-lg bg-white overflow-hidden shadow-2xs">
+    <div
+      id={`task-card-${task.id}`}
+      className="border border-border rounded-lg bg-white overflow-hidden shadow-2xs transition"
+    >
       <div className="flex items-start gap-3 p-3">
         <input
           type="checkbox"
@@ -676,10 +676,10 @@ function TaskCard({
         <button
           type="button"
           className="min-w-0 flex-1 text-left cursor-pointer"
-          title="点击查看完整话题往来"
+          title="点击查看完整话题往来与答复"
           onClick={() => setExpanded(true)}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-slate-900 truncate">
               {task.title}
             </span>
@@ -700,9 +700,12 @@ function TaskCard({
               </span>
             )}
             {runningJob && (
-              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-emerald-300 bg-emerald-50 text-emerald-800 font-medium flex items-center gap-1">
+              <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-800 font-medium flex items-center gap-1.5 shadow-2xs">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
-                <span>⚡ AI处理中</span>
+                <span className="font-semibold">AI 处理中</span>
+                <span className="font-mono text-emerald-700">
+                  ({formatDuration(elapsed)})
+                </span>
               </span>
             )}
             {queuedJob && (
@@ -717,7 +720,7 @@ function TaskCard({
               </span>
             )}
           </div>
-          <div className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-600 truncate">
+          <div className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-600 truncate flex-wrap">
             <span className="font-mono font-semibold text-slate-800">
               #{task.seq}
             </span>
@@ -727,6 +730,26 @@ function TaskCard({
             </span>
             <span className="text-slate-300">·</span>
             <span className="text-slate-500">{formatTime(task.createdAt)}</span>
+            {runningJob && (
+              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-emerald-200 bg-emerald-50/60 text-emerald-900 font-medium">
+                {runningJob.engine === "agy"
+                  ? "Antigravity"
+                  : runningJob.engine === "codex"
+                    ? "Codex"
+                    : "Claude Code"}{" "}
+                ·{" "}
+                {RUN_MODES.find((m) => m.key === runningJob.mode)?.label ||
+                  runningJob.mode}
+              </span>
+            )}
+            {runningJob && latestLog && (
+              <span
+                className="shrink-0 text-[10px] text-emerald-800 bg-emerald-50/90 border border-emerald-200 px-1.5 py-0.5 rounded font-mono truncate max-w-[260px]"
+                title={latestLog}
+              >
+                ▸ {latestLog}
+              </span>
+            )}
             {task.repoPath && (
               <span
                 className="shrink-0 text-[10px] text-slate-700 bg-slate-100 border border-slate-300 px-1.5 py-0.5 rounded font-medium"
@@ -778,16 +801,24 @@ function TaskCard({
         {runningJob ? (
           <button
             type="button"
-            className="shrink-0 text-[11px] px-2.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer font-medium shadow-xs"
-            onClick={() => onOpenJob(runningJob)}
+            className="shrink-0 text-[11px] px-2.5 py-1.5 rounded border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 cursor-pointer font-medium transition shadow-2xs flex items-center gap-1"
+            title="中断当前正在执行的 AI 任务"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancelJob(runningJob.id);
+            }}
           >
-            查看进度
+            <span>⏹</span>
+            <span>中断任务</span>
           </button>
         ) : queuedJob ? (
           <button
             type="button"
             className="shrink-0 text-[11px] px-2.5 py-1.5 rounded border border-amber-300 hover:bg-amber-50 text-amber-700 cursor-pointer font-medium"
-            onClick={() => onCancelJob(queuedJob.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancelJob(queuedJob.id);
+            }}
           >
             取消排队
           </button>
@@ -795,7 +826,10 @@ function TaskCard({
           <button
             type="button"
             className="shrink-0 text-[11px] px-2.5 py-1.5 rounded bg-sky-600 text-white hover:bg-sky-700 cursor-pointer font-medium"
-            onClick={() => onRun(task)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRun(task);
+            }}
           >
             交给 AI
           </button>
@@ -811,7 +845,8 @@ function TaskCard({
         onReplySolution={onReplySolution}
         onRun={onRun}
         onDelete={onDelete}
-        onOpenJob={onOpenJob}
+        onCancelJob={onCancelJob}
+        onViewHistory={onViewHistory}
       />
     </div>
   );
@@ -1296,8 +1331,6 @@ export default function DockingPage() {
   const selectedIds = useDockingSelectedIds();
   const queue = useDockingQueue();
   const jobLogs = useDockingJobLogs();
-  const activeJobId = useDockingActiveJobId();
-  const runLog = useDockingRunLog();
   const appConfig = useAppConfig();
   const repos = appConfig?.frontendProjectGroups || [];
   const { confirm, confirmDialog } = useConfirm();
@@ -1323,7 +1356,6 @@ export default function DockingPage() {
 
   // 自动处理：runTargets 是当前要处理的任务数组（支持单条或多条批量）
   const runTargets = useDockingRunTargets();
-  const runModalOpen = useDockingRunModalOpen();
   const [cwd, setCwd] = useState("");
   const [mode, setMode] = useState("analyze");
   const [engine, setEngine] = useState("claude");
@@ -1369,19 +1401,13 @@ export default function DockingPage() {
   const [historyFilterStatus, setHistoryFilterStatus] = useState("");
 
   const runningJobs = useMemo(() => queue?.running || [], [queue?.running]);
-  const queuedJobs = useMemo(() => queue?.queued || [], [queue?.queued]);
-  const allActiveJobs = useMemo(
-    () => [...runningJobs, ...queuedJobs],
-    [runningJobs, queuedJobs],
-  );
 
-  const modalJob = useMemo(() => {
-    if (activeJobId) {
-      const found = allActiveJobs.find((j) => j.id === activeJobId);
-      if (found) return found;
-    }
-    return runningJobs[0] || queuedJobs[0] || null;
-  }, [activeJobId, allActiveJobs, runningJobs, queuedJobs]);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (runningJobs.length === 0) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [runningJobs.length]);
 
   const refreshAllProbes = () => {
     probeLark().then((p) => setProbe(p));
@@ -1719,10 +1745,11 @@ export default function DockingPage() {
         }
       }
       setRunTargets([]);
+      setRunModalOpen(false);
       showToast(
         result.status === "queued"
           ? "已加入执行队列排队中"
-          : "已启动 AI 任务处理",
+          : "⚡ 已启动 AI 任务处理，可在卡片与底部悬浮条查看进展",
         "success",
       );
     } else {
@@ -2159,14 +2186,12 @@ export default function DockingPage() {
                   runningJob={runningJob}
                   queuedJob={queuedJob}
                   onCancelJob={cancelDockingJob}
-                  onOpenJob={(j) => {
-                    setActiveJobId(j.id);
-                    const activeTasks = (j.taskIds || [])
-                      .map((id) => tasks.find((t) => t.id === id))
-                      .filter(Boolean);
-                    setRunTargets(activeTasks);
-                    setRunModalOpen(true);
-                  }}
+                  now={now}
+                  latestLog={
+                    runningJob
+                      ? jobLogs[runningJob.id]?.slice(-1)[0]?.text || null
+                      : null
+                  }
                   onRun={openRun}
                   onAsk={(t) => {
                     setAskTarget(t);
@@ -2360,92 +2385,26 @@ export default function DockingPage() {
         </div>
       </Modal>
 
-      {/* 自动处理 */}
+      {/* 派发给 AI 设置弹窗 */}
       <Modal
-        open={runModalOpen || runTargets.length > 0}
+        open={Boolean(runTargets.length > 0)}
         onClose={() => {
           setRunModalOpen(false);
           setRunTargets([]);
         }}
         title={
-          runTargets.length > 0
-            ? runTargets.length === 1
-              ? `交给 ${ENGINES.find((e) => e.key === engine)?.label || "Agent"} · #${runTargets[0].seq} ${runTargets[0].title}`
-              : `交给 ${ENGINES.find((e) => e.key === engine)?.label || "Agent"} · 批量处理 ${runTargets.length} 条需求`
-            : modalJob
-              ? `AI 处理中心 · ${allActiveJobs.length} 个任务调度中`
-              : "AI 处理详情"
+          runTargets.length === 1
+            ? `交给 ${ENGINES.find((e) => e.key === engine)?.label || "Agent"} · #${runTargets[0].seq} ${runTargets[0].title}`
+            : `交给 ${ENGINES.find((e) => e.key === engine)?.label || "Agent"} · 批量派发 ${runTargets.length} 条需求`
         }
         srOnly={false}
-        className="w-[780px] p-4"
+        className="w-[720px] p-4"
       >
-        {/* 多任务调度 Tab 栏 */}
-        {allActiveJobs.length > 0 && (
-          <div className="flex items-center gap-1.5 pb-2.5 mb-3 border-b border-border overflow-x-auto text-[11px]">
-            <span className="text-slate-400 font-medium shrink-0">任务池:</span>
-            {allActiveJobs.map((j) => {
-              const firstTask = tasks.find((t) => t.id === j.taskIds[0]);
-              const label = firstTask
-                ? `#${firstTask.seq} ${firstTask.title}`
-                : `Job ${j.id.slice(0, 6)}`;
-              const isSelected =
-                modalJob?.id === j.id && runTargets.length === 0;
-              const isRunning = j.status === "running";
-              return (
-                <button
-                  key={j.id}
-                  type="button"
-                  className={clsx(
-                    "px-2.5 py-1 rounded cursor-pointer transition flex items-center gap-1.5 shrink-0 max-w-[200px] truncate",
-                    isSelected
-                      ? isRunning
-                        ? "bg-emerald-50 text-emerald-700 border border-emerald-300 font-medium shadow-2xs"
-                        : "bg-amber-50 text-amber-700 border border-amber-300 font-medium shadow-2xs"
-                      : "bg-slate-50 text-slate-600 hover:bg-slate-100 border border-border",
-                  )}
-                  onClick={() => {
-                    setRunTargets([]);
-                    setActiveJobId(j.id);
-                  }}
-                >
-                  {isRunning ? (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  ) : (
-                    <span className="text-[10px] shrink-0">⏳</span>
-                  )}
-                  <span className="truncate">{label}</span>
-                </button>
-              );
-            })}
-            {selectedIds.length > 0 && (
-              <button
-                type="button"
-                className={clsx(
-                  "px-2.5 py-1 rounded cursor-pointer transition flex items-center gap-1 shrink-0 ml-auto text-[11px]",
-                  runTargets.length > 0
-                    ? "bg-sky-50 text-sky-700 border border-sky-300 font-medium"
-                    : "bg-white text-sky-600 hover:bg-sky-50 border border-sky-200",
-                )}
-                onClick={() => {
-                  const selectedTasks = selectedIds
-                    .map((id) => tasks.find((t) => t.id === id))
-                    .filter(Boolean);
-                  openRun(selectedTasks);
-                }}
-              >
-                <span>+ 派发所选 ({selectedIds.length})</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {runTargets.length > 0 ? (
-          <>
-            <p className="text-[11px] text-slate-400 mb-2">
-              {ENGINES.find((e) => e.key === engine)?.label || "Agent"}{" "}
-              会在选定目录里处理需求，自己回写完成状态；
-              需求说不清时直接飞书反问提出人。
-            </p>
+        <p className="text-[11px] text-slate-400 mb-2">
+          {ENGINES.find((e) => e.key === engine)?.label || "Agent"}{" "}
+          会在选定目录里处理需求，自己回写完成状态；
+          需求说不清时直接飞书反问提出人。
+        </p>
 
             {runTargets.length > 1 && (
               <div className="mb-2.5 p-2 rounded bg-slate-50 border border-slate-200">
@@ -2693,91 +2652,12 @@ export default function DockingPage() {
               <button
                 type="button"
                 disabled={!cwd}
-                className="text-xs px-3 py-1.5 rounded bg-sky-600 text-white disabled:opacity-40 cursor-pointer font-medium"
+                className="text-xs px-3.5 py-1.5 rounded bg-sky-600 hover:bg-sky-700 text-white disabled:opacity-40 cursor-pointer font-medium shadow-2xs"
                 onClick={handleRun}
               >
-                加入队列开始
+                启动处理
               </button>
             </div>
-          </>
-        ) : modalJob ? (
-          <>
-            <div className="flex items-center gap-2 mb-2">
-              <span
-                className={clsx(
-                  "text-[10px] px-1.5 py-0.5 rounded border font-medium",
-                  modalJob.status === "running"
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : "border-amber-300 bg-amber-50 text-amber-700",
-                )}
-              >
-                {modalJob.status === "running"
-                  ? "⚡ AI执行中"
-                  : "⏳ 队列排队中"}
-              </span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600 font-medium">
-                {modalJob.engine === "agy"
-                  ? "Antigravity"
-                  : modalJob.engine === "codex"
-                    ? "Codex"
-                    : "Claude Code"}
-              </span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-600">
-                {RUN_MODES.find((m) => m.key === modalJob.mode)?.label ||
-                  modalJob.mode}
-              </span>
-              {modalJob.branchName && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono">
-                  🌿 {modalJob.branchName}
-                </span>
-              )}
-              <span className="text-[11px] text-slate-400 truncate max-w-[220px]">
-                {modalJob.cwd}
-              </span>
-              <button
-                type="button"
-                className="ml-auto text-[11px] px-2 py-1 rounded border border-rose-200 text-rose-500 hover:bg-rose-50 cursor-pointer"
-                onClick={() => cancelDockingJob(modalJob.id)}
-              >
-                {modalJob.status === "queued" ? "取消排队" : "中断任务"}
-              </button>
-            </div>
-
-            {/* 实时改动文件列表展示 */}
-            {modalJob.modifiedFiles && modalJob.modifiedFiles.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap p-2 mb-2 rounded bg-emerald-50/70 border border-emerald-200/80">
-                <span className="text-[11px] text-emerald-800 font-medium shrink-0 flex items-center gap-1">
-                  <span>🛠️</span>
-                  <span>已修改文件 ({modalJob.modifiedFiles.length})：</span>
-                </span>
-                {modalJob.modifiedFiles.map((f, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    className="text-[11px] px-1.5 py-0.5 rounded bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-200 font-mono transition flex items-center gap-1 cursor-pointer"
-                    title="点击复制文件相对路径"
-                    onClick={() => {
-                      navigator.clipboard.writeText(f);
-                      showToast(`已复制: ${f}`, "success");
-                    }}
-                  >
-                    <span>📄</span>
-                    <span>{f}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <RunLog
-              entries={jobLogs[modalJob.id] || runLog}
-              running={modalJob.status === "running"}
-            />
-          </>
-        ) : (
-          <div className="text-center py-10 text-slate-400 text-[12px]">
-            暂无正在执行的任务，可在任务列表中勾选需求并点击「交给 AI」。
-          </div>
-        )}
       </Modal>
 
       {/* 回复排查解答弹窗 */}
