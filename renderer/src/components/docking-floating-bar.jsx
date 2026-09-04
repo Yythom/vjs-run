@@ -5,8 +5,6 @@ import {
   cancelDockingJob,
   clearLastRunDone,
   setActiveJobId,
-  setRunModalOpen,
-  setRunTargets,
   useDockingActiveJobId,
   useDockingJobLogs,
   useDockingLastRunDone,
@@ -85,15 +83,29 @@ export default function DockingFloatingBar() {
   }, [currentJob, jobLogs]);
 
   const handleOpenDetails = () => {
-    if (currentJob) {
-      setActiveJobId(currentJob.id);
-    }
-    if (activeTasks.length > 0) {
-      setRunTargets(activeTasks);
-    }
-    setRunModalOpen(true);
-    if (location.pathname !== "/docking") {
+    const isOtherRoute = location.pathname !== "/docking";
+    if (isOtherRoute) {
       navigate("/docking");
+    }
+    const taskId =
+      currentJob?.taskIds?.[0] ||
+      lastRunDone?.taskIds?.[0] ||
+      activeTasks[0]?.id;
+    if (taskId) {
+      setTimeout(
+        () => {
+          const el = document.getElementById(`task-card-${taskId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("ring-2", "ring-sky-400");
+            setTimeout(
+              () => el.classList.remove("ring-2", "ring-sky-400"),
+              2000,
+            );
+          }
+        },
+        isOtherRoute ? 250 : 50,
+      );
     }
   };
 
