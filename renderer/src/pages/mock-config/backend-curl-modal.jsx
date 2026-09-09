@@ -331,7 +331,7 @@ export default function BackendCurlModal({
     try {
       params = parseQueryParams(paramsTextValue);
     } catch (err) {
-      throw new Error(`Query Params 格式错误: ${err.message}`);
+      throw new Error(`Query Params 格式错误: ${err.message}`, { cause: err });
     }
     // swagger 没定义 requestBody 时 body 是空串，此时按「不带 body」发，不做 JSON 校验
     const requestBody = hasRequestBody ? body.trim() : "";
@@ -339,7 +339,7 @@ export default function BackendCurlModal({
       try {
         JSON.parse(requestBody);
       } catch (err) {
-        throw new Error(`请求 JSON 格式错误: ${err.message}`);
+        throw new Error(`请求 JSON 格式错误: ${err.message}`, { cause: err });
       }
     }
     return {
