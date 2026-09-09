@@ -119,8 +119,8 @@ function HistoryListItem({ entry, selected, checked, onSelect, onToggleCheck }) 
 }
 
 // 把 text 中匹配 keyword（大小写不敏感）的片段包成 <mark>，返回 React 节点数组和命中数。
-// activeIndex 指定当前高亮项，activeRef 挂到该项上以便滚动定位。
-function highlightMatches(text, keyword, activeIndex, activeRef) {
+// activeIndex 指定当前高亮项，该项带 data-active-match 标记以便滚动定位。
+function highlightMatches(text, keyword, activeIndex) {
   if (!keyword) return { nodes: text, count: 0 };
   const lower = text.toLowerCase();
   const kw = keyword.toLowerCase();
@@ -134,7 +134,7 @@ function highlightMatches(text, keyword, activeIndex, activeRef) {
     nodes.push(
       <mark
         key={idx}
-        ref={isActive ? activeRef : undefined}
+        data-active-match={isActive ? "" : undefined}
         className={clsx(
           "rounded-sm text-slate-900",
           isActive ? "bg-orange-400 ring-1 ring-orange-500" : "bg-amber-300/70",
@@ -155,22 +155,18 @@ function JsonBlock({ title, value, copyable, searchable }) {
   const [copied, setCopied] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const activeRef = useRef(null);
+  const preRef = useRef(null);
 
   const trimmed = keyword.trim();
   const { nodes, count } = searchable
-    ? highlightMatches(text || "", trimmed, activeIndex, activeRef)
+    ? highlightMatches(text || "", trimmed, activeIndex)
     : { nodes: text, count: 0 };
-
-  // 关键字变化后回到第一处匹配
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [trimmed]);
 
   // 当前匹配项滚动进可视区
   useEffect(() => {
-    if (activeRef.current) {
-      activeRef.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const active = preRef.current?.querySelector("[data-active-match]");
+    if (active) {
+      active.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }, [activeIndex, trimmed]);
 
@@ -199,7 +195,11 @@ function JsonBlock({ title, value, copyable, searchable }) {
           <div className="ml-auto flex items-center gap-1">
             <input
               value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
+              onChange={(e) => {
+                setKeyword(e.target.value);
+                // 关键字变化后回到第一处匹配
+                setActiveIndex(0);
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
                   e.preventDefault();
@@ -247,7 +247,10 @@ function JsonBlock({ title, value, copyable, searchable }) {
           </button>
         )}
       </div>
-      <pre className="text-[11px] leading-relaxed font-mono text-slate-800 bg-[#fafbfc] border border-border rounded-lg p-3 overflow-auto max-h-72 whitespace-pre-wrap break-all">
+      <pre
+        ref={preRef}
+        className="text-[11px] leading-relaxed font-mono text-slate-800 bg-[#fafbfc] border border-border rounded-lg p-3 overflow-auto max-h-72 whitespace-pre-wrap break-all"
+      >
         {nodes}
       </pre>
     </div>
