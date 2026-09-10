@@ -1,39 +1,53 @@
-import { useCallback, useRef, useState } from "react";
+import { useSyncExternalStore } from "react";
+import Modal from "./modal";
 import clsx from "../utils/clsx";
-import Modal from "../components/modal";
 
 /**
- * 命令式确认弹窗，替代 window.confirm —— 走应用统一的 Modal 外壳。
+ * 全局确认弹窗：命令式 confirm() + 挂在应用根部的唯一宿主。
  *
- * 用法：
- *   const { confirm, confirmDialog } = useConfirm();
- *   // 渲染树里放一次 {confirmDialog}
- *   const ok = await confirm({ title: "删除规则", message: "GET /a", danger: true });
- *   if (!ok) return;
+ * 原来 useConfirm 把 options 这份 state 交给调用它的组件持有，于是每个用到
+ * confirm 的页面都为一个「偶尔弹一次的框」在自己顶层挂了一份 state——框一开一关，
+ * 整页（DockingPage 就是整张任务列表）跟着重渲染两次，而弹框跟这些内容毫无关系。
  *
- * confirm(opts) 返回 Promise<boolean>：点确定 → true，点取消 / ESC / 点遮罩 → false。
- *
- * 传了 altText 时会多出一个次要动作按钮，点它 resolve 成 "alt"（注意是 truthy，
- * 用到 altText 的调用方要显式比较返回值，不能只判断真假）。
+ * 弹框本来就是全局单例的东西，state 该住在应用根部，跟 showToast 一样。
  */
-export default function useConfirm() {
-  const [options, setOptions] = useState(null);
-  const resolverRef = useRef(null);
 
-  const confirm = useCallback((opts) => {
-    return new Promise((resolve) => {
-      resolverRef.current = resolve;
-      setOptions(opts || {});
-    });
-  }, []);
+let current = null;
+let resolver = null;
+const listeners = new Set();
 
-  const settle = useCallback((result) => {
-    setOptions(null);
-    const resolve = resolverRef.current;
-    resolverRef.current = null;
-    resolve?.(result);
-  }, []);
+const emit = () => listeners.forEach((fn) => fn());
+const subscribe = (fn) => {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+};
+const getSnapshot = () => current;
 
+/**
+ * confirm(opts) → Promise<boolean | "alt">
+ * 点确定 true，取消 / ESC / 点遮罩 false；传了 altText 时次要按钮 resolve 成 "alt"
+ * （注意 "alt" 是 truthy，用到它的调用方要显式比较返回值）。
+ */
+export function confirm(opts) {
+  // 前一个还没关就先把它当取消收掉，避免 Promise 悬着
+  resolver?.(false);
+  return new Promise((resolve) => {
+    resolver = resolve;
+    current = opts || {};
+    emit();
+  });
+}
+
+function settle(result) {
+  const resolve = resolver;
+  resolver = null;
+  current = null;
+  emit();
+  resolve?.(result);
+}
+
+export default function ConfirmHost() {
+  const options = useSyncExternalStore(subscribe, getSnapshot);
   const {
     title = "确认",
     message = "",
@@ -43,7 +57,7 @@ export default function useConfirm() {
     danger = false,
   } = options || {};
 
-  const confirmDialog = (
+  return (
     <Modal
       open={options !== null}
       onClose={() => settle(false)}
@@ -86,6 +100,4 @@ export default function useConfirm() {
       </div>
     </Modal>
   );
-
-  return { confirm, confirmDialog };
 }

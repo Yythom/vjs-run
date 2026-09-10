@@ -5,7 +5,7 @@ import { Toaster } from "sonner";
 import TitleBar from "./components/title-bar";
 import Sidebar from "./pages/sidebar";
 import ProjectDashboard from "./pages/project-dashboard";
-import DockingFloatingBar from "./components/docking-floating-bar";
+import ConfirmHost from "./components/confirm-host";
 
 // ─── 按需 chunk ────────────────────────────────────────────────────────────────
 // TitleBar / Sidebar / ProjectDashboard（默认首页）走主 chunk（首屏必需）。
@@ -100,8 +100,8 @@ export default function AppShell() {
         <ModalRoutes />
       </Suspense>
 
-      {/* 赛博牛马全局 AI 执行悬浮条 */}
-      <DockingFloatingBar />
+      {/* 全局确认弹窗的唯一宿主 */}
+      <ConfirmHost />
 
       {createPortal(
         <Toaster
