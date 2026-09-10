@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { sendLog, sendStatus } from "./ui-channel.js";
 import { buildSpawnEnv } from "./shell-env.js";
 import { notifyProcessCrash } from "./services/notify.js";
+import { killProcessTree } from "./kill-tree.js";
 
 const runningProcesses = new Map();
 
@@ -14,19 +15,6 @@ const FORCE_KILL_DELAY_MS = 3000;
 
 export function getRunningIds() {
   return Array.from(runningProcesses.keys());
-}
-
-/**
- * 优先通过进程组发信号（确保子进程树一并退出），失败时兜底 kill 进程本身。
- */
-function killProcessTree(proc, signal) {
-  try {
-    process.kill(-proc.pid, signal);
-  } catch (_) {
-    try {
-      proc.kill(signal);
-    } catch (__) {}
-  }
 }
 
 function hasExited(proc) {
