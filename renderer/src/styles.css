@@ -97,6 +97,13 @@ button:active:not(:disabled) {
   transition: transform 0.05s ease;
 }
 
+/* 侧栏宽度。刻意不进 React state：它只影响布局，不该参与渲染，
+   也不该受「config 的 IPC 和 React 首次渲染谁先到」这种竞争的影响。
+   启动时由 main.jsx 写入，拖拽时由 sidebar 直接改这个变量。 */
+:root {
+  --sidebar-width: 248px;
+}
+
 @keyframes pulse-dot {
   0%,
   100% {

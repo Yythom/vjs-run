@@ -6,7 +6,7 @@ import MockRuleEditor from "./mock-rule-editor";
 import { ruleKey } from "./utils";
 import { useAppConfig } from "../../stores/app-config-store";
 import { showToast } from "../../utils/toast";
-import useConfirm from "../../hooks/use-confirm";
+import { confirm } from "../../components/confirm-host";
 import Modal from "../../components/modal";
 
 const CUSTOM_NEW_KEY = "__custom_new__";
@@ -18,7 +18,7 @@ const DRAFT_KEY = "__draft_from_history__";
  * （页面切到场景编辑模式，直接改场景文件）、删除、把当前规则另存为场景。
  * 录制到的场景也在这里应用。
  */
-function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
+function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit }) {
   const [open, setOpen] = useState(false);
   const [scenes, setScenes] = useState([]);
   const [name, setName] = useState("");
@@ -393,7 +393,6 @@ export default function MockConfigPage() {
     editingScene,
   });
 
-  const { confirm, confirmDialog } = useConfirm();
 
   // Editor 上报的「有未保存改动」。切换选中项前用它拦截，避免静默丢失。
   // 只在事件处理器里读取、不参与渲染，用 ref 存：编辑器进入/退出 dirty
@@ -719,7 +718,6 @@ export default function MockConfigPage() {
             editingScene={editingScene}
             onEdit={enterSceneEdit}
             onExitEdit={exitSceneEdit}
-            confirm={confirm}
           />
           <button
             type="button"
@@ -787,11 +785,9 @@ export default function MockConfigPage() {
             onSubmit={saveRule}
             onDelete={deleteRule}
             onDirtyChange={handleDirtyChange}
-            confirm={confirm}
           />
         </Modal>
       )}
-      {confirmDialog}
     </div>
   );
 }

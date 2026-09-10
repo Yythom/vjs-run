@@ -1,8 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import clsx from "../utils/clsx";
 import { useAppConfig, updateAppConfig } from "../stores/app-config-store";
-import { useDockingTasks } from "../stores/docking-store";
+import {
+  useDockingActiveJobCount,
+  usePendingTaskCount,
+} from "../stores/docking-store";
 import {
   startMock,
   stopMock,
@@ -22,7 +25,12 @@ function clampSidebarWidth(width) {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
 }
 
-function NavigationMenuItem({ icon, label, path, activePath, badge }) {
+/** 宽度只活在这个 CSS 变量里，不进 React state（见 main.jsx 的启动注释） */
+function setSidebarWidthVar(width) {
+  document.documentElement.style.setProperty("--sidebar-width", `${width}px`);
+}
+
+function NavigationMenuItem({ icon, label, path, activePath, badge, running = 0 }) {
   const navigate = useNavigate();
   const openModal = useModalNav();
   // 精确匹配或者当 path="/" 时匹配以 /projects 开头的子路径，或者非根路径的前缀匹配
@@ -54,6 +62,17 @@ function NavigationMenuItem({ icon, label, path, activePath, badge }) {
       )}
       <span className="text-[13px] shrink-0">{icon}</span>
       <span className="flex-1 truncate">{label}</span>
+      {/* 有 Agent 在跑时的呼吸绿点。全局悬浮条撤掉后，这是在别的页面里
+          唯一还能看出「后台有活在干」的地方，所以它得留在侧边栏上 */}
+      {running > 0 && (
+        <span
+          className="shrink-0 flex items-center gap-1 text-[10px] font-bold text-emerald-600"
+          title={`${running} 个 Agent 正在执行或排队`}
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          {running}
+        </span>
+      )}
       {typeof badge === "number" && badge > 0 && (
         <span className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-sky-500 text-white min-w-[18px] text-center leading-none shadow-xs">
           {badge > 99 ? "99+" : badge}
@@ -111,21 +130,13 @@ function MockMenuHeader() {
 export default function Sidebar() {
   const appConfig = useAppConfig();
   const location = useLocation();
-  const savedWidth = appConfig.sidebarWidth;
 
-  const [width, setWidth] = useState(() =>
-    clampSidebarWidth(savedWidth || SIDEBAR_DEFAULT_WIDTH),
-  );
   const [resizing, setResizing] = useState(false);
   const asideRef = useRef(null);
-  const dockingTasks = useDockingTasks();
-  const pendingDockingCount = useMemo(
-    () =>
-      dockingTasks.filter(
-        (t) => t.status === "inbox" || t.status === "awaiting",
-      ).length,
-    [dockingTasks],
-  );
+  // 侧边栏是全局常驻的，订阅整个 tasks 数组只为算一个角标数字不划算：
+  // 任何一条任务的任何一次回写都会把整根侧边栏重渲染一遍
+  const pendingDockingCount = usePendingTaskCount();
+  const activeJobCount = useDockingActiveJobCount();
 
 
 
@@ -140,7 +151,7 @@ export default function Sidebar() {
   const startResize = (event) => {
     event.preventDefault();
     const startX = event.clientX;
-    const startWidth = asideRef.current?.offsetWidth ?? width;
+    const startWidth = asideRef.current?.offsetWidth ?? SIDEBAR_DEFAULT_WIDTH;
     setResizing(true);
     let latestWidth = startWidth;
 
@@ -149,14 +160,12 @@ export default function Sidebar() {
         startWidth + moveEvent.clientX - startX,
       );
       latestWidth = nextWidth;
-      const el = asideRef.current;
-      if (el) el.style.width = `${nextWidth}px`;
+      setSidebarWidthVar(nextWidth);
     };
 
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
-      setWidth(latestWidth);
       setResizing(false);
       persistWidth(latestWidth);
     };
@@ -174,7 +183,7 @@ export default function Sidebar() {
         "relative shrink-0 bg-panel border-r border-border flex flex-col overflow-hidden",
         resizing && "select-none",
       )}
-      style={{ width }}
+      style={{ width: "var(--sidebar-width)" }}
     >
       <div className="sidebar-scroll flex-1 overflow-y-auto flex flex-col py-2.5 gap-1">
         {/* 概览区 */}
@@ -193,6 +202,7 @@ export default function Sidebar() {
           path="/docking"
           activePath={activePath}
           badge={pendingDockingCount}
+          running={activeJobCount}
         />
 
         {/* Mock 服务区 */}

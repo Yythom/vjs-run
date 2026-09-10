@@ -9,7 +9,7 @@ import {
   useAppConfigStore,
 } from "../stores/app-config-store";
 import { generateMockSpec, useGeneratingMockSpec } from "../stores/runner-store";
-import useConfirm from "../hooks/use-confirm";
+import { confirm } from "../components/confirm-host";
 import useModalNav from "../hooks/use-modal-nav";
 import { showToast } from "../utils/toast";
 
@@ -46,7 +46,6 @@ const INPUT_CLS =
 
 export default function SettingsPage() {
   const openModal = useModalNav();
-  const { confirm, confirmDialog } = useConfirm();
 
   // 配置已经在 store 里（app 启动时 init 拉过一次），直接同步取一次作为初始值。
   // 用 getState() 而不是 useAppConfig()，避免 store 变化时把用户正在编辑的表单 reset。
@@ -381,7 +380,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
-      {confirmDialog}
     </PageShell>
   );
 }
