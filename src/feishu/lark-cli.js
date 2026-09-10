@@ -11,6 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { buildSpawnEnv } from "../shell-env.js";
+import { killProcessTree } from "../kill-tree.js";
+
+// SIGTERM 之后等这么久还没退，就对进程组补 SIGKILL
+const KILL_GRACE_MS = 3000;
 
 const BIN = "lark-cli";
 
@@ -22,7 +26,13 @@ export function runCommand(bin, args, { timeout = 20000 } = {}) {
   return new Promise((resolve) => {
     let proc;
     try {
-      proc = spawn(bin, args, { env: buildSpawnEnv(), shell: false });
+      // detached 让它自成进程组：超时强杀时才能整组端掉，
+      // 不然被杀的只是直接子进程，它拉起来的东西会留在后台
+      proc = spawn(bin, args, {
+        env: buildSpawnEnv(),
+        shell: false,
+        detached: true,
+      });
     } catch (err) {
       resolve({ ok: false, error: err.message, stdout: "", stderr: "" });
       return;
@@ -39,7 +49,14 @@ export function runCommand(bin, args, { timeout = 20000 } = {}) {
     };
 
     const timer = setTimeout(() => {
-      proc.kill("SIGTERM");
+      killProcessTree(proc, "SIGTERM");
+      // 卡死的命令未必理会 SIGTERM，限时补刀，不然这个进程组就留在后台了
+      const forceKill = setTimeout(
+        () => killProcessTree(proc, "SIGKILL"),
+        KILL_GRACE_MS,
+      );
+      forceKill.unref?.();
+      proc.once("exit", () => clearTimeout(forceKill));
       finish({ ok: false, error: `${bin} 超时（${timeout}ms）`, stdout, stderr });
     }, timeout);
 
@@ -80,9 +97,14 @@ export function runLark(args, options) {
   return runCommand(BIN, args, options);
 }
 
-/** 长驻调用（event consume）。调用方自己接 stdout 并负责 kill。 */
+/**
+ * 长驻调用（event consume）。调用方自己接 stdout 并负责 kill。
+ *
+ * detached 让它自成进程组，停止时才能用 killProcessTree 把 lark-cli 连同它自己
+ * 起的子进程一起收掉，不然会留下常驻孤儿继续占着事件订阅。
+ */
 export function spawnLark(args) {
-  return spawn(BIN, args, { env: buildSpawnEnv(), shell: false });
+  return spawn(BIN, args, { env: buildSpawnEnv(), shell: false, detached: true });
 }
 
 export const CLI_PACKAGES = {

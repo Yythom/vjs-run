@@ -24,7 +24,7 @@ import { registerAllIpc } from "./ipc/index.js";
 import { buildSpawnEnv } from "./shell-env.js";
 import { stopAllProcesses } from "./process-manager.js";
 import { stopListener } from "./feishu/listener.js";
-import { stopRun } from "./feishu/runner.js";
+import { stopRun, killAllJobsNow } from "./feishu/runner.js";
 import { setDataDir } from "./feishu/task-store.js";
 
 // ─── 全局兜底 ────────────────────────────────────────────────────────────────
@@ -129,7 +129,11 @@ app.on("activate", () => {
 app.on("before-quit", () => {
   stopAllProcesses();
   stopMockService(MOCK_ID).catch((err) => console.error("[stopMock]", err));
-  // 常驻的 lark-cli event consume 子进程，不收会变孤儿进程继续占着事件订阅
-  stopListener();
+  // 常驻的 lark-cli event consume 子进程，不收会变孤儿进程继续占着事件订阅。
+  // 退出这一刻没有「体面收尾」可言，force 直接整组 SIGKILL
+  stopListener({ force: true });
   stopRun();
+  // stopRun 只发 SIGTERM，补刀的定时器等不到执行 app 就没了。退出这一刻直接对
+  // 还活着的 CLI 进程组 SIGKILL，避免留下占着 socket / 文件锁的孤儿进程。
+  killAllJobsNow();
 });

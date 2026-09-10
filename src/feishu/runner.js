@@ -24,6 +24,7 @@ import path from "node:path";
 import readline from "node:readline";
 import crypto from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
+import { killProcessTree } from "../kill-tree.js";
 import electron from "electron";
 const app = electron?.app || (typeof electron === "object" ? electron.default?.app : null);
 import PQueue from "p-queue";
@@ -258,15 +259,9 @@ function pruneFinishedJobs() {
 function killProc(job) {
   const proc = job.proc;
   if (!proc) return;
-  try {
-    proc.kill("SIGTERM");
-  } catch (_) {}
+  killProcessTree(proc, "SIGTERM");
   const timer = setTimeout(() => {
-    if (job.proc === proc) {
-      try {
-        proc.kill("SIGKILL");
-      } catch (_) {}
-    }
+    if (job.proc === proc) killProcessTree(proc, "SIGKILL");
   }, KILL_GRACE_MS);
   if (typeof timer.unref === "function") timer.unref();
 }
@@ -325,6 +320,10 @@ function serializeJob(job) {
     exitCode: job.exitCode,
     error: job.error || "",
     modifiedFiles: job.modifiedFiles ? Array.from(job.modifiedFiles) : [],
+    // 面板「Agent 进程」列表要用：pid 方便去活动监视器 / kill 核对，
+    // lastLogAt 用来判断这个 job 是真在干活还是已经卡住不出声了
+    pid: job.proc?.pid || 0,
+    lastLogAt: job.logs?.length ? job.logs[job.logs.length - 1].at || 0 : 0,
   };
 }
 
@@ -717,6 +716,10 @@ function runJobProcess(job, tasks) {
         env: buildSpawnEnv(),
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
+        // claude / codex / agy 都会再拉起自己的一串子进程（CLI 核心、ripgrep、
+        // Bash 工具、MCP server…）。自成进程组，killProcessTree 才能整组收掉，
+        // 否则那些孙进程会变成孤儿占着 /tmp 里的 socket 和仓库文件锁
+        detached: true,
       });
       job.proc = proc;
     } catch (err) {
@@ -937,6 +940,25 @@ export function stopAllJobs() {
     }
   }
   return count > 0;
+}
+
+/**
+ * 退出前的同步强杀：直接对所有在跑的进程组下 SIGKILL。
+ *
+ * stopAllJobs 走的是「SIGTERM + 10s 后补 SIGKILL」，可 app 退出时那个补刀定时器
+ * 根本没机会执行——Electron 不等 before-quit 里的异步收尾。于是收不到 / 不理会
+ * SIGTERM 的 CLI 就成了孤儿，socket 和文件锁一直留着，下次启动新会话被挡住。
+ * 退出这一刻没有「体面收尾」可言，直接整组 SIGKILL。
+ */
+export function killAllJobsNow() {
+  let count = 0;
+  for (const job of jobs.values()) {
+    if (job.proc) {
+      killProcessTree(job.proc, "SIGKILL");
+      count++;
+    }
+  }
+  return count;
 }
 
 /**
