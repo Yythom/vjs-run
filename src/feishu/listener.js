@@ -18,6 +18,7 @@ import {
 } from "./lark-cli.js";
 import { buildAckCard } from "./cards.js";
 import { sendToAllWindows } from "../ui-channel.js";
+import { killProcessTree } from "../kill-tree.js";
 import { enqueueJob, hasActiveJobForTask, setJobSettledHook } from "./runner.js";
 import { pickSmartRepo } from "./repo-matcher.js";
 import { getConfig } from "../config/store.js";
@@ -50,6 +51,8 @@ const LOOSE_MERGE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // 事件流断开后的重连退避
 const RETRY_BASE_MS = 2000;
 const RETRY_MAX_MS = 60000;
+// SIGTERM 之后等这么久还没退，就对进程组补 SIGKILL
+const KILL_GRACE_MS = 3000;
 
 // 回给提出人的任务列表里用的状态措辞（面板上的措辞是另一套，不共用）
 const STATUS_TEXT = {
@@ -128,6 +131,9 @@ function renderHelp() {
 }
 
 let child = null;
+// 已经发过 SIGTERM、但还没确认退出的旧进程。它仍占着飞书那条事件订阅，
+// 所以要起新进程之前必须先把它收干净（见 launch 开头）
+let exiting = null;
 let stopping = false;
 let retryTimer = null;
 let retryCount = 0;
@@ -970,10 +976,32 @@ function launch() {
   if (child) return;
   stopping = false;
 
-  child = spawnLark(["event", "consume", EVENT_KEY, "--as", "bot"]);
+  // 上一个进程还在优雅退出的话，别等那 3 秒的补刀定时器了——它没死透就一直
+  // 占着事件订阅，新进程和它抢同一条推送，而它抢到的又会被下面的 isCurrent()
+  // 守卫丢掉，等于这段时间的消息谁都没收。要起新的就先把旧的收干净。
+  if (exiting) {
+    killProcessTree(exiting, "SIGKILL");
+    exiting = null;
+  }
 
-  const rl = readline.createInterface({ input: child.stdout });
+  // 全程用闭包里的 proc，不要读模块级的 child。
+  //
+  // stopListener() 发完 SIGTERM 就同步把 child 置空，旧进程却要过 100ms~3s
+  // 才真的退出。这中间用户只要再点一次「开始监听」，新进程就已经坐在 child 上了，
+  // 而旧进程的那批 handler 还挂着——它们如果直接改全局状态，就会：
+  //   · close 里 child = null 把新进程的句柄抹掉（新进程变成停不掉的孤儿）
+  //   · 此时 stopping 已被 launch() 重置为 false，于是判成「意外结束」触发重连，
+  //     退避到期再拉起第三个进程
+  //   · line 里继续 handleEvent，和新进程一起消费同一条飞书推送，
+  //     同一条需求入列两次、自动派发跑两次 AI
+  // 所以每个 handler 先认一下自己是不是当前进程，不是就只清理自己。
+  const proc = spawnLark(["event", "consume", EVENT_KEY, "--as", "bot"]);
+  child = proc;
+  const isCurrent = () => child === proc;
+
+  const rl = readline.createInterface({ input: proc.stdout });
   rl.on("line", (line) => {
+    if (!isCurrent()) return;
     const trimmed = line.trim();
     if (!trimmed || trimmed[0] !== "{") return; // 跳过就绪标记之类的非 JSON 行
     try {
@@ -990,7 +1018,8 @@ function launch() {
     }
   });
 
-  child.stderr.on("data", (chunk) => {
+  proc.stderr.on("data", (chunk) => {
+    if (!isCurrent()) return;
     const text = chunk.toString().trim();
     if (!text) return;
     // lark-cli 把 ready / 退出标记也打到 stderr，只把明显的错误留给 UI。
@@ -1005,15 +1034,17 @@ function launch() {
     console.log("[docking][lark-cli]", text);
   });
 
-  child.on("error", (err) => {
+  proc.on("error", (err) => {
+    if (!isCurrent()) return;
     lastError = err.message;
     child = null;
     broadcastStatus();
     scheduleRetry();
   });
 
-  child.on("close", (code) => {
-    rl.close();
+  proc.on("close", (code) => {
+    rl.close(); // 自己的 readline 无论如何都要收掉
+    if (!isCurrent()) return;
     child = null;
     if (stopping) {
       broadcastStatus();
@@ -1034,15 +1065,43 @@ export function startListener() {
   return getListenerStatus();
 }
 
-export function stopListener() {
+/**
+ * @param {{force?: boolean}} [options] force=true 时跳过 SIGTERM 直接整组 SIGKILL。
+ *   app 退出时用：Electron 不等 before-quit 里的异步收尾，SIGTERM 的补刀定时器
+ *   压根没机会执行，不理会 SIGTERM 的 lark-cli 就会变成常驻孤儿。
+ */
+export function stopListener({ force = false } = {}) {
   stopping = true;
   if (retryTimer) {
     clearTimeout(retryTimer);
     retryTimer = null;
   }
+  // force 是 app 退出路径：Electron 不等 before-quit 里的异步收尾，靠定时器
+  // 补刀的那些进程一个都跑不掉，所以这里连上一次 stop 还没死透的也一并 SIGKILL
+  if (force && exiting) {
+    killProcessTree(exiting, "SIGKILL");
+    exiting = null;
+  }
   if (child) {
-    child.kill("SIGTERM");
+    const proc = child;
     child = null;
+    if (force) {
+      killProcessTree(proc, "SIGKILL");
+    } else {
+      exiting = proc;
+      killProcessTree(proc, "SIGTERM");
+      // 卡死或不理 SIGTERM 的话限时补刀，否则它会一直占着事件订阅，
+      // 下次 launch() 起的新进程要和它抢同一条推送
+      const forceKill = setTimeout(
+        () => killProcessTree(proc, "SIGKILL"),
+        KILL_GRACE_MS,
+      );
+      forceKill.unref?.();
+      proc.once("exit", () => {
+        clearTimeout(forceKill);
+        if (exiting === proc) exiting = null;
+      });
+    }
   }
   broadcastStatus();
   return getListenerStatus();
