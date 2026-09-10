@@ -437,7 +437,7 @@ export default function MockRuleList({
             >
               <span>{label}</span>
               <span className={clsx(
-                "text-[9.5px] px-1.5 py-0.2 rounded-full font-bold transition-all",
+                "text-[9.5px] px-1.5 py-[1px] rounded-full font-bold transition-all",
                 ruleFilter === id
                   ? "bg-slate-100 text-slate-700"
                   : "bg-slate-200/60 text-slate-500"
