@@ -13,6 +13,7 @@ import AnnotatedJson, { CopyJsonButton } from "./annotated-json";
 import { METHODS, prettyJson } from "./utils";
 import useModalNav from "../../hooks/use-modal-nav";
 import useResource from "../../hooks/use-resource";
+import { confirm } from "../../components/confirm-host";
 
 const statusText = z.string().refine(
   (v) => {
@@ -805,7 +806,6 @@ export default function MockRuleEditor({
   onSubmit,
   onDelete,
   onDirtyChange,
-  confirm,
 }) {
   const {
     register,
