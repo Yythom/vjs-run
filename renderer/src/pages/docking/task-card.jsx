@@ -96,6 +96,21 @@ function TaskCard({
             <span className="font-mono font-semibold text-slate-800">
               #{task.seq}
             </span>
+            {/* 需求池工作包：扫列表时要一眼分得出它跟 IM 提问不是一回事，所以紧跟短号 */}
+            {task.workpackDir && (
+              <span
+                className="shrink-0 text-[10px] text-indigo-900 bg-indigo-50 border border-indigo-300 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5 cursor-pointer"
+                title={`需求池工作包：${task.workpackDir}\n（点击复制路径）`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigator.clipboard.writeText(task.workpackDir);
+                  showToast("已复制工作包路径", "success");
+                }}
+              >
+                <span>📐</span>
+                <span>工作包</span>
+              </span>
+            )}
             <span className="text-slate-300">·</span>
             <span className="text-slate-800 font-medium">
               {task.requester?.name || task.requester?.id || "未知发起人"}

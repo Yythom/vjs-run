@@ -9,6 +9,13 @@
 // 子进程意外退出会自动退避重连（网络抖动 / 事件总线 daemon 重启都会触发）。
 
 import readline from "node:readline";
+import fs from "node:fs";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { SRC_DIR } from "../paths.js";
+import { buildSpawnEnv } from "../shell-env.js";
+import { buildWorkpackTask, findWorkpackTask } from "./workpack.js";
+import { COMMANDS, renderHelp } from "./commands.js";
 import {
   spawnLark,
   fetchUserName,
@@ -33,6 +40,7 @@ import {
   getAttachmentsDir,
   getSettings,
   getTask,
+  getDataDir,
   isMessageProcessed,
   listOpenTasksBySender,
   markMessageProcessed,
@@ -74,7 +82,14 @@ function parseSeq(body) {
 
 function renderTaskList(tasks) {
   if (!tasks.length) {
-    return "你还没提过需求或排查咨询。用 /r 开头发给我就行，例如：\n/r 帮看下订单超时的处理逻辑\n/r 帮忙对接下批量打标签接口 /api/user/tags/batch";
+    return [
+      "你还没提过需求或排查咨询。用 /r 开头发给我就行，例如：",
+      "/r 帮看下订单超时的处理逻辑",
+      "/r 帮忙对接下批量打标签接口 /api/user/tags/batch",
+      "",
+      "需求池里已定稿、要转实施 plan 的，发 /plan 加文档链接：",
+      "/plan 帮我看看有没有要改的 https://xxx.feishu.cn/wiki/xxxxx",
+    ].join("\n");
   }
   const lines = tasks.map(
     (t) => `#${t.seq} ${t.title} · ${STATUS_TEXT[t.status] || t.status}`,
@@ -93,42 +108,39 @@ function titleOf(content) {
 }
 
 /**
- * 指令解析。约定就三条，好记：
- *   /r <内容>       新建一条需求或逻辑排查咨询
+ * 指令解析。约定四条，好记：
+ *   /r <内容>       新建一条需求或逻辑排查咨询（消息正文就是需求）
+ *   /plan <链接>    需求池里已定稿的需求转实施 plan（给的是文档链接，不是正文）
  *   /u              列出我提过的任务和短号
  *   /u 7 <补充>     追加到 #7
  *   /u <补充>       没给短号就追加到最近一条
  *   /h              看用法说明
  * 没带指令的不当需求处理，但也不丢——记成 unfiled 由面板决定。
+ *
+ * /plan 单独一条而不是从 /r 里认链接：两者输入类型不同（正文 vs 文档地址）、
+ * 耗时不同（立刻入库 vs 要先拉文档下图），混在一起判会把「贴了个链接说明情况」
+ * 的普通需求误当成需求池工作包。
  */
-function parseCommand(text) {
+export function parseCommand(text) {
   const m = String(text || "").match(
-    /^\s*\/(r|req|u|upd|h|help)\b[\s:：]*([\s\S]*)$/i,
+    /^\s*\/(r|req|plan|u|upd|h|help)\b[\s:：]*([\s\S]*)$/i,
   );
   if (!m) return { cmd: null, body: String(text || "").trim() };
   const raw = m[1].toLowerCase();
   const cmd =
-    raw === "r" || raw === "req" ? "r" : raw === "h" || raw === "help" ? "h" : "u";
+    raw === "r" || raw === "req"
+      ? "r"
+      : raw === "plan"
+        ? "plan"
+        : raw === "h" || raw === "help"
+          ? "h"
+          : "u";
   return { cmd, body: (m[2] || "").trim() };
 }
 
-/** /h 回过去的用法说明 */
-function renderHelp() {
-  return [
-    "项目对接与答疑助手用法：",
-    "",
-    "/r 需求或排查内容   提需求或咨询项目代码逻辑，自动入列并回执短号",
-    "/u                 查看你提过的需求与咨询列表及短号",
-    "/u 7 补充内容      给 #7 补充说明",
-    "/h                 查看本说明",
-    "",
-    "示例：",
-    "• 逻辑排查：/r 帮看下订单状态超时在前端哪里处理的",
-    "• 需求开发：/r 对接批量打标签接口 /api/user/tags/batch",
-    "",
-    "提示：不带 /r 的消息也会留底并在待处理中展示。",
-  ].join("\n");
-}
+// /h 的用法说明由指令表生成（见 commands.js）。re-export 是为了让调用方和测试
+// 不必关心它长在哪——加指令只改 commands.js 一处。
+export { renderHelp };
 
 let child = null;
 // 已经发过 SIGTERM、但还没确认退出的旧进程。它仍占着飞书那条事件订阅，
@@ -550,8 +562,344 @@ function dispatchToAI({ task, cwd, mode, engine, createBranch, notify }) {
   }
 }
 
+// req-to-plan 跟 vjtools 一起打包在 src/ 下。打包后代码在 asar 里，普通 node 读不到，
+// 得拿 Electron 自己当 node 跑（ELECTRON_RUN_AS_NODE=1）——跟 mcp-server.mjs 同一套路。
+const REQ_BIN = path
+  .join(SRC_DIR, "req-to-plan", "bin", "req")
+  .replace(/\bapp\.asar\b/, "app.asar.unpacked");
+
+// 备料要拉飞书文档、逐张下截图、扫一遍仓库算影响面事实，二十几张图的需求跑十几秒很正常。
+// 但卡住的话不能一直挂着——lark-cli 的 token 过期有时是超时而不是报错。
+const PREPARE_TIMEOUT_MS = 5 * 60 * 1000;
+
+// 备料子进程的注入点，跟 runner.setSpawnImpl 同构：测试里换掉它就能跑通整条
+// /plan 链路而不真去拉飞书文档
+let prepareSpawnImpl = spawn;
+export function setPrepareSpawnImpl(fn) {
+  prepareSpawnImpl = fn || spawn;
+}
+
+/**
+ * 工作包落 userData，不落被分析仓库。
+ *
+ * 落仓库里也能跑（未跟踪文件不算脏，setupGitBranch 用的是 --untracked-files=no），
+ * 但那样工作包会跟着隔离分支走、会被 clean 扫掉、多个仓库还各存一份。
+ */
+function workpackRoot() {
+  return path.join(getDataDir(), "req-workpacks");
+}
+
+/**
+ * 从 /plan 的参数里挑出「要备料的那个东西」，剩下的话当成提出人的额外交代。
+ *
+ * 人不会只发一个光秃秃的链接，更常见的是：
+ *   /plan 帮我看看 https://xxx.feishu.cn/wiki/abc
+ *   /plan https://xxx.feishu.cn/wiki/abc 看看有没有什么要改的
+ * 链接（或 record_id）拿去喂 req prepare，剩下的文字一个字都不能丢——
+ * 那往往才是他这次真正想问的，比需求文档本身更能决定 plan 该往哪写。
+ *
+ * URL 的字符集特意排掉中文与中文标点：飞书里「…/wiki/abc请看下」这种没空格的贴法很常见，
+ * 用 [^\s]+ 会把后面的话一起吃进链接里。
+ *
+ * 两者都认不出来时（例如 /plan 相似推荐），整段当需求名关键词交给 req，不拆 remark：
+ * 没有锚点就没法区分「需求名」和「补充说明」，猜错不如不猜。
+ */
+export function parsePlanTarget(body) {
+  const text = String(body || "").trim();
+  const rest = (whole) => text.replace(whole, " ").replace(/\s+/g, " ").trim();
+
+  // 1. Markdown 链接语法：[标题/链接](https://...) —— 飞书 post 富文本里的 <a> 标签会被转成这种格式
+  const mdMatch = text.match(/\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/);
+  if (mdMatch) {
+    const url = mdMatch[1].replace(/[.,;:!?]+$/, "");
+    return { target: url, remark: rest(mdMatch[0]) };
+  }
+
+  // 2. 尖括号包装：<https://...>
+  const angleMatch = text.match(/<(https?:\/\/[^\s>]+)>/);
+  if (angleMatch) {
+    const url = angleMatch[1].replace(/[.,;:!?]+$/, "");
+    return { target: url, remark: rest(angleMatch[0]) };
+  }
+
+  // 3. 引号包装："https://..." 或 'https://...'
+  const quoteMatch = text.match(
+    /["'\u201c\u201d](https?:\/\/[^\s"'\u201c\u201d]+)["'\u201c\u201d]/,
+  );
+  if (quoteMatch) {
+    const url = quoteMatch[1].replace(/[.,;:!?]+$/, "");
+    return { target: url, remark: rest(quoteMatch[0]) };
+  }
+
+  // 4. 普通 URL：排掉中英文标点与各类括号/引号
+  const urlMatch = text.match(
+    /https?:\/\/[^\s\u4e00-\u9fa5，。、？！；：“”‘’（）【】《》()[\]<>"'`]+/,
+  );
+  if (urlMatch) {
+    const rawUrl = urlMatch[0];
+    const url = rawUrl.replace(/[.,;:!?]+$/, "");
+    return { target: url, remark: rest(rawUrl) };
+  }
+
+  // 5. 多维表格的 record_id：rec 开头的一串字母数字
+  const rec = text.match(/\brec[A-Za-z0-9]{6,}\b/)?.[0];
+  if (rec) return { target: rec, remark: rest(rec) };
+
+  return { target: text, remark: "" };
+}
+
+/** /plan 用哪个仓库：面板固定了就用固定的，否则按关键词智能匹配（跟 /r 一套逻辑） */
+function resolvePlanRepo(settings, hint) {
+  if (settings.autoDispatchCwd && settings.autoDispatchCwd !== "auto") {
+    return settings.autoDispatchCwd;
+  }
+  let config = {};
+  try {
+    config = typeof getConfig === "function" ? getConfig() || {} : {};
+  } catch (_) {}
+  return pickSmartRepo(
+    [{ title: hint, content: hint }],
+    config.frontendProjectGroups || [],
+    settings.lastCwd,
+  );
+}
+
+/**
+ * 跑 req prepare 备料，拿到工作包路径。
+ * 成功 { ok: true, info }，失败 { ok: false, error }——error 是能直接发给提出人的话。
+ */
+function runPrepare({ target, repoRoot }) {
+  return new Promise((resolve) => {
+    const root = workpackRoot();
+    try {
+      fs.mkdirSync(root, { recursive: true });
+    } catch (err) {
+      resolve({ ok: false, error: `创建工作包目录失败: ${err.message}` });
+      return;
+    }
+
+    // 不给 --out，让 req 按 record_id 自己落到 <cwd>/.requirements/<record_id>：
+    // 同一条需求重复 /plan 会落回同一个目录，天然幂等
+    const args = [REQ_BIN, "prepare", target, "--json"];
+    if (repoRoot) args.push("--repo", repoRoot);
+
+    let proc;
+    try {
+      proc = prepareSpawnImpl(process.execPath, args, {
+        cwd: root,
+        // req prepare 自己还要起 lark-cli 拉文档，PATH 必须是登录 shell 那一份
+        env: { ...buildSpawnEnv(), ELECTRON_RUN_AS_NODE: "1" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (err) {
+      resolve({ ok: false, error: `启动备料进程失败: ${err.message}` });
+      return;
+    }
+
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (d) => {
+      stdout += d;
+    });
+    proc.stderr.on("data", (d) => {
+      stderr += d;
+    });
+
+    const timer = setTimeout(() => {
+      proc.kill("SIGTERM");
+      resolve({
+        ok: false,
+        error: `备料超过 ${PREPARE_TIMEOUT_MS / 60000} 分钟未完成，已中断。常见原因是 lark-cli 的 user 授权过期（跑一次 lark-cli auth status --verify 看看）。`,
+      });
+    }, PREPARE_TIMEOUT_MS);
+    if (typeof timer.unref === "function") timer.unref();
+
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: `启动备料进程失败: ${err.message}` });
+    });
+
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        // req 把进度和报错都写 stderr，末尾几行最有用
+        // （「未在「排实施」中找到」「lark-cli 执行失败」「没有方案链接」…）
+        const tail = stderr.trim().split("\n").slice(-4).join("\n");
+        resolve({ ok: false, error: tail || `备料进程退出码 ${code}` });
+        return;
+      }
+      try {
+        resolve({ ok: true, info: JSON.parse(stdout) });
+      } catch (err) {
+        resolve({ ok: false, error: `备料结果解析失败: ${err.message}` });
+      }
+    });
+  });
+}
+
+/**
+ * /plan：需求池里已定稿的需求 → 实施 plan。
+ *
+ * 跟 /r 的差别在输入：/r 的正文就是需求，收到即入库；/plan 给的是一个文档地址，
+ * 得先把文档拉下来、截图下下来、工作规范按当前仓库渲染好（req prepare），才有东西可派。
+ * 这是秒级到十几秒的事，所以先回一条「正在备料」，别让人对着飞书干等。
+ *
+ * 备完料走的是跟命令行桥（scripts/req-to-docking.mjs）同一份翻译层，区别只在这条任务
+ * 带着真实的飞书会话——所以 AI 中途用 ask_requester 反问，是真能发到提出人那里的。
+ */
+export async function handlePlanCommand(evt, body, createdAt, messageId) {
+  const { target, remark } = parsePlanTarget(body);
+  const settings = getSettings();
+  const repoRoot = resolvePlanRepo(settings, body || target);
+  if (!repoRoot) {
+    // 不能放空了跑：req 会退回用 process.cwd()（也就是工作包目录）当仓库，
+    // 扫出 0 个应用、渲染出一份 $REPO_FACTS 全空的 skill.md，
+    // 影响面命令里的 --repo 也指向错的地方——不报错，但产出的 plan 是废的
+    await replyText(
+      evt,
+      "❌ 还没配项目目录，/plan 不知道该扫哪个仓库算影响面。\n" +
+        "请先在 vjtools 里添加前端工程，或在「预设规则」里固定一个工作目录。",
+      { force: true },
+    );
+    return;
+  }
+
+  await replyText(evt, `⏳ 正在备料：${target}\n拉取需求文档与截图中，通常十几秒。`);
+
+  const prepared = await runPrepare({ target, repoRoot });
+  if (!prepared.ok) {
+    // 失败必须说出去，不受自动回执开关约束——静默失败会让人以为还在跑
+    await replyText(evt, `❌ 备料失败：\n${prepared.error}`, { force: true });
+    return;
+  }
+
+  const { outDir, recordId, assetCount, standalone } = prepared.info;
+
+  // 仓库名要报出来：给链接时 pickSmartRepo 没什么可匹配的，会落到上次用的那个，
+  // 选错了得让人当场看得见
+  const repoLabel = repoRoot.split(/[\\/]/).pop();
+
+  /**
+   * 把一条工作包任务交出去跑。
+   *
+   * 这里没有「要不要自动产 plan」的开关：人打出 /plan 就是在下命令，意图已经写在指令里了，
+   * 再要一次预先授权是多余的。/r 需要开关是因为「提个需求」和「自动交给 AI 跑」本来是两件事，
+   * /plan 没有这个分裂。白名单照旧生效——它管的是「谁可以驱动这台机器」，不是「要不要」。
+   */
+  const launch = async (task, summary) => {
+    const stopHere = async (why) => {
+      await replyText(evt, `${summary}\n\n${why}`);
+      showDesktopNotification({
+        title: `【需求池工作包】#${task.seq}「${task.title}」`,
+        body: `📁 ${repoLabel}${assetCount ? ` · 截图 ${assetCount} 张` : ""}`,
+      });
+    };
+
+    if (!isAutoDispatchAllowed(evt.sender_id)) {
+      await stopHere("材料已备好，等面板上确认后再开跑。");
+      return;
+    }
+
+    const result = dispatchToAI({
+      task,
+      cwd: repoRoot,
+      mode: "plan",
+      // 三个引擎都跑得了 plan 档，这里写死 claude 是因为它的边界最紧：
+      // Bash 只预授权 node、Edit/MultiEdit 被禁。无人值守由一条飞书消息触发，
+      // 该用最紧的那个；想换引擎在面板上手动派活时选。
+      engine: "claude",
+      createBranch: settings.autoDispatchCreateBranch ?? true,
+      notify: {
+        title: `【产 plan】#${task.seq}「${task.title}」`,
+        body: `已进入 Claude Code 队列 · 📁 ${repoLabel}`,
+      },
+    });
+
+    // dispatchToAI 在这条任务已经有 job 在跑时返回 "pending"：不另起一轮，
+    // 只记下「这轮完了还要再跑」。措辞必须跟真开跑区分开，否则人会以为马上有结果
+    if (result === "pending") {
+      await replyText(
+        evt,
+        `${summary}\n\n⏳ 这条正在跑，你的交代记下了，等这一轮结束会接着按它再跑一轮。`,
+      );
+      return;
+    }
+    if (result) {
+      await replyText(evt, `${summary}\n\n⚡ 开始产 plan，完成后我会回你。`);
+      return;
+    }
+    // 派发失败时 dispatchToAI 已经把状态放回 inbox，补一条回执，别让人以为在跑
+    await stopHere("派活没成功，已留在待处理。");
+  };
+
+  const existing = findWorkpackTask(outDir);
+  if (existing) {
+    // 光秃秃再发一次，多半是手滑或想确认一下，材料刷新过就够了，不重跑
+    if (!remark) {
+      await replyText(
+        evt,
+        `↷ 这份需求已经是 #${existing.seq}「${existing.title}」，材料已刷新。\n` +
+          `想换个角度重看，把要求写在后面：/plan ${target} 重点看图片业务线`,
+        { force: true },
+      );
+      return;
+    }
+    // 带了新交代 = 想换个角度重看。任务不重复建，但这一句要挂进沟通记录并真的再跑一轮，
+    // 只 appendThread 不派活的话，人等不到任何结果
+    appendThread(existing.id, { role: "them", text: remark, at: createdAt });
+    const refreshed = getTask(existing.id) || existing;
+    broadcastTask("updated", refreshed);
+    await launch(
+      refreshed,
+      `🔄 #${refreshed.seq}「${refreshed.title}」材料已刷新\n· 你的交代：${remark}`,
+    );
+    return;
+  }
+
+  const { task: fields } = buildWorkpackTask({
+    dir: outDir,
+    recordId: recordId || "",
+    repoPath: repoRoot,
+    remark,
+  });
+
+  const task = addTask({
+    ...fields,
+    messageId,
+    chatId: evt.chat_id,
+    chatType: evt.chat_type,
+    senderId: evt.sender_id,
+    senderName: "",
+    createdAt,
+    status: "inbox",
+  });
+  broadcastTask("created", task);
+  hydrateRequesterName(task);
+
+  await launch(
+    task,
+    [
+      `📦 已备料 #${task.seq}「${task.title}」`,
+      standalone
+        ? "· 该链接不在需求池「排实施」里，按独立文档处理（业务线要从正文推断）"
+        : null,
+      assetCount ? `· 截图 ${assetCount} 张` : "· 无截图",
+      `· 仓库 ${repoLabel}`,
+      // 回显一遍：万一链接和说明拆错了，当场就能看出来
+      remark ? `· 你的交代：${remark}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
 const ENGINE_LABEL = { agy: "Antigravity", claude: "Claude Code", codex: "Codex" };
-const MODE_LABEL = { analyze: "只读分析", edit: "允许改代码", full: "全自动" };
+const MODE_LABEL = {
+  analyze: "只读分析",
+  plan: "产实施 plan",
+  edit: "允许改代码",
+  full: "全自动",
+};
 
 /**
  * 一轮 job 收尾后的回调：把运行期间攒下的追问合并成下一轮。
@@ -799,7 +1147,32 @@ function handleEvent(evt) {
     return;
   }
 
-  // ③ /u：光秃秃一个 /u 就把他自己的任务列表回过去，让他挑
+  // ③ /plan：需求池链接 → 备料 → 建工作包任务。
+  // 备料是十几秒的异步活，不能卡住事件流——后面还有别人的消息在排队
+  if (cmd === "plan") {
+    if (!body) {
+      const example = COMMANDS.find((c) => c.key === "plan")?.examples?.[0];
+      replyText(
+        evt,
+        [
+          "「/plan」后面要跟需求文档链接、record_id 或需求名关键词，例如：",
+          example?.text,
+          ...(example?.notes || []),
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        { force: true },
+      );
+      return;
+    }
+    handlePlanCommand(evt, body, createdAt, messageId).catch((err) => {
+      console.error("[docking] /plan 处理失败:", err);
+      replyText(evt, `❌ /plan 处理异常：${err.message}`, { force: true });
+    });
+    return;
+  }
+
+  // ④ /u：光秃秃一个 /u 就把他自己的任务列表回过去，让他挑
   let explicitTarget = null;
   let uBody = body;
   if (cmd === "u") {
@@ -826,7 +1199,7 @@ function handleEvent(evt) {
     }
   }
 
-  // ④ /u 落到具体任务，或 ⑤ 合并窗口内的连发消息 —— 都并入既有任务
+  // ⑤ /u 落到具体任务，或 ⑥ 合并窗口内的连发消息 —— 都并入既有任务
   const mergeTarget =
     cmd === "u"
       ? // 用 /u 回答我的反问也要挂回那条，awaiting 优先
@@ -870,7 +1243,7 @@ function handleEvent(evt) {
     return;
   }
 
-  // ⑥ /r 建需求；没指令的记成 unfiled，面板上可一键转正
+  // ⑦ /r 建需求；没指令的记成 unfiled，面板上可一键转正
   const settings = getSettings();
   let targetCwd = "";
   let willAutoDispatch = false;

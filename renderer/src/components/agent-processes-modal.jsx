@@ -17,7 +17,12 @@ import {
 const STALE_MS = 5 * 60 * 1000;
 
 const ENGINE_LABEL = { agy: "Antigravity", claude: "Claude Code", codex: "Codex" };
-const MODE_LABEL = { analyze: "只读分析", edit: "允许改代码", full: "全自动" };
+const MODE_LABEL = {
+  analyze: "只读分析",
+  plan: "产实施 plan",
+  edit: "允许改代码",
+  full: "全自动",
+};
 
 function formatDuration(ms) {
   const total = Math.max(0, Math.floor(ms / 1000));

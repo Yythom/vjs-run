@@ -5,6 +5,7 @@ import { confirm } from "../../components/confirm-host";
 import { showToast } from "../../utils/toast";
 import useJobHistory from "./use-job-history";
 import { formatTime } from "./utils";
+import { RUN_MODES, RUN_MODE_SHORT } from "./constants";
 
 // ─── AI 调用历史回看弹窗 ──────────────────────────────────────────────────
 /**
@@ -179,11 +180,7 @@ export default function JobHistoryModal({ onClose, initialTaskId = "" }) {
                               : "Claude Code"}
                         </span>
                         <span className="text-[10px] px-1 rounded bg-slate-100 text-slate-700 border border-slate-200 font-normal">
-                          {item.mode === "analyze"
-                            ? "只读分析"
-                            : item.mode === "edit"
-                              ? "改代码"
-                              : "全自动"}
+                          {RUN_MODE_SHORT[item.mode] || item.mode}
                         </span>
                       </div>
                       <span className="text-[10px] text-slate-400 font-mono">
@@ -278,11 +275,8 @@ export default function JobHistoryModal({ onClose, initialTaskId = "" }) {
                   <div>
                     <span className="text-slate-400">执行模式：</span>
                     <span className="font-semibold text-slate-800">
-                      {selectedJobDetail.mode === "analyze"
-                        ? "只读分析 / 逻辑排查"
-                        : selectedJobDetail.mode === "edit"
-                          ? "允许改代码"
-                          : "全自动"}
+                      {RUN_MODES.find((m) => m.key === selectedJobDetail.mode)?.label ||
+                        selectedJobDetail.mode}
                     </span>
                   </div>
                   <div>
