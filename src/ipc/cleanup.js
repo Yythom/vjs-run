@@ -200,6 +200,40 @@ function clearCrashReports() {
   }
 }
 
+// 赛博牛马的本地产物，都在 userData 下：
+//   req-workpacks/     —— /plan 备的料（需求文档 + 截图 + skill.md），一条需求几十张图很常见
+//   docking-attachments/ —— 飞书 IM 消息里的图片与附件
+// 任务删掉时这些文件不会跟着删（任务库只记路径），所以只增不减，得有个地方能清。
+const DOCKING_ASSET_ITEMS = ["req-workpacks", "docking-attachments"];
+
+function dockingAssetsBytes() {
+  return DOCKING_ASSET_ITEMS.reduce((sum, name) => {
+    try {
+      return sum + dirSize(path.join(userDataDir(), name));
+    } catch {
+      return sum;
+    }
+  }, 0);
+}
+
+/**
+ * 清掉备料与附件。
+ *
+ * 任务本身不删——面板上的记录、结论、沟通历史都还在，只是材料没了。
+ * 已完成的需求不再需要那些截图；还没跑的重新 /plan 一次就会重新备料。
+ */
+function clearDockingAssets() {
+  const before = dockingAssetsBytes();
+  for (const name of DOCKING_ASSET_ITEMS) {
+    try {
+      fs.rmSync(path.join(userDataDir(), name), { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+  return before;
+}
+
 const WEBVIEW_STORAGE_ITEMS = [
   "SharedStorage",
   "Trust Tokens",
@@ -240,6 +274,7 @@ export function registerCleanupIpc() {
       dmgInstallersBytes: dmgInstallersBytes(),
       crashReportsBytes: crashReportsBytes(),
       webviewStorageBytes: webviewStorageBytes(),
+      dockingAssetsBytes: dockingAssetsBytes(),
     },
   }));
 
@@ -267,6 +302,16 @@ export function registerCleanupIpc() {
         results.dmgInstallers = { ok: true, reclaimedBytes: bytes };
       } catch (err) {
         results.dmgInstallers = { ok: false, error: err.message };
+      }
+    }
+
+    if (set.has("dockingAssets")) {
+      try {
+        const bytes = clearDockingAssets();
+        reclaimedBytes += bytes;
+        results.dockingAssets = { ok: true, reclaimedBytes: bytes };
+      } catch (err) {
+        results.dockingAssets = { ok: false, error: err.message };
       }
     }
 
