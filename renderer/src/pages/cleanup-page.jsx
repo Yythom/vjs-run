@@ -25,6 +25,12 @@ const OPTIONS = [
     sizeKey: "crashReportsBytes",
   },
   {
+    id: "dockingAssets",
+    label: "赛博牛马备料与附件",
+    desc: "/plan 拉下来的需求文档与截图、飞书消息里的图片附件。任务记录不受影响，材料删了重新 /plan 会再备",
+    sizeKey: "dockingAssetsBytes",
+  },
+  {
     id: "webviewStorage",
     label: "浏览器缓存扩展项",
     desc: "清除 SharedStorage、Trust Tokens 和安全证书状态等扩展缓存",
