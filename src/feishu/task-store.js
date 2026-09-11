@@ -17,7 +17,7 @@ const FILE_VERSION = 1;
 
 /**
  * 任务状态流转：inbox（新来的）→ doing（已派给模型）→ done；awaiting = 已反问等回复。
- * unfiled = 没带 /r 指令的消息，不当需求处理，但也不丢——面板上可一键转成 inbox。
+ * unfiled = 没带指令（/r、/plan）的消息，不当需求处理，但也不丢——面板上可一键转成 inbox。
  */
 export const TASK_STATUS = [
   "inbox",
@@ -30,7 +30,8 @@ export const TASK_STATUS = [
 
 /** 面板可改的运行时开关。跟任务同文件，避免动 config.json 的白名单 normalize */
 const DEFAULT_SETTINGS = {
-  // 机器人是否自动回复提出人：/r 的「已记录 #7」回执、/u 的任务列表
+  // 机器人是否主动回执：/r 的「已记录 #7」、/plan 的备料结果、AI 的反问。
+  // /u、/h 是对方明确发指令要的回应，属「问必答」，不受这个开关约束
   ackEnabled: true,
   // 任务完成/忽略时是否自动通知提出人
   notifyOnComplete: true,
@@ -427,6 +428,7 @@ export function addTask({
   status = "inbox",
   source = "feishu",
   repoPath = "",
+  workpackDir = "",
   branchName = "",
   attachments = [],
   lastRunConfig = null,
@@ -446,6 +448,9 @@ export function addTask({
     title: title ? String(title).trim() : titleOf(content),
     content: String(content || ""),
     repoPath: repoPath || "",
+    // req-to-plan 备好的工作包目录（context.md / requirement.md / assets / skill.md）。
+    // 非空 = 这条不是 IM 提问而是需求池工作包，runner 会 --add-dir 放行它并注入 skill.md
+    workpackDir: workpackDir || "",
     branchName: branchName || "",
     attachments: Array.isArray(attachments) ? attachments : [],
     modifiedFiles: [],
@@ -478,6 +483,7 @@ export function updateTask(id, patch = {}) {
     "thread",
     "askedAt",
     "repoPath",
+    "workpackDir",
     "branchName",
     "attachments",
     "modifiedFiles",

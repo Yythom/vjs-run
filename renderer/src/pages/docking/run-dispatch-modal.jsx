@@ -15,7 +15,7 @@ import {
 } from "../../stores/docking-store";
 import CliInstallCard from "./cli-install-card";
 import useEngineProbes from "./use-engine-probes";
-import { ENGINES, RUN_MODES } from "./constants";
+import { ENGINES, PLAN_MODE_LIMITS, RUN_MODES } from "./constants";
 import { pickSmartRepo } from "./utils";
 
 /**
@@ -61,8 +61,18 @@ function RunDispatchForm({ repos }) {
   const [cwd, setCwd] = useState(() =>
     pickSmartRepo(runTargets, repos, settings.lastCwd),
   );
-  const [mode, setMode] = useState(() => settings.runMode || "analyze");
-  const [engine, setEngine] = useState(() => settings.runEngine || "claude");
+  const hasWorkpack = runTargets.some((t) => t.workpackDir);
+  const [mode, setMode] = useState(() => {
+    if (hasWorkpack) return "plan";
+    return settings.runMode || "analyze";
+  });
+  const [engine, setEngine] = useState(() => {
+    const initialMode = hasWorkpack ? "plan" : settings.runMode || "analyze";
+    const initialEngine = settings.runEngine || "claude";
+    return initialMode === "plan" && initialEngine !== "claude"
+      ? "claude"
+      : initialEngine;
+  });
   const [createBranch, setCreateBranch] = useState(
     () => settings.createBranch ?? false,
   );
@@ -135,7 +145,7 @@ function RunDispatchForm({ repos }) {
     if (result?.success) {
       saveSettings({
         lastCwd: cwd,
-        runMode: mode,
+        runMode: mode === "plan" ? (settings.runMode || "analyze") : mode,
         runEngine: engine,
         createBranch,
       });
@@ -373,6 +383,17 @@ function RunDispatchForm({ repos }) {
           </button>
         ))}
       </div>
+
+      {/* plan 档三个引擎的边界差很大，别让人以为选了这档就一定安全 */}
+      {mode === "plan" && PLAN_MODE_LIMITS[engine] && (
+        <div className="mt-2 p-2.5 rounded-lg border border-amber-200 bg-amber-50/70 text-[11px] text-amber-900 leading-relaxed">
+          <strong>
+            {ENGINES.find((e) => e.key === engine)?.label || engine} 的产 plan 档 ·{" "}
+            {PLAN_MODE_LIMITS[engine].level}
+          </strong>
+          ：{PLAN_MODE_LIMITS[engine].text}
+        </div>
+      )}
 
       {/* 隔离分支开关 */}
       <div className="mt-3 p-2.5 rounded-lg border border-slate-200 bg-slate-50/80 flex items-center justify-between">

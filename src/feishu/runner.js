@@ -35,6 +35,7 @@ import { buildPrompt } from "./prompt.js";
 import { appendThread, getTask, updateTask } from "./task-store.js";
 import { saveJobRun } from "./history-store.js";
 import { showDesktopNotification } from "./listener.js";
+import { sendMessage } from "./lark-cli.js";
 
 let spawnImpl = spawn;
 export function setSpawnImpl(fn) {
@@ -176,6 +177,19 @@ const READONLY_DENY = [
 // 可改代码档：只挡命令执行
 const EDIT_DENY = ["Bash", "BashOutput", "KillShell", "KillBash"];
 
+// 产 plan 档：介于只读与改代码之间。
+//
+// 影响面扫描（req scan locate / siblings / mirror）都要起 node 子进程，Bash 全禁就跑不了，
+// 扫描会静默退化成 grep——不报错，但影响面结论不可信，比跑不起来更坏。所以这里不整个禁
+// Bash，而是把 node 单独加进 allowedTools 预授权；其余 Bash 命令没被预授权，无头模式弹不出
+// 确认框，会被自动拒绝。
+//
+// 说清楚边界：这不是沙箱。`node -e` 什么都干得了，Write 也能覆盖现存文件——deny 掉
+// Edit/MultiEdit 只是挡住「改现存文件」这个最顺手的动作。真正的兜底是隔离分支：
+// plan !== analyze，所以 setupGitBranch 和 repo 互斥锁都照常生效。
+const PLAN_DENY = ["Edit", "MultiEdit", "NotebookEdit"];
+const PLAN_ALLOW = ["Bash(node:*)"];
+
 const EDIT_TOOLS = new Set([
   "Edit",
   "Write",
@@ -204,10 +218,12 @@ function extractFilePath(input, cwd) {
 }
 
 const MODES = {
-  analyze: { permissionMode: "acceptEdits", deny: READONLY_DENY },
-  edit: { permissionMode: "acceptEdits", deny: EDIT_DENY },
-  full: { permissionMode: "bypassPermissions", deny: [] },
+  analyze: { permissionMode: "acceptEdits", deny: READONLY_DENY, allow: [] },
+  plan: { permissionMode: "acceptEdits", deny: PLAN_DENY, allow: PLAN_ALLOW },
+  edit: { permissionMode: "acceptEdits", deny: EDIT_DENY, allow: [] },
+  full: { permissionMode: "bypassPermissions", deny: [], allow: [] },
 };
+
 
 /**
  * agy 的力度映射。无头（-p）模式下无法交互式确认权限，统一使用 --dangerously-skip-permissions，
@@ -215,6 +231,10 @@ const MODES = {
  */
 const AGY_MODES = {
   analyze: ["--dangerously-skip-permissions"],
+  // agy 自带一个 --mode plan，但语义没文档，两个枚举值（accept-edits / plan）之外什么都没写。
+  // 「只读产计划」多半连 plan.md 都写不出来，还可能像 claude 的 --permission-mode plan
+  // 那样把 MCP 工具一起挡掉（闭环就断了）。不赌，这一档跟其它档一样靠 prompt 约束。
+  plan: ["--dangerously-skip-permissions"],
   edit: ["--dangerously-skip-permissions"],
   full: ["--dangerously-skip-permissions"],
 };
@@ -225,6 +245,10 @@ const AGY_MODES = {
  */
 const CODEX_MODES = {
   analyze: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
+  // codex 的沙箱策略是可选的，产 plan 这档不必整台机器敞开：workspace-write 允许读全部、
+  // 在 workspace（cwd + --add-dir 放行的工作包）内写、跑命令——正好够跑影响面扫描和写 plan.md。
+  // 三个引擎里只有 codex 的 plan 档有工具层约束之外的第二道边界。
+  plan: ["--sandbox", "workspace-write", "--skip-git-repo-check"],
   edit: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
   full: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
 };
@@ -455,6 +479,16 @@ function rollbackDoingTasks(taskIds = [], reason = "") {
     updateTask(tid, { status: "inbox" });
     if (reason) {
       appendThread(tid, { role: "system", text: `本次自动处理未完成：${reason}`, at: Date.now() });
+      if (task.messageId || task.chatId || task.requester?.id) {
+        sendMessage({
+          chatId: task.chatId,
+          openId: task.requester?.id,
+          replyMessageId: task.messageId,
+          text: `❌ #${task.seq}「${task.title}」自动处理未完成：${reason}。\n任务已放回待处理，请在电脑端确认后再试。`,
+        }).catch((err) => {
+          console.warn("[runner] 飞书未完成通知发送失败:", err?.message || err);
+        });
+      }
     }
   }
 }
@@ -467,6 +501,13 @@ function buildInstructions(tasks, mode = "analyze") {
       "- 严禁修改、创建或删除任何代码与文件，严禁执行任何产生变更副作用的命令。",
       "- 专用于代码逻辑排查、业务疑问解答或改动方案可行性分析。",
       "- 分析完成后，必须调用 update_task 把排查解答结论详细写入 note（包含关键文件路径、函数名、流转逻辑与最终结论），并将状态置为 done；如需求或疑问不明用 ask_requester 反问提出人。",
+    ],
+    plan: [
+      "【当前为「产实施 plan」模式】",
+      "- 产出是一份 markdown 实施计划，不是代码改动：严禁修改任何业务代码。",
+      "- 可以起 node 子进程跑影响面扫描；其余命令没有预授权，跑不起来也不要绕路。",
+      "- 唯一该写的文件是工作包里的 plan.md。",
+      "- plan 写完后，必须调用 update_task 在 note 里给出摘要（影响面结论、待澄清项、plan.md 的路径），并将状态置为 done；需求含糊时用 ask_requester 反问提出人。",
     ],
     edit: [
       "【当前为「允许改代码」模式】",
@@ -482,12 +523,26 @@ function buildInstructions(tasks, mode = "analyze") {
 
   const guidelines = modeGuidelines[mode] || modeGuidelines.analyze;
 
+  // 工作包类任务（req-to-plan 从需求池备的料）：目录已 --add-dir 放行，
+  // 里面的 skill.md 也已注入 system prompt，这里只把「哪条任务对应哪个目录」说清楚
+  const packs = tasks.filter((t) => t.workpackDir);
+  const workpackSection = packs.length
+    ? [
+        "",
+        "工作包（需求池备料，目录已放行）：",
+        ...packs.map((t) => `- #${t.seq} → ${t.workpackDir}`),
+        "- 入口是各自目录下的 context.md；plan 写到同目录的 plan.md。",
+        "- skill.md 的内容已经注入到你的工作规范里，不用再去读一遍。",
+      ]
+    : [];
+
   return [
     buildPrompt(tasks),
     "",
     "---",
     "",
     ...guidelines,
+    ...workpackSection,
     "",
     "处理约定：",
     `- 这些任务的短号分别是：${tasks.map((t) => `#${t.seq}`).join("、")}`,
@@ -498,8 +553,29 @@ function buildInstructions(tasks, mode = "analyze") {
   ].join("\n");
 }
 
+/**
+ * 工作包类任务的两件事：目录放行 + 规范注入。
+ *
+ * 工作包在被分析仓库之外（.requirements/<record_id>/），不 --add-dir 的话 agent 读不到
+ * context.md 也写不出 plan.md。目录里的 skill.md 走 --append-system-prompt 而不是让 agent
+ * 「自己去读一个文件」——注入 system prompt 它跳不掉，读文件它可能嫌长就略过了。
+ */
+function collectWorkpacks(tasks = []) {
+  const dirs = [...new Set(tasks.map((t) => t.workpackDir).filter(Boolean))];
+  const skills = [];
+  for (const dir of dirs) {
+    try {
+      const text = fs.readFileSync(path.join(dir, "skill.md"), "utf8").trim();
+      if (text) skills.push(text);
+    } catch (_) {
+      // 工作包没带规范就算了，context.md 里也写清楚了该干什么
+    }
+  }
+  return { dirs, systemPrompt: skills.join("\n\n---\n\n") };
+}
+
 /** claude：MCP 配置直接拼进命令行，不落文件 */
-function claudeArgs(prompt, mode) {
+function claudeArgs(prompt, mode, { addDirs = [], systemPrompt = "" } = {}) {
   const conf = MODES[mode] || MODES.analyze;
   const mcpConfig = JSON.stringify({
     mcpServers: {
@@ -528,14 +604,18 @@ function claudeArgs(prompt, mode) {
     conf.permissionMode,
     "--allowedTools",
     ...MCP_TOOLS,
+    ...(conf.allow || []),
   ];
   if (conf.deny.length) args.push("--disallowedTools", ...conf.deny);
+  // 工作包在仓库外，不放行就既读不到 context.md 也写不出 plan.md
+  for (const dir of addDirs) args.push("--add-dir", dir);
+  if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
   return args;
 }
 
 /** agy：MCP 靠预先注册（面板配置过），这里只管力度与超时保护（放宽至 1 小时） */
-function agyArgs(prompt, mode) {
-  return [
+function agyArgs(prompt, mode, { addDirs = [] } = {}) {
+  const args = [
     "-p",
     prompt,
     "--output-format",
@@ -544,17 +624,17 @@ function agyArgs(prompt, mode) {
     "60m",
     ...(AGY_MODES[mode] || AGY_MODES.analyze),
   ];
+  for (const dir of addDirs) args.push("--add-dir", dir);
+  return args;
 }
 
 /** codex：MCP 靠预先注册在 ~/.codex/config.toml，通过 exec --json 驱动 */
-function codexArgs(prompt, mode) {
-  return [
-    "exec",
-    "--json",
-    "--ephemeral",
-    ...(CODEX_MODES[mode] || CODEX_MODES.analyze),
-    prompt,
-  ];
+function codexArgs(prompt, mode, { addDirs = [] } = {}) {
+  const args = ["exec", "--json", "--ephemeral", ...(CODEX_MODES[mode] || CODEX_MODES.analyze)];
+  for (const dir of addDirs) args.push("--add-dir", dir);
+  // prompt 是位置参数，必须排在所有选项后面
+  args.push(prompt);
+  return args;
 }
 
 /**
@@ -702,12 +782,26 @@ function runJobProcess(job, tasks) {
     job.prompt = prompt;
     const isAgy = job.engine === "agy";
     const isCodex = job.engine === "codex";
+    const isClaude = !isAgy && !isCodex;
     const bin = isAgy ? "agy" : isCodex ? "codex" : "claude";
+    const workpacks = collectWorkpacks(tasks);
+    // 工作包自带的工作规范（skill.md）怎么送进去，三个引擎不一样：
+    //   claude —— --append-system-prompt，注进 system prompt，agent 跳不掉
+    //   agy / codex —— 没有对应参数（查过 --help），只能拼在 prompt 正文最前面。
+    //                  约束力弱一些，但 8800 字的规范摆在那儿总比没有强。
+    const inlineSkill = !isClaude && workpacks.systemPrompt;
+    const finalPrompt = inlineSkill
+      ? `${workpacks.systemPrompt}\n\n---\n\n${prompt}`
+      : prompt;
+
     const args = isAgy
-      ? agyArgs(prompt, job.mode)
+      ? agyArgs(finalPrompt, job.mode, { addDirs: workpacks.dirs })
       : isCodex
-        ? codexArgs(prompt, job.mode)
-        : claudeArgs(prompt, job.mode);
+        ? codexArgs(finalPrompt, job.mode, { addDirs: workpacks.dirs })
+        : claudeArgs(finalPrompt, job.mode, {
+            addDirs: workpacks.dirs,
+            systemPrompt: workpacks.systemPrompt,
+          });
 
     let proc;
     try {
@@ -737,6 +831,19 @@ function runJobProcess(job, tasks) {
     // 异常退出时第一件要排除的事：跑的到底是不是我们以为的那个二进制。
     // 打包后的 Electron PATH 和登录 shell 的 PATH 未必一致，解析结果要能回看。
     emitJobLog(job.id, "meta", `可执行文件: ${resolveBinPath(bin) || "未在 PATH 中找到"}`);
+    if (workpacks.dirs.length) {
+      emitJobLog(
+        job.id,
+        "meta",
+        `📦 工作包已放行: ${workpacks.dirs.join("、")}${
+          workpacks.systemPrompt
+            ? `（skill.md ${workpacks.systemPrompt.length} 字符，${
+                inlineSkill ? "拼进 prompt 正文" : "注入 system prompt"
+              }）`
+            : "（无 skill.md）"
+        }`,
+      );
+    }
 
     // 兜底超时。agy 有 --print-timeout，claude 没有，统一在这层管
     const timeoutTimer = setTimeout(() => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import clsx from "../utils/clsx";
 import PageShell from "../components/page-shell";
 import AgentProcessesModal from "../components/agent-processes-modal";
@@ -13,6 +13,7 @@ import {
   loadSettings,
   loadHistoryTotal,
   loadStatus,
+  loadCommands,
   loadTasks,
   probeLark,
   removeTask,
@@ -23,9 +24,11 @@ import {
   stopListening,
   useDockingActiveJobCount,
   useDockingRunTargets,
+  useDockingCommands,
   useDockingSettings,
   useDockingStatus,
 } from "../stores/docking-store";
+import { RUN_MODE_SHORT } from "./docking/constants";
 import AskRequesterModal from "./docking/ask-requester-modal";
 import AutoDispatchModal from "./docking/auto-dispatch-modal";
 import CliInstallCard from "./docking/cli-install-card";
@@ -44,6 +47,7 @@ import WorkbenchMenu from "./docking/workbench-menu";
 export default function DockingPage() {
   const status = useDockingStatus();
   const settings = useDockingSettings();
+  const commands = useDockingCommands();
   const appConfig = useAppConfig();
   // memo 掉：不 memo 的话每次渲染都是一个新数组，将来给这几个弹窗加 memo 会白加
   const repos = useMemo(
@@ -97,6 +101,7 @@ export default function DockingPage() {
 
   useEffect(() => {
     loadTasks();
+    loadCommands();
     loadStatus();
     // settings 拉回 store 即可，弹窗各自挂载时从 store 取初值，不再往页面 state 回填
     loadSettings();
@@ -104,6 +109,15 @@ export default function DockingPage() {
     refreshAllProbes();
     // 历史总数归 store（顶栏角标要），列表归 JobHistoryModal 自己
     loadHistoryTotal();
+  }, []);
+
+  // 任务库是磁盘上的一个文件，外部进程也在写它：MCP server 回写状态、req-to-plan 的桥
+  // 往里塞需求池工作包。这些写入没有 IPC 增量可推，回到窗口时对一次账。
+  // loadTasks 里有签名比对，没变化就不会 setState，所以 alt-tab 频繁触发也不会掉帧。
+  useEffect(() => {
+    const onFocus = () => loadTasks();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
   const handleInstallLark = async () => {
@@ -225,38 +239,29 @@ export default function DockingPage() {
           </div>
         )}
 
-        {/* 飞书快捷指令说明栏 */}
-        <div className="flex items-center justify-between text-[11px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-1.5">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-slate-700 font-bold">💡 飞书指令：</span>
-            <span>
-              <code className="text-sky-700 font-mono font-semibold">
-                /r 内容
-              </code>{" "}
-              提需求/问逻辑
-            </span>
-            <span className="text-slate-400">·</span>
-            <span>
-              <code className="text-sky-700 font-mono font-semibold">/u</code>{" "}
-              查任务
-            </span>
-            <span className="text-slate-400">·</span>
-            <span>
-              <code className="text-sky-700 font-mono font-semibold">
-                /u 7 补充
-              </code>{" "}
-              补充到 #7
-            </span>
-            <span className="text-slate-400">·</span>
-            <span>
-              <code className="text-sky-700 font-mono font-semibold">/h</code>{" "}
-              看帮助
+        {/* 飞书快捷指令说明栏。指令表来自主进程（src/feishu/commands.js），
+            /h 的帮助文案也由同一份生成——加指令不会只改一边。拉不到就整条不渲染 */}
+        {commands.length > 0 && (
+          <div className="flex items-center justify-between text-[11px] text-slate-700 bg-slate-50 border border-slate-200/80 rounded-lg px-3 py-1.5">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-slate-700 font-bold">💡 飞书指令：</span>
+              {commands.map((c, i) => (
+                <Fragment key={c.key}>
+                  {i > 0 && <span className="text-slate-400">·</span>}
+                  <span title={c.help}>
+                    <code className="text-sky-700 font-mono font-semibold">
+                      {c.hint.code}
+                    </code>{" "}
+                    {c.hint.label}
+                  </span>
+                </Fragment>
+              ))}
+            </div>
+            <span className="text-[10px] text-slate-600 font-medium shrink-0 ml-2">
+              未带指令的普通消息自动归入「未识别」
             </span>
           </div>
-          <span className="text-[10px] text-slate-600 font-medium shrink-0 ml-2">
-            未带指令的普通消息自动归入「未识别」
-          </span>
-        </div>
+        )}
 
         {/* 自动化与通知策略配置栏 */}
         <div className="flex items-center justify-between gap-3 text-xs bg-white border border-border rounded-lg px-3 py-2 flex-wrap shadow-2xs">
@@ -267,7 +272,7 @@ export default function DockingPage() {
             </span>
             <label
               className="flex items-center gap-1.5 cursor-pointer text-slate-800 font-medium hover:text-slate-950"
-              title="收到 /r 需求时自动发送「已记录 #N」飞书卡片"
+              title="机器人主动回执：/r 的「已记录 #N」卡片、/plan 的备料结果、AI 的反问。你发 /u、/h 属于问必答，不受它影响"
             >
               <input
                 type="checkbox"
@@ -352,6 +357,7 @@ export default function DockingPage() {
                 <span>预设规则</span>
               </button>
             </div>
+
           </div>
         </div>
 
@@ -363,11 +369,8 @@ export default function DockingPage() {
               <span>
                 <strong>⚡ 无人值守赛博牛马已就绪</strong>：收到 /r
                 需求后将自动派发 AI（
-                {settings.autoDispatchMode === "analyze"
-                  ? "只读排查"
-                  : settings.autoDispatchMode === "edit"
-                    ? "改代码"
-                    : "全自动"}{" "}
+                {RUN_MODE_SHORT[settings.autoDispatchMode] ||
+                  settings.autoDispatchMode}{" "}
                 ·{" "}
                 {settings.autoDispatchEngine === "agy"
                   ? "Antigravity"

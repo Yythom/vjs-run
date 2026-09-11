@@ -20,6 +20,7 @@ import {
   stopListener,
 } from "../feishu/listener.js";
 import { buildPrompt } from "../feishu/prompt.js";
+import { COMMANDS } from "../feishu/commands.js";
 import { probeAgy, setupAgy, teardownAgy } from "../feishu/agy-setup.js";
 import { probeCodex, setupCodex, teardownCodex } from "../feishu/codex-setup.js";
 import {
@@ -67,6 +68,10 @@ export function registerDockingIpc() {
   }));
 
   // ── 任务列表 ────────────────────────────────────────────────────────────────
+  // 面板顶部的指令提示栏用它渲染。指令定义在主进程（listener 才是解析的那一方），
+  // 面板只负责展示，这样加指令不会漏改 UI
+  ipcSafe("docking-commands", () => ({ commands: COMMANDS }));
+
   ipcSafe("docking-list-tasks", () => ({ tasks: listTasks() }));
 
   ipcSafe("docking-add-task", (_e, { title, content, senderName, repoPath, status }) => {
@@ -95,7 +100,7 @@ export function registerDockingIpc() {
       prevStatus !== nextStatus
     ) {
       const settings = getSettings();
-      if (settings.ackEnabled && settings.notifyOnComplete) {
+      if (settings.notifyOnComplete ?? true) {
         const cleanNote = String(task.note || patch?.note || "").trim();
         const fallbackMsg =
           nextStatus === "done"

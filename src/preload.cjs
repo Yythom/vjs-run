@@ -282,12 +282,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
   dockingStart: () => ipcRenderer.invoke("docking-start"),
   dockingStop: () => ipcRenderer.invoke("docking-stop"),
 
-  // 运行时开关（目前只有「收到 /r 是否自动回执」）
+  // 运行时开关（自动回执、完成通知、自动派活、隔离分支、白名单…）
   dockingGetSettings: () => ipcRenderer.invoke("docking-get-settings"),
   dockingSetSettings: (patch) =>
     ipcRenderer.invoke("docking-set-settings", { patch }),
 
   // 任务列表读写
+  dockingCommands: () => ipcRenderer.invoke("docking-commands"),
   dockingListTasks: () => ipcRenderer.invoke("docking-list-tasks"),
   dockingAddTask: (payload) =>
     ipcRenderer.invoke("docking-add-task", payload || {}),

@@ -1087,7 +1087,12 @@ test("runner: 切分支失败时中止 job，并把任务从 doing 放回 inbox"
     throw new Error("不该走到这一步");
   });
 
-  const t = addTask({ content: "要改代码的需求", status: "inbox" });
+  const t = addTask({
+    content: "要改代码的需求",
+    status: "inbox",
+    messageId: "om_dirty_1",
+    chatId: "oc_dirty_chat",
+  });
   updateTask(t.id, { status: "doing" });
 
   const { jobId } = enqueueJob({
@@ -1104,6 +1109,11 @@ test("runner: 切分支失败时中止 job，并把任务从 doing 放回 inbox"
   assert.equal(job.status, "error");
   assert.match(job.error, /未提交改动/);
   assert.equal(getTask(t.id).status, "inbox", "任务要放回待处理，不能卡在 doing");
+  const thread = getTask(t.id).thread || [];
+  assert.ok(
+    thread.some((item) => item.text.includes("本次自动处理未完成")),
+    "沟通记录里必须记下未完成原因",
+  );
 
   setSpawnImpl(null);
 });
@@ -1192,3 +1202,701 @@ test("runner: engine=codex 支持 exec --json 参数构造与结构化事件解�
   setSpawnImpl(null);
 });
 
+
+// ─── 产 plan 档与需求池工作包 ────────────────────────────────────────────────
+
+/**
+ * 起一个 mock spawn，把每次调用的 (bin, args, opts) 记下来供断言。
+ *
+ * 子进程自己在 setImmediate 里收尾：spawn 发生在 p-queue 的异步回调里，
+ * 同步的测试体拿不到 proc，手动 emit("close") 会落空，然后 onQueueIdle 一直挂着。
+ */
+async function captureSpawn() {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const { setSpawnImpl } = await import("../src/feishu/runner.js");
+
+  const calls = [];
+  setSpawnImpl((bin, args, opts) => {
+    calls.push({ bin, args, opts });
+    const proc = new EventEmitter();
+    proc.stdout = new PassThrough();
+    proc.stderr = new PassThrough();
+    proc.kill = () => proc.emit("close", 0);
+    setImmediate(() => {
+      proc.stdout.end();
+      proc.stderr.end();
+      proc.emit("close", 0);
+    });
+    return proc;
+  });
+  return { calls, restore: () => setSpawnImpl(null) };
+}
+
+/** 跑一个 job 并等它收尾，返回 spawn 到的参数。 */
+async function runJobAndCaptureArgs(opts) {
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const { calls, restore } = await captureSpawn();
+  try {
+    enqueueJob(opts);
+    await onQueueIdle();
+  } finally {
+    restore();
+  }
+  assert.equal(calls.length, 1, "应该正好起了一个子进程");
+  return calls[0].args;
+}
+
+/** 造一个带 skill.md 的工作包。 */
+function freshWorkpackDir(skill = "# 工作规范\n必须逐张 Read 截图。") {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docking-workpack-"));
+  fs.writeFileSync(path.join(dir, "context.md"), "# 工作包: 测试需求\n");
+  if (skill !== null) fs.writeFileSync(path.join(dir, "skill.md"), skill);
+  return dir;
+}
+
+test("plan 档：放行 Bash(node:*)，禁掉改现存文件的工具，但不整个禁 Bash", async () => {
+  freshUserData();
+  const task = addTask({ title: "需求池任务", content: "产 plan" });
+  const args = await runJobAndCaptureArgs({
+    ids: [task.id],
+    cwd: "/mock/repo",
+    mode: "plan",
+    engine: "claude",
+  });
+
+  assert.ok(args.includes("Bash(node:*)"), "影响面扫描要起 node 子进程，必须预授权");
+
+  const denyAt = args.indexOf("--disallowedTools");
+  assert.ok(denyAt > -1, "plan 档必须有 deny 列表");
+  const deny = args.slice(denyAt + 1);
+  assert.ok(deny.includes("Edit"), "不该改现存业务代码");
+  assert.ok(
+    !deny.includes("Bash"),
+    "整个禁掉 Bash，影响面扫描会静默退化成 grep——不报错但结论不可信",
+  );
+});
+
+test("plan 档：三个引擎都能跑，但各自的边界不一样", async () => {
+  const dir = freshWorkpackDir();
+
+  // claude：工具粒度——只预授权 node，禁掉改现存文件的工具
+  freshUserData();
+  const t1 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
+  const claude = await runJobAndCaptureArgs({
+    ids: [t1.id], cwd: "/mock/repo", mode: "plan", engine: "claude",
+  });
+  assert.ok(claude.includes("Bash(node:*)"));
+  assert.ok(claude.slice(claude.indexOf("--disallowedTools") + 1).includes("Edit"));
+
+  // codex：沙箱粒度——workspace-write，读全部、只在工作目录与工作包内可写
+  freshUserData();
+  const t2 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
+  const codex = await runJobAndCaptureArgs({
+    ids: [t2.id], cwd: "/mock/repo", mode: "plan", engine: "codex",
+  });
+  assert.equal(codex[codex.indexOf("--sandbox") + 1], "workspace-write");
+  assert.ok(
+    !codex.includes("--dangerously-bypass-approvals-and-sandbox"),
+    "产 plan 不该整台机器敞开——codex 是唯一能收紧沙箱的",
+  );
+  // prompt 必须排在所有选项后面，它是位置参数
+  assert.equal(codex[codex.length - 1], codex.find((a) => a.includes("产实施 plan")));
+
+  // agy：无头模式只有「全自动批准」一档，边界只能靠 prompt
+  freshUserData();
+  const t3 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
+  const agy = await runJobAndCaptureArgs({
+    ids: [t3.id], cwd: "/mock/repo", mode: "plan", engine: "agy",
+  });
+  assert.ok(agy.includes("--dangerously-skip-permissions"));
+  assert.ok(
+    !agy.includes("--mode"),
+    "别用 agy 自带的 --mode plan：语义没文档，可能连 plan.md 都写不出、还可能挡掉 MCP",
+  );
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("plan 档：三个引擎都要放行工作包目录，规范按各自能力送进去", async () => {
+  const dir = freshWorkpackDir("# 工作规范\n必须逐张 Read 截图。");
+
+  for (const engine of ["claude", "codex", "agy"]) {
+    freshUserData();
+    const task = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
+    const args = await runJobAndCaptureArgs({
+      ids: [task.id], cwd: "/mock/repo", mode: "plan", engine,
+    });
+
+    // 工作包在仓库外，三个引擎都有 --add-dir，都得放行
+    assert.equal(args[args.indexOf("--add-dir") + 1], dir, `${engine} 没放行工作包目录`);
+
+    if (engine === "claude") {
+      // 只有 claude 有 --append-system-prompt，规范注进 system prompt 跳不掉
+      assert.match(args[args.indexOf("--append-system-prompt") + 1], /必须逐张 Read 截图/);
+    } else {
+      // 另外两个没这个参数，规范只能拼进 prompt 正文
+      assert.ok(!args.includes("--append-system-prompt"));
+      const prompt = engine === "codex" ? args[args.length - 1] : args[args.indexOf("-p") + 1];
+      assert.match(prompt, /必须逐张 Read 截图/, `${engine} 的规范没送进去`);
+      assert.match(prompt, /产实施 plan/, `${engine} 的 plan 档指引没送进去`);
+    }
+  }
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("工作包任务：目录 --add-dir 放行，skill.md 注入 system prompt", async () => {
+  freshUserData();
+  const dir = freshWorkpackDir();
+  const task = addTask({
+    title: "需求池工作包",
+    content: "产 plan",
+    workpackDir: dir,
+    source: "req-pool",
+  });
+  assert.equal(getTask(task.id).workpackDir, dir, "workpackDir 要能存进任务库");
+
+  const args = await runJobAndCaptureArgs({
+    ids: [task.id],
+    cwd: "/mock/repo",
+    mode: "plan",
+    engine: "claude",
+  });
+
+  // 工作包在被分析仓库之外，不放行就既读不到 context.md 也写不出 plan.md
+  assert.equal(args[args.indexOf("--add-dir") + 1], dir);
+  // 注入 system prompt 而不是让 agent「自己去读一个文件」——它跳不掉
+  assert.match(args[args.indexOf("--append-system-prompt") + 1], /必须逐张 Read 截图/);
+  // prompt 里要说清哪条任务对应哪个目录
+  const prompt = args[args.indexOf("-p") + 1];
+  assert.match(prompt, new RegExp(`#${task.seq} → ${dir}`));
+  assert.match(prompt, /产实施 plan/);
+});
+
+test("工作包没带 skill.md 也照常跑，不注入空的 system prompt", async () => {
+  freshUserData();
+  const dir = freshWorkpackDir(null);
+  const task = addTask({ title: "无规范工作包", content: "x", workpackDir: dir });
+
+  const args = await runJobAndCaptureArgs({
+    ids: [task.id],
+    cwd: "/mock/repo",
+    mode: "plan",
+    engine: "claude",
+  });
+
+  assert.ok(args.includes("--add-dir"), "目录还是要放行");
+  assert.ok(!args.includes("--append-system-prompt"), "没规范就别塞个空的进去");
+});
+
+test("普通 IM 任务不受影响：没有 workpackDir 就不加 --add-dir", async () => {
+  freshUserData();
+  const task = addTask({ title: "IM 提问", content: "这个接口怎么走的" });
+
+  const args = await runJobAndCaptureArgs({
+    ids: [task.id],
+    cwd: "/mock/repo",
+    mode: "analyze",
+    engine: "claude",
+  });
+
+  assert.ok(!args.includes("--add-dir"));
+  assert.ok(!args.includes("--append-system-prompt"));
+  assert.ok(!args.includes("Bash(node:*)"), "只读档不该被 plan 档的白名单串味");
+});
+
+// ─── /plan 指令 ──────────────────────────────────────────────────────────────
+
+test("parseCommand: /plan 独立成一条指令，不跟 /r、/u 串味", async () => {
+  const { parseCommand } = await import("../src/feishu/listener.js");
+
+  assert.deepEqual(parseCommand("/plan https://x.feishu.cn/wiki/abc"), {
+    cmd: "plan",
+    body: "https://x.feishu.cn/wiki/abc",
+  });
+  // 全角冒号、大小写、多余空格都要认——飞书输入法常带出来
+  assert.equal(parseCommand("/PLAN：rec123").cmd, "plan");
+  assert.equal(parseCommand("/plan   相似推荐").body, "相似推荐");
+  // /r 里贴链接仍然是普通需求，不该被当成工作包
+  assert.deepEqual(parseCommand("/r 见 https://x.feishu.cn/wiki/abc"), {
+    cmd: "r",
+    body: "见 https://x.feishu.cn/wiki/abc",
+  });
+  // 别把 /plans、/planning 这类词误判成指令
+  assert.equal(parseCommand("/planning 下周排期").cmd, null);
+  assert.equal(parseCommand("/u 7 补充").cmd, "u");
+  assert.equal(parseCommand("随便说句话").cmd, null);
+});
+
+test("指令表是唯一事实来源：/h 帮助与面板提示栏都由它生成", async () => {
+  const { parseCommand, renderHelp } = await import("../src/feishu/listener.js");
+  const { COMMANDS } = await import("../src/feishu/commands.js");
+
+  const help = renderHelp();
+  for (const c of COMMANDS) {
+    // 表里有的，/h 里必须有——帮助文案由表生成，漏了说明生成逻辑坏了
+    assert.ok(help.includes(c.usage), `/h 里缺 ${c.usage}`);
+    assert.ok(help.includes(c.help), `/h 里缺「${c.help}」的说明`);
+    // 面板提示栏靠 hint 渲染，缺了那一格就是空的
+    assert.ok(c.hint?.code && c.hint?.label, `${c.key} 缺 hint，面板提示栏会漏显示`);
+  }
+
+  // 表里列出来的，listener 必须真认得——否则会出现「帮助里写了但发过去没反应」
+  for (const c of COMMANDS) {
+    assert.ok(
+      parseCommand(c.hint.code).cmd,
+      `指令表里写了 ${c.hint.code}，但 parseCommand 不认它`,
+    );
+  }
+
+  // 反过来：现有指令一个都不许从文档里消失
+  for (const cmd of ["/r", "/plan", "/u", "/h"]) {
+    assert.ok(
+      COMMANDS.some((c) => c.hint.code === cmd || c.hint.code.startsWith(`${cmd} `)),
+      `${cmd} 必须写进指令表`,
+    );
+  }
+
+  // 加了 /plan 之后正则别把 /h 吃掉
+  assert.equal(parseCommand("/help").cmd, "h");
+});
+
+test("指令表：改表就能改到帮助文案，不用再去手改一遍", async () => {
+  const { COMMANDS, renderHelp } = await import("../src/feishu/commands.js");
+
+  const plan = COMMANDS.find((c) => c.key === "plan");
+  assert.ok(plan, "/plan 得在表里");
+  // 示例与续行都要落进 /h
+  for (const note of plan.examples[0].notes) {
+    assert.ok(renderHelp().includes(note), `/h 里缺示例续行：${note}`);
+  }
+  // 「不带指令的消息也会留底」那句要跟着表走，不能写死成「不带 /r」
+  assert.match(renderHelp(), /不带指令（\/r、\/plan）/);
+});
+
+/** 造一个假的飞书消息事件。 */
+function fakeEvt(overrides = {}) {
+  return {
+    message_id: "om_plan_1",
+    chat_id: "oc_chat_1",
+    chat_type: "p2p",
+    sender_id: "ou_someone",
+    ...overrides,
+  };
+}
+
+/**
+ * 会触发 force 回执（失败、已存在）的用例用这个。
+ *
+ * force 绕过 ackEnabled，会真的走 sendMessage。给一个没有任何投递目标的 evt，
+ * sendMessage 会在「缺 chat_id / open_id」那步直接返回，一个 lark-cli 进程都不起——
+ * 测试绝不该尝试往真实飞书发消息。
+ */
+const silentEvt = () => fakeEvt({ message_id: "", chat_id: "", sender_id: "" });
+
+/**
+ * mock 掉备料子进程，让它按给定结果收尾。
+ * 返回 calls 供断言实际起进程的参数。
+ */
+async function mockPrepare({ stdout = "", stderr = "", code = 0 }) {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const { setPrepareSpawnImpl } = await import("../src/feishu/listener.js");
+
+  const calls = [];
+  setPrepareSpawnImpl((bin, args, opts) => {
+    calls.push({ bin, args, opts });
+    const proc = new EventEmitter();
+    proc.stdout = new PassThrough();
+    proc.stderr = new PassThrough();
+    proc.kill = () => proc.emit("close", 143);
+    setImmediate(() => {
+      if (stdout) proc.stdout.write(stdout);
+      if (stderr) proc.stderr.write(stderr);
+      proc.stdout.end();
+      proc.stderr.end();
+      proc.emit("close", code);
+    });
+    return proc;
+  });
+  return { calls, restore: () => setPrepareSpawnImpl(null) };
+}
+
+/** 造一个 req prepare 产出的工作包。 */
+function fakePreparedWorkpack({ recordId = "recPLAN01", assets = 2 } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "plan-workpack-"));
+  fs.writeFileSync(
+    path.join(dir, "context.md"),
+    [
+      "# 工作包: 视频详情页增加「相似推荐」模块",
+      "",
+      "- 方案文档: https://example.feishu.cn/wiki/ABCdef",
+      "",
+    ].join("\n"),
+  );
+  fs.writeFileSync(path.join(dir, "requirement.md"), "需求正文\n");
+  fs.writeFileSync(path.join(dir, "skill.md"), "# 工作规范\n必须逐张 Read 截图。");
+  if (assets) {
+    fs.mkdirSync(path.join(dir, "assets"), { recursive: true });
+    for (let i = 1; i <= assets; i += 1) {
+      fs.writeFileSync(path.join(dir, "assets", `img-0${i}.png`), `png${i}`);
+    }
+  }
+  return {
+    dir,
+    json: JSON.stringify({ outDir: dir, recordId, name: "相似推荐", assetCount: assets }),
+  };
+}
+
+test("/plan: 备料进程用 Electron 当 node 跑，带 --json 与 --repo", async () => {
+  freshUserData();
+  // ackEnabled 关掉，回执静默——测试绝不该真往飞书发消息
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { calls, restore } = await mockPrepare({ stdout: json });
+
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  restore();
+
+  const { bin, args, opts } = calls[0];
+  assert.equal(bin, process.execPath, "要拿 Electron 自己当 node 跑，否则读不到 asar 里的 req");
+  assert.equal(opts.env.ELECTRON_RUN_AS_NODE, "1");
+  assert.ok(args[0].endsWith(path.join("req-to-plan", "bin", "req")));
+  assert.deepEqual(args.slice(1, 4), ["prepare", "https://x.feishu.cn/wiki/abc", "--json"]);
+  assert.ok(args.includes("--repo"), "要告诉 req 影响面扫哪个仓库");
+  // 工作包落 userData，不落被分析仓库——那边开着隔离分支
+  assert.ok(opts.cwd.includes("req-workpacks"));
+  assert.ok(opts.env.PATH, "req 还要起 lark-cli，PATH 必须是登录 shell 那份");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 备料成功后建出带 workpackDir 与真实飞书会话的任务", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { restore } = await mockPrepare({ stdout: json });
+  const { restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  const [task] = listTasks();
+  assert.equal(task.source, "req-pool");
+  assert.equal(task.workpackDir, dir);
+  assert.equal(task.title, "视频详情页增加「相似推荐」模块");
+  // /plan 来的任务带着真实飞书会话，AI 的 ask_requester 才发得出去
+  assert.equal(task.chatId, "oc_chat_1");
+  assert.equal(task.requester.id, "ou_someone");
+  assert.equal(task.messageId, "om_plan_1");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 没有开关，收到就开跑，且固定走 plan 档 + claude", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { restore } = await mockPrepare({ stdout: json });
+  const { calls, restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  assert.equal(calls.length, 1, "应该派出去一个 job");
+  const { args } = calls[0];
+  assert.ok(args.includes("Bash(node:*)"), "plan 档才放行 node 子进程");
+  assert.equal(args[args.indexOf("--add-dir") + 1], dir);
+  assert.match(args[args.indexOf("--append-system-prompt") + 1], /必须逐张 Read 截图/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 同一份需求再 /plan 一次不重复建任务", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { dir, json } = fakePreparedWorkpack();
+
+  // 第一次用真实会话（走静默的普通回执），第二次命中 existing 分支、是 force 回执，
+  // 换成没有投递目标的 evt 免得真去发消息
+  const rounds = [
+    { evt: fakeEvt(), msgId: "om_plan_1" },
+    { evt: silentEvt(), msgId: "" },
+  ];
+  for (const { evt, msgId } of rounds) {
+    const { restore } = await mockPrepare({ stdout: json });
+    await handlePlanCommand(evt, "rec123", Date.now(), msgId);
+    restore();
+  }
+
+  assert.equal(listTasks().length, 1, "第二次只该刷新材料，不该再建一条");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 备料失败不建任务，错误原因取 stderr 末尾几行", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { restore } = await mockPrepare({
+    stderr: "→ 查询需求池\n✗ 未在「排实施」中找到: 不存在的需求\n",
+    code: 1,
+  });
+
+  await handlePlanCommand(silentEvt(), "不存在的需求", Date.now(), "");
+  restore();
+
+  assert.equal(listTasks().length, 0, "备料都没成功，不该在面板上留一条空任务");
+});
+
+test("/plan: 没配项目目录时直接拒，不拿工作包目录当仓库扫出一份空的影响面", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "auto", lastCwd: "" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { calls, restore } = await mockPrepare({ stdout: "{}" });
+
+  await handlePlanCommand(silentEvt(), "rec123", Date.now(), "");
+  restore();
+
+  assert.equal(calls.length, 0, "连备料进程都不该起");
+  assert.equal(listTasks().length, 0);
+});
+
+test("/plan: 白名单管的是「谁可以」而不是「要不要」，名单外只备料不派活", async () => {
+  freshUserData();
+  setSettings({
+    ackEnabled: false,
+    autoDispatchCwd: "/mock/repo",
+    allowedRequesters: ["ou_only_me"],
+  });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { restore } = await mockPrepare({ stdout: json });
+  const { calls, restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(
+    fakeEvt({ sender_id: "ou_someone_else" }),
+    "rec123",
+    Date.now(),
+    "om_plan_1",
+  );
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  assert.equal(calls.length, 0, "名单外的人不该驱动本机起 AI 进程");
+  // 但材料照备、任务照留底，等人在面板上确认
+  const [task] = listTasks();
+  assert.equal(task.workpackDir, dir);
+  assert.equal(task.status, "inbox");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("parsePlanTarget: 链接/record_id 挑出来备料，剩下的话是提出人的交代", async () => {
+  const { parsePlanTarget } = await import("../src/feishu/listener.js");
+
+  // 说明在前
+  assert.deepEqual(parsePlanTarget("帮我看看 https://x.feishu.cn/wiki/abc"), {
+    target: "https://x.feishu.cn/wiki/abc",
+    remark: "帮我看看",
+  });
+  // 说明在后，链接带 query
+  assert.deepEqual(
+    parsePlanTarget("https://x.feishu.cn/wiki/abc?from=from_copylink 看看有没有要改的"),
+    {
+      target: "https://x.feishu.cn/wiki/abc?from=from_copylink",
+      remark: "看看有没有要改的",
+    },
+  );
+  // 飞书里常见的「链接后面直接跟中文、没有空格」
+  assert.deepEqual(parsePlanTarget("https://x.feishu.cn/wiki/abc请看下图片业务线"), {
+    target: "https://x.feishu.cn/wiki/abc",
+    remark: "请看下图片业务线",
+  });
+  // record_id 同理
+  assert.deepEqual(parsePlanTarget("rec27zFqrO7jDS 重点看图片业务线"), {
+    target: "rec27zFqrO7jDS",
+    remark: "重点看图片业务线",
+  });
+  // 飞书富文本 Markdown 链接 [title](url)
+  assert.deepEqual(
+    parsePlanTarget("看下这个 [需求文档](https://x.feishu.cn/wiki/abc) 重点看支付"),
+    {
+      target: "https://x.feishu.cn/wiki/abc",
+      remark: "看下这个 重点看支付",
+    },
+  );
+  // 尖括号包裹 <url>
+  assert.deepEqual(
+    parsePlanTarget("<https://x.feishu.cn/wiki/abc> 重点看支付"),
+    {
+      target: "https://x.feishu.cn/wiki/abc",
+      remark: "重点看支付",
+    },
+  );
+  // 引号包裹
+  assert.deepEqual(
+    parsePlanTarget('"https://x.feishu.cn/wiki/abc" 重点看支付'),
+    {
+      target: "https://x.feishu.cn/wiki/abc",
+      remark: "重点看支付",
+    },
+  );
+  // 光秃秃一个链接，没有交代
+  assert.equal(parsePlanTarget("https://x.feishu.cn/wiki/abc").remark, "");
+  // 没有链接也没有 record_id：整段当需求名，不硬拆
+  assert.deepEqual(parsePlanTarget("相似推荐"), { target: "相似推荐", remark: "" });
+  assert.deepEqual(parsePlanTarget("相似推荐 重点看图片"), {
+    target: "相似推荐 重点看图片",
+    remark: "",
+  });
+});
+
+test("/plan: 指令里顺带说的话进 prompt，并回显出来好让人发现拆错", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { calls: prepCalls, restore } = await mockPrepare({ stdout: json });
+  const { calls, restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(
+    fakeEvt(),
+    "https://x.feishu.cn/wiki/abc 请查看这个链接，看看有没有什么修改的",
+    Date.now(),
+    "om_plan_1",
+  );
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  // 喂给 req prepare 的只能是链接，不能把整句话带过去
+  assert.equal(prepCalls[0].args[2], "https://x.feishu.cn/wiki/abc");
+
+  const [task] = listTasks();
+  assert.match(task.content, /提出人在指令里另外交代了一句/);
+  assert.match(task.content, /> 请查看这个链接，看看有没有什么修改的/);
+  // 真的送到 agent 手上了
+  assert.match(calls[0].args[calls[0].args.indexOf("-p") + 1], /看看有没有什么修改的/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 没有交代时不硬塞一段空的「提出人另外交代」", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { restore } = await mockPrepare({ stdout: json });
+  const { restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  assert.ok(!/提出人在指令里另外交代/.test(listTasks()[0].content));
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 同一份需求再 /plan 一次，新交代挂进沟通记录不丢", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+
+  const first = await mockPrepare({ stdout: json });
+  const firstRun = await captureSpawn();
+  await handlePlanCommand(fakeEvt(), "rec27zFqrO7jDS 先整体看一遍", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  first.restore();
+  firstRun.restore();
+
+  const second = await mockPrepare({ stdout: json });
+  const secondRun = await captureSpawn();
+  await handlePlanCommand(silentEvt(), "rec27zFqrO7jDS 这次重点看图片业务线", Date.now(), "");
+  await onQueueIdle();
+  second.restore();
+  secondRun.restore();
+
+  assert.equal(listTasks().length, 1, "不该重复建任务");
+  const [task] = listTasks();
+  const said = task.thread.map((e) => e.text).join("\n");
+  assert.match(said, /先整体看一遍/, "第一次的交代在正文里");
+  assert.match(said, /这次重点看图片业务线/, "第二次的交代不能丢");
+  // 只记不跑的话人会一直等：带了新交代就该真的再跑一轮
+  assert.equal(secondRun.calls.length, 1, "第二次带交代应该重新派一轮");
+  assert.match(
+    secondRun.calls[0].args[secondRun.calls[0].args.indexOf("-p") + 1],
+    /这次重点看图片业务线/,
+    "新交代要送到 agent 手上",
+  );
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 光秃秃再发一次不重跑，只告诉你已经有这条了", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+
+  const first = await mockPrepare({ stdout: json });
+  const firstRun = await captureSpawn();
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  first.restore();
+  firstRun.restore();
+
+  const second = await mockPrepare({ stdout: json });
+  const secondRun = await captureSpawn();
+  await handlePlanCommand(silentEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "");
+  await onQueueIdle();
+  second.restore();
+  secondRun.restore();
+
+  assert.equal(listTasks().length, 1);
+  assert.equal(secondRun.calls.length, 0, "没说新要求就别白跑一轮");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("plan 档：工具白名单的形状必须是 Bash(<前缀>:*)，少个冒号就等于没放行", async () => {
+  freshUserData();
+  const task = addTask({ title: "需求池任务", content: "产 plan" });
+  const args = await runJobAndCaptureArgs({
+    ids: [task.id], cwd: "/mock/repo", mode: "plan", engine: "claude",
+  });
+
+  const allowAt = args.indexOf("--allowedTools");
+  const denyAt = args.indexOf("--disallowedTools");
+  const bashRule = args.slice(allowAt + 1, denyAt).find((a) => a.startsWith("Bash("));
+  assert.ok(bashRule, "plan 档必须放行 node 子进程");
+
+  // 不跟源码比字符串——两边写着同一个错字就谁也发现不了（真踩过：冒号丢了写成
+  // "Bash(node *)"，claude 认不出来，影响面扫描被无头模式静默拒掉、退化成 grep）。
+  // 这里独立断言 claude CLI 要求的那个形状。
+  assert.match(
+    bashRule,
+    /^Bash\([a-z][\w.-]*:\*\)$/,
+    `工具模式写错了：${bashRule}。claude 的前缀匹配要求 Bash(<命令>:*)，冒号不能少`,
+  );
+});
