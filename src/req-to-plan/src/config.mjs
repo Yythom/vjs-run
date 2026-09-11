@@ -7,10 +7,7 @@ import { readdir, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..').replace(
-  /\bapp\.asar\b/,
-  'app.asar.unpacked',
-)
+export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 const REPO_CONFIG = 'repo.config.json'
 const POOL_CONFIG = 'pool.config.json'
