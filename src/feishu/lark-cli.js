@@ -283,7 +283,6 @@ export async function sendMessage({
   replyInThread = true,
 }) {
   const isCard = Boolean(card && typeof card === "object");
-  const msgType = isCard ? "interactive" : "text";
   const contentStr = isCard
     ? typeof card === "string"
       ? card
@@ -399,7 +398,7 @@ export async function downloadMessageResource({
   try {
     const stat = fs.statSync(outputPath);
     return { ok: true, path: outputPath, size: stat.size };
-  } catch (err) {
+  } catch {
     return { ok: true, path: outputPath, size: 0 };
   }
 }

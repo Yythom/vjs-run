@@ -106,7 +106,7 @@ server.registerTool(
       prevStatus !== status
     ) {
       const settings = getSettings();
-      if (settings.ackEnabled && settings.notifyOnComplete) {
+      if (settings.notifyOnComplete ?? true) {
         const cleanNote = String(updated.note || note || "").trim();
         const fallbackMsg =
           status === "done"
