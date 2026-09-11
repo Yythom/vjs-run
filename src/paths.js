@@ -32,18 +32,20 @@ export const RENDERER_INDEX_HTML = path.join(
 /**
  * req-to-plan 的根目录与入口。
  *
- * 它随 src/** 一起打包，但走 asarUnpack 落在 app.asar.unpacked/ 下——必须 unpack：
- * 工作包的 context.md / skill.md 里写着给 agent 参考的影响面扫描命令，系统 node
- * 读不了 asar。
+ * 留在 asar 里不 unpack：读它的只有两处——listener 起 req prepare、mcp-server 的
+ * req_scan 执行扫描——两处都是拿 Electron 当 node 跑（ELECTRON_RUN_AS_NODE=1），
+ * 读得了 asar（实测过）。
  *
- * 换算只在这里做一次。从这个真实路径启动后，req-to-plan 内部由 import.meta.url
- * 派生的 packageRoot 自然全程是 unpacked，它不必也不该知道 asar 的存在。
- * 用 path.sep 包起来匹配：app.asar.unpacked 里也含 app.asar 子串，
- * 光用 /\bapp\.asar\b/ 会二次命中，滚成 app.asar.unpacked.unpacked。
+ * 曾经 unpack 过，因为那时影响面扫描要 agent 自己用系统 node 跑 context.md 里的命令，
+ * 而系统 node 读不了 asar。扫描改走 MCP 之后这个理由没了，连带那段
+ * asar → unpacked 的路径换算也删掉——它曾经因为两处各换一次滚成
+ * app.asar.unpacked.unpacked，是实打实栽过的坑。
+ *
+ * 留下的已知代价：打包后工作包里 context.md / skill.md 写的命令路径指向 asar 内部，
+ * 复制出来用系统 node 直接跑会 Cannot find module。产 plan 该走 req_scan 工具
+ * （plan 档下 claude 根本没有 Bash），要手动排查就在仓库里跑 bin/req。
  */
-export const REQ_TO_PLAN_DIR = path
-  .join(SRC_DIR, "req-to-plan")
-  .replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+export const REQ_TO_PLAN_DIR = path.join(SRC_DIR, "req-to-plan");
 
 /** req-to-plan 的 CLI 入口 */
 export const REQ_BIN = path.join(REQ_TO_PLAN_DIR, "bin", "req");
