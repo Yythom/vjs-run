@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+// 统一入口：需求侧命令直接转发给 intake，影响面命令走 `req scan <子命令>`。
+//
+// 整个包自包含（工具 + skill + 配置），可以整体拷到任意位置运行，
+// 被分析仓库通过 --repo / VJS_REPO_ROOT 指定，目标仓库不需要安装任何东西。
+import { main as impactMain } from '../src/impact/commands.mjs'
+import { main as intakeMain } from '../src/intake/commands.mjs'
+
+const usage = `req —— 飞书需求 → 实施 plan
+
+需求侧：
+  req pool                            列出需求池中「排实施」的需求
+  req plan <链接|record_id|关键词>     备料后交给 Claude 产出 plan
+  req prepare <链接|record_id|关键词>  只生成工作包，不调 Claude
+  req fetch <飞书URL>                  只拉取需求文档
+  req watch                           轮询新流转进「排实施」的需求并备料
+
+影响面（也可单独使用）：
+  req scan locate <关键词...>          按中文业务词检索并展开孪生
+  req scan siblings [文件路径]         同名不同路径的实现
+  req scan mirror <路径前缀>           业务线对称对照
+  req scan twins [文件路径]            跨 app 同路径孪生
+
+仓库位置：--repo <目录>，或环境变量 REQ_REPO_ROOT，默认当前目录。
+项目配置：--project <目录>，或环境变量 REQ_PROJECT，默认包内唯一的配置目录。
+各子命令的完整参数见 req <子命令> --help。
+`
+
+const args = process.argv.slice(2)
+
+if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  console.log(usage)
+  process.exit(args.length === 0 ? 1 : 0)
+}
+
+const run = args[0] === 'scan' ? () => impactMain(args.slice(1)) : () => intakeMain(args)
+
+run().catch((error) => {
+  console.error(`\n✗ ${error.message}`)
+  process.exit(1)
+})
