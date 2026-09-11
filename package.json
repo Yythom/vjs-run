@@ -62,6 +62,9 @@
       "!node_modules/jieba-wasm/pkg/deno/**",
       "!node_modules/jieba-wasm/pkg/bundler/**"
     ],
+    "asarUnpack": [
+      "src/req-to-plan/**"
+    ],
     "publish": {
       "provider": "github",
       "owner": "Yythom",

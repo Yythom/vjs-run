@@ -1,0 +1,43 @@
+{
+  "name": "vjs-monorepo",
+  "description": "光厂 vjshi.com 素材交易平台，React Router v7 多应用 monorepo",
+
+  "layout": {
+    "appsDir": "apps",
+    "appSourceDir": "app",
+    "sourceExtensions": ["ts", "tsx", "mjs", "css"],
+    "skipDirs": ["node_modules", "dist", "build", ".turbo", ".react-router"]
+  },
+
+  "bizLines": {
+    "video": { "label": "视频", "tokens": ["video"], "param": "vid" },
+    "foto": { "label": "图片", "tokens": ["foto"], "param": "fid" },
+    "music": { "label": "音乐", "tokens": ["music"], "param": null },
+    "studio": { "label": "服务", "tokens": ["studio", "service", "demand"], "param": null },
+    "vision": { "label": "案例", "tokens": ["vision", "case", "idea"], "param": "caseId" }
+  },
+
+  "genericFileNames": [
+    "index.ts",
+    "index.tsx",
+    "route.tsx",
+    "types.ts",
+    "utils.ts",
+    "constants.ts",
+    "constants.tsx",
+    "schema.ts",
+    "loader.ts"
+  ],
+
+  "apiSearch": {
+    "search": "node ${repoRoot}/tooling/generate-api/dist/index.js search",
+    "detail": "node ${repoRoot}/tooling/generate-api/dist/index.js detail",
+    "note": "6 个后端服务的 swagger 已在本地，检索按中文业务词做分词匹配"
+  },
+
+  "rules": {
+    "entry": "AGENTS.md",
+    "dir": "docs/rules",
+    "note": "产出 plan 前必读：API 协议、链接收敛、Tailwind preset、包命名空间"
+  }
+}
