@@ -8,7 +8,7 @@ import {
   useDockingSettingsLoaded,
 } from "../../stores/docking-store";
 import useEngineProbes from "./use-engine-probes";
-import { ENGINES, RUN_MODES } from "./constants";
+import { AUTO_DISPATCH_MODES, ENGINES } from "./constants";
 
 /**
  * 自动派发预设规则弹窗。
@@ -113,7 +113,7 @@ function AutoDispatchForm({ open, onClose, repos }) {
             默认执行力度
           </label>
           <div className="grid grid-cols-3 gap-2">
-            {RUN_MODES.map((item) => (
+            {AUTO_DISPATCH_MODES.map((item) => (
               <label
                 key={item.key}
                 className={clsx(
@@ -223,6 +223,17 @@ function AutoDispatchForm({ open, onClose, repos }) {
           <p className="text-[11px] text-slate-500 mt-1 pl-6 leading-relaxed">
             工作区必须干净：有未提交改动时会中止本次派发并把任务放回待处理，
             不会带着你没提交的改动切分支。
+          </p>
+        </div>
+
+        {/* /plan 说明：它没有开关，但会用这里的一部分设置 */}
+        <div className="pt-1 border-t border-slate-200">
+          <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+            <strong className="text-slate-700">📐 关于 /plan</strong>
+            ：它没有开关——有人发 <code>/plan 需求文档链接</code> 就会备料并开跑，
+            走「产实施 plan」档 + Claude Code，不看上面选的力度与引擎（三个引擎都能跑这一档，
+            但 claude 的边界最紧，无人值守用它最稳）。
+            但<strong>默认项目、隔离分支、下面的白名单</strong>对它同样生效。
           </p>
         </div>
 

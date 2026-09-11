@@ -4,10 +4,16 @@ import { showToast } from "../utils/toast";
 /**
  * 赛博牛马 store。任务真身落在主进程的 docking-tasks.json，这里只做镜像：
  * 打开面板时 loadTasks 拉一次，之后由主进程推 docking-task / docking-status 增量更新。
+ *
+ * 但那份文件不止主进程在写——MCP server 是独立进程，req-to-plan 的桥接脚本也会往里塞
+ * 需求池工作包。这些写入推不了增量，所以窗口重新聚焦时会再对一次账（见 docking-page）。
  */
 
 const useDockingStore = create(() => ({
   tasks: [],
+  // 飞书指令表，主进程是唯一事实来源（src/feishu/commands.js）。
+  // 拉不到就保持空数组，提示栏整条不渲染——好过显示一份可能过期的硬编码
+  commands: [],
   status: { running: false, retrying: false, lastError: "" },
   settings: {
     ackEnabled: true,
@@ -50,6 +56,7 @@ export const useDockingTasks = () => useDockingStore((s) => s.tasks);
 export const useDockingStatus = () => useDockingStore((s) => s.status);
 export const useDockingSelectedIds = () => useDockingStore((s) => s.selectedIds);
 export const useDockingSettings = () => useDockingStore((s) => s.settings);
+export const useDockingCommands = () => useDockingStore((s) => s.commands);
 /**
  * settings 是否已经从主进程拉回来。
  *
@@ -191,10 +198,30 @@ function upsert(task) {
   });
 }
 
+/**
+ * 任务列表的廉价签名。updateTask 每次都会 bump updatedAt，所以 id:updatedAt 的序列
+ * 变了才是真变了。
+ */
+const signTasks = (tasks = []) => tasks.map((t) => `${t.id}:${t.updatedAt}`).join("|");
+
+export async function loadCommands() {
+  if (!window.electronAPI?.dockingCommands) return null;
+  const result = await window.electronAPI.dockingCommands();
+  if (result?.success) {
+    useDockingStore.setState({ commands: result.commands || [] });
+  }
+  return result;
+}
+
 export async function loadTasks() {
   const result = await window.electronAPI.dockingListTasks();
   if (result?.success) {
-    useDockingStore.setState({ tasks: result.tasks || [] });
+    const next = result.tasks || [];
+    // job 跑完、窗口聚焦都会调到这里，多数时候什么都没变。
+    // 不比一下就整个换掉 tasks 数组，会白白带着整张列表重渲染一次
+    if (signTasks(useDockingStore.getState().tasks) !== signTasks(next)) {
+      useDockingStore.setState({ tasks: next });
+    }
   }
   return result;
 }
