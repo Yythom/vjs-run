@@ -1,0 +1,24 @@
+{
+  "baseToken": "CaKXbMoK6aOGJ8se4TwchNKBnBe",
+  "tableId": "tblkzaKdicyHZY9f",
+  "statusField": "【进程】",
+  "readyStatus": "排实施",
+  "fields": {
+    "name": "需求名称",
+    "status": "【进程】",
+    "bizLines": "业务线",
+    "planLink": "方案链接",
+    "visualLink": "视觉方案链接",
+    "purpose": "目的",
+    "goal": "目标",
+    "context": "脉络",
+    "owner": "实施人"
+  },
+  "bizLineMap": {
+    "视频": "video",
+    "图片": "foto",
+    "音乐": "music",
+    "服务": "studio",
+    "案例": "vision"
+  }
+}

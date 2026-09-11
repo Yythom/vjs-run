@@ -1,0 +1,9 @@
+{
+  "name": "req-to-plan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "飞书需求 → 实施 plan：自包含、可迁移，目标仓库零安装",
+  "type": "module",
+  "bin": { "req": "./bin/req" },
+  "engines": { "node": ">=20" }
+}
