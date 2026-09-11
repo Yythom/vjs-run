@@ -87,16 +87,16 @@ export const RUN_MODE_SHORT = {
 export const AUTO_DISPATCH_MODES = RUN_MODES.filter((m) => m.key !== "plan");
 
 // 「产实施 plan」档在三个引擎上的实际边界差很大，选之前得知道。
-// 它们的力度本来就不是同一套机制：claude 能按工具粒度放行/禁止，codex 能挑沙箱策略，
-// agy 无头模式下只有「全自动批准」一种，力度全靠 prompt 约束。
+// 它们的力度不是同一套机制：claude 能按工具名禁用，codex 能挑 OS 沙箱策略，
+// agy 无头模式下只有「全自动批准」一种。
 export const PLAN_MODE_LIMITS = {
   claude: {
     level: "最紧",
-    text: "Bash 只预授权 node（跑影响面扫描），Edit / MultiEdit 被禁，改不了现存文件",
+    text: "Bash 整个禁掉，跑不了任何命令；影响面扫描走 req_scan 工具（参数结构化，扫哪个仓库由任务决定）。能写文件，但改不了现存文件",
   },
   codex: {
     level: "居中",
-    text: "沙箱设为 workspace-write：读全部、只在工作目录与工作包内可写，出不了这个范围",
+    text: "OS 沙箱设为 workspace-write：出不了工作目录与工作包，但范围内可以跑命令、改文件",
   },
   agy: {
     level: "最松",
