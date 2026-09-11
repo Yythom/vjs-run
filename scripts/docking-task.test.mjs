@@ -1900,3 +1900,32 @@ test("plan 档：工具白名单的形状必须是 Bash(<前缀>:*)，少个冒�
     `工具模式写错了：${bashRule}。claude 的前缀匹配要求 Bash(<命令>:*)，冒号不能少`,
   );
 });
+
+test("打包路径：asar → unpacked 只换一次，不会滚成 .unpacked.unpacked", async () => {
+  const path = await import("node:path");
+  // 跟 listener 里 REQ_ROOT 用的是同一个换算
+  const swap = (p) =>
+    p.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+
+  const packed = "/Applications/vjtools.app/Contents/Resources/app.asar/src/req-to-plan";
+  const unpacked = "/Applications/vjtools.app/Contents/Resources/app.asar.unpacked/src/req-to-plan";
+
+  // asar 里的要换出来：工作包里写给 agent 的扫描命令用系统 node 执行，读不了 asar
+  assert.equal(swap(packed), unpacked);
+  // 已经是 unpacked 的不许再换——/\bapp\.asar\b/ 会二次命中，滚成 .unpacked.unpacked，
+  // 然后 discoverProjects 的 readdir 直接 ENOENT（踩过）
+  assert.equal(swap(unpacked), unpacked);
+  // 开发环境没有 asar，原样不动
+  const dev = "/Users/me/dev/vjs-run/src/req-to-plan";
+  assert.equal(swap(dev), dev);
+});
+
+test("req-to-plan 不该知道 asar 的存在，路径换算只留在 vjtools 这一侧", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync("src/req-to-plan/src/config.mjs", "utf8");
+  assert.ok(
+    !src.includes("app.asar"),
+    "config.mjs 里出现 asar 换算＝两边各换一次，会滚成 .unpacked.unpacked；" +
+      "而且它的卖点是自包含可迁移，不该认识 Electron",
+  );
+});
