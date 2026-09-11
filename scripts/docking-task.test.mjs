@@ -1885,33 +1885,31 @@ test("/plan: 光秃秃再发一次不重跑，只告诉你已经有这条了", a
 
 
 
-test("打包路径：asar → unpacked 只换一次，不会滚成 .unpacked.unpacked", async () => {
-  const path = await import("node:path");
-  // 跟 listener 里 REQ_ROOT 用的是同一个换算
-  const swap = (p) =>
-    p.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
 
-  const packed = "/Applications/vjtools.app/Contents/Resources/app.asar/src/req-to-plan";
-  const unpacked = "/Applications/vjtools.app/Contents/Resources/app.asar.unpacked/src/req-to-plan";
 
-  // asar 里的要换出来：工作包里写给 agent 的扫描命令用系统 node 执行，读不了 asar
-  assert.equal(swap(packed), unpacked);
-  // 已经是 unpacked 的不许再换——/\bapp\.asar\b/ 会二次命中，滚成 .unpacked.unpacked，
-  // 然后 discoverProjects 的 readdir 直接 ENOENT（踩过）
-  assert.equal(swap(unpacked), unpacked);
-  // 开发环境没有 asar，原样不动
-  const dev = "/Users/me/dev/vjs-run/src/req-to-plan";
-  assert.equal(swap(dev), dev);
-});
-
-test("req-to-plan 不该知道 asar 的存在，路径换算只留在 vjtools 这一侧", async () => {
+test("req-to-plan 留在 asar 里，两个消费方都拿 Electron 当 node 跑", async () => {
   const fs = await import("node:fs");
-  const src = fs.readFileSync("src/req-to-plan/src/config.mjs", "utf8");
+
+  // 扫描改走 MCP 之后没人再用系统 node 读它了，asarUnpack 与配套的路径换算一并去掉。
+  // 那段换算曾经因为两处各换一次滚成 app.asar.unpacked.unpacked，别让它回来
+  for (const f of ["src/paths.js", "src/feishu/listener.js", "src/feishu/mcp-server.mjs"]) {
+    const src = fs.readFileSync(f, "utf8");
+    assert.ok(
+      !/\.replace\([^)]*app\.asar/.test(src),
+      `${f} 里出现了 asar 路径换算——留在 asar 里就不需要它，两处各换一次会滚成 .unpacked.unpacked`,
+    );
+  }
   assert.ok(
-    !src.includes("app.asar"),
-    "config.mjs 里出现 asar 换算＝两边各换一次，会滚成 .unpacked.unpacked；" +
-      "而且它的卖点是自包含可迁移，不该认识 Electron",
+    !("asarUnpack" in (JSON.parse(fs.readFileSync("package.json", "utf8")).build || {})),
+    "asarUnpack 去掉了；要加回来必须同时说明谁在用系统 node 读它",
   );
+
+  // 读 req-to-plan 的只有这两处，都必须用 Electron 当 node（否则读不了 asar）
+  for (const f of ["src/feishu/listener.js", "src/feishu/mcp-server.mjs"]) {
+    const src = fs.readFileSync(f, "utf8");
+    assert.match(src, /ELECTRON_RUN_AS_NODE/, `${f} 起 req 必须带 ELECTRON_RUN_AS_NODE`);
+    assert.match(src, /process\.execPath/, `${f} 必须用 Electron 自身当 node`);
+  }
 });
 
 test("req_scan 对所有档位都放行：影响面扫描是 plan 档唯一的检索手段", async () => {
