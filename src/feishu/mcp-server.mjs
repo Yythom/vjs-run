@@ -15,6 +15,9 @@
 // 里（不能是 devDependencies）——electron-builder 打包只带生产依赖，放错区
 // 打出来的包里这个 server 会直接起不来。
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -27,6 +30,7 @@ import {
   updateTask,
 } from "./task-store.js";
 import { buildPrompt } from "./prompt.js";
+import { REQ_BIN } from "../paths.js";
 import { sendMessage } from "./lark-cli.js";
 import {
   buildAskCard,
@@ -52,6 +56,13 @@ function bySeq(seq) {
   reload();
   return listTasks().find((t) => t.seq === Number(seq)) || null;
 }
+
+const execFileAsync = promisify(execFile);
+
+// 扫描结果直接进 agent 的上下文。locate 命中面广、不带参数的 twins 更是几百组，
+// 不设上限会把上下文顶爆。
+const SCAN_MAX_CHARS = 20000;
+const SCAN_TIMEOUT_MS = 60 * 1000;
 
 const server = new McpServer({ name: "docking", version: "1.0.0" });
 
@@ -177,6 +188,81 @@ server.registerTool(
     appendThread(task.id, { role: "me", text: question });
     updateTask(task.id, { status: "awaiting", askedAt: Date.now() });
     return text(`已问 ${task.requester?.name || "提出人"}，#${seq} 转为「等回复」。`);
+  },
+);
+
+
+server.registerTool(
+  "req_scan",
+  {
+    title: "影响面扫描",
+    description:
+      "在需求对应的仓库里跑影响面扫描，判断这个需求要改哪些地方、有没有漏改风险。\n" +
+      "  locate   —— 按业务词检索并自动展开孪生，**必须带 scope**，否则命中面太宽没有意义\n" +
+      "  siblings —— 某个文件的同名不同路径实现（locate 命中的每个文件都该跑一次）\n" +
+      "  mirror   —— 跨业务线对称对照，算出目标侧缺什么（要 from / to）\n" +
+      "  twins    —— 跨 app 的同路径孪生\n" +
+      "扫哪个仓库由任务自己决定（task.repoPath），不接受路径参数。",
+    inputSchema: {
+      seq: z.number().int().positive().describe("任务短号，用来定位要扫的仓库"),
+      command: z.enum(["locate", "siblings", "mirror", "twins"]),
+      target: z
+        .string()
+        .min(1)
+        .describe(
+          "locate 填业务关键词（控件文案等）；siblings / twins 填文件路径；mirror 填路径前缀",
+        ),
+      scope: z
+        .string()
+        .optional()
+        .describe("locate 的搜索范围，逗号分隔的目录前缀，例如 upload,optimization"),
+      from: z.string().optional().describe("mirror 的源业务线 token"),
+      to: z.string().optional().describe("mirror 的目标业务线 token"),
+    },
+  },
+  async ({ seq, command, target, scope, from, to }) => {
+    const task = bySeq(seq);
+    if (!task) return text(`没有 #${seq} 这条任务。`);
+    const repoRoot = task.repoPath;
+    if (!repoRoot) {
+      return text(`#${seq} 还没关联仓库目录，扫不了。请在面板上选一个工作目录再派活。`);
+    }
+
+    if (command === "mirror" && !(from && to)) {
+      return text("mirror 要同时给 from 和 to（业务线 token），否则算不出目标侧缺什么。");
+    }
+    if (command === "locate" && !scope) {
+      // 不直接拒：需求确实可能要全仓搜。但要说清代价，别让它默认这么干
+      console.error("[docking-mcp] locate 未带 scope，命中面可能过宽");
+    }
+
+    // 参数是结构化的，一个个 push 进数组交给 execFile，不拼 shell 字符串，
+    // 所以 target 里带什么字符都不会变成命令注入
+    const args = [REQ_BIN, "scan", command, target, "--repo", repoRoot];
+    if (scope) args.push("--scope", scope);
+    if (from) args.push("--from", from);
+    if (to) args.push("--to", to);
+
+    try {
+      // Electron 当 node 跑：这个 server 自己就是被这么起的，execPath 就是 Electron
+      const { stdout, stderr } = await execFileAsync(process.execPath, args, {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        timeout: SCAN_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024 * 32,
+      });
+      const body = (stdout || stderr || "").trim();
+      if (!body) return text("扫描没有输出，可能是没有命中。换个关键词或放宽 scope 再试。");
+      return text(
+        body.length > SCAN_MAX_CHARS
+          ? `${body.slice(0, SCAN_MAX_CHARS)}\n\n…输出过长已截断（共 ${body.length} 字符）。` +
+              "把 scope 收窄，或改用更具体的关键词。"
+          : body,
+      );
+    } catch (err) {
+      // req 把用法错误写在 stderr，原样回去比「执行失败」有用
+      const detail = String(err.stderr || err.message || "").trim();
+      return text(`扫描失败：\n${detail.split("\n").slice(-6).join("\n")}`);
+    }
   },
 );
 

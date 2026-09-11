@@ -157,6 +157,7 @@ const MCP_TOOLS = [
   "mcp__docking__get_task",
   "mcp__docking__update_task",
   "mcp__docking__ask_requester",
+  "mcp__docking__req_scan",
 ];
 
 // 只读档：显式禁掉所有会动到工作区的工具，MCP 工具照常可用。
@@ -177,18 +178,16 @@ const READONLY_DENY = [
 // 可改代码档：只挡命令执行
 const EDIT_DENY = ["Bash", "BashOutput", "KillShell", "KillBash"];
 
-// 产 plan 档：介于只读与改代码之间。
+// 产 plan 档：只读档 + 一支笔。
 //
-// 影响面扫描（req scan locate / siblings / mirror）都要起 node 子进程，Bash 全禁就跑不了，
-// 扫描会静默退化成 grep——不报错，但影响面结论不可信，比跑不起来更坏。所以这里不整个禁
-// Bash，而是把 node 单独加进 allowedTools 预授权；其余 Bash 命令没被预授权，无头模式弹不出
-// 确认框，会被自动拒绝。
+// 影响面扫描不再靠 agent 自己起 node 子进程，改走 MCP 的 req_scan——参数是结构化的
+// （命令枚举 + 关键词 + scope），仓库路径由任务的 repoPath 决定，agent 指定不了。
+// 所以这一档可以跟只读档一样整个禁掉 Bash，唯一放开的是 Write（写 plan.md）。
 //
-// 说清楚边界：这不是沙箱。`node -e` 什么都干得了，Write 也能覆盖现存文件——deny 掉
-// Edit/MultiEdit 只是挡住「改现存文件」这个最顺手的动作。真正的兜底是隔离分支：
-// plan !== analyze，所以 setupGitBranch 和 repo 互斥锁都照常生效。
-const PLAN_DENY = ["Edit", "MultiEdit", "NotebookEdit"];
-const PLAN_ALLOW = ["Bash(node:*)"];
+// 之前用的是 allowedTools 里的 "Bash(node:*)" 白名单，实测那个在无头 -p 模式下
+// 根本不过滤：只放行 Bash(git:*) 时 node 命令照跑，不给白名单也照跑。
+// 真正生效的只有 disallowedTools 的工具名黑名单，所以那一档其实是「任意命令都能跑」。
+const PLAN_DENY = READONLY_DENY.filter((tool) => tool !== "Write");
 
 const EDIT_TOOLS = new Set([
   "Edit",
@@ -219,7 +218,7 @@ function extractFilePath(input, cwd) {
 
 const MODES = {
   analyze: { permissionMode: "acceptEdits", deny: READONLY_DENY, allow: [] },
-  plan: { permissionMode: "acceptEdits", deny: PLAN_DENY, allow: PLAN_ALLOW },
+  plan: { permissionMode: "acceptEdits", deny: PLAN_DENY, allow: [] },
   edit: { permissionMode: "acceptEdits", deny: EDIT_DENY, allow: [] },
   full: { permissionMode: "bypassPermissions", deny: [], allow: [] },
 };
@@ -494,7 +493,7 @@ function rollbackDoingTasks(taskIds = [], reason = "") {
 }
 
 /** 给 Agent 的执行指引。需求正文由 buildPrompt 生成，并根据 mode 注入约束与收尾规则 */
-function buildInstructions(tasks, mode = "analyze") {
+function buildInstructions(tasks, mode = "analyze", engine = "claude") {
   const modeGuidelines = {
     analyze: [
       "【当前为「只读分析 / 逻辑排查」模式】",
@@ -505,7 +504,15 @@ function buildInstructions(tasks, mode = "analyze") {
     plan: [
       "【当前为「产实施 plan」模式】",
       "- 产出是一份 markdown 实施计划，不是代码改动：严禁修改任何业务代码。",
-      "- 可以起 node 子进程跑影响面扫描；其余命令没有预授权，跑不起来也不要绕路。",
+      // claude 档真的没有 Bash（deny 掉了），agy/codex 其实有——对它们说「没有 Bash」
+      // 是假话，说了它一试就发现能跑，反而不信后面那半句
+      engine === "claude"
+        ? "- **没有 Bash，跑不了任何命令**。影响面扫描用 req_scan 工具："
+        : "- 影响面扫描一律走 req_scan 工具，不要自己拼命令去跑：",
+      "  工作规范里写成 `node .../req scan locate \"文案\" --scope \"目录\"` 的，",
+      "  在这里一律改成 req_scan({ seq, command: \"locate\", target: \"文案\", scope: \"目录\" })；",
+      "  siblings / mirror / twins 同理。别因为命令跑不通就退回用 Grep 猜。",
+      "- 规范里的接口对账命令这一档跑不了，把要对的接口写进待澄清清单。",
       "- 唯一该写的文件是工作包里的 plan.md。",
       "- plan 写完后，必须调用 update_task 在 note 里给出摘要（影响面结论、待澄清项、plan.md 的路径），并将状态置为 done；需求含糊时用 ask_requester 反问提出人。",
     ],
@@ -778,7 +785,7 @@ function runJobProcess(job, tasks) {
     }
     job.branchName = branch.branchName;
 
-    const prompt = buildInstructions(tasks, job.mode);
+    const prompt = buildInstructions(tasks, job.mode, job.engine);
     job.prompt = prompt;
     const isAgy = job.engine === "agy";
     const isCodex = job.engine === "codex";

@@ -12,7 +12,7 @@ import readline from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { SRC_DIR } from "../paths.js";
+import { REQ_BIN } from "../paths.js";
 import { buildSpawnEnv } from "../shell-env.js";
 import { buildWorkpackTask, findWorkpackTask } from "./workpack.js";
 import { COMMANDS, renderHelp } from "./commands.js";
@@ -562,22 +562,7 @@ function dispatchToAI({ task, cwd, mode, engine, createBranch, notify }) {
   }
 }
 
-// req-to-plan 跟 vjtools 一起打包在 src/ 下，但走 asarUnpack 落在 app.asar.unpacked/。
-//
-// 必须 unpack，不能留在 asar 里：工作包的 context.md / skill.md 里写着给 agent 执行的
-// 影响面扫描命令（node <包路径>/bin/req scan ...），agent 用的是系统 node，而系统 node
-// 读不了 asar。所以那些命令里的路径必须是真实文件路径。
-//
-// 换算只在这一处做。req-to-plan 内部拿 import.meta.url 派生 packageRoot，从这个真实路径
-// 启动后自然全程是 unpacked，它不必也不该知道 asar 的存在。两边各换一次会滚成
-// app.asar.unpacked.unpacked（踩过）。
-//
-// 用 path.sep 包起来匹配：app.asar.unpacked 里也含 app.asar 子串，
-// 光用 /\bapp\.asar\b/ 会二次命中。
-const REQ_ROOT = path
-  .join(SRC_DIR, "req-to-plan")
-  .replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
-const REQ_BIN = path.join(REQ_ROOT, "bin", "req");
+
 
 // 备料要拉飞书文档、逐张下截图、扫一遍仓库算影响面事实，二十几张图的需求跑十几秒很正常。
 // 但卡住的话不能一直挂着——lark-cli 的 token 过期有时是超时而不是报错。
