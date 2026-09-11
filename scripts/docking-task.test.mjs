@@ -1255,39 +1255,42 @@ function freshWorkpackDir(skill = "# 工作规范\n必须逐张 Read 截图。")
   return dir;
 }
 
-test("plan 档：放行 Bash(node:*)，禁掉改现存文件的工具，但不整个禁 Bash", async () => {
+test("plan 档：Bash 整个禁掉，扫描改走 req_scan 工具", async () => {
   freshUserData();
   const task = addTask({ title: "需求池任务", content: "产 plan" });
   const args = await runJobAndCaptureArgs({
-    ids: [task.id],
-    cwd: "/mock/repo",
-    mode: "plan",
-    engine: "claude",
+    ids: [task.id], cwd: "/mock/repo", mode: "plan", engine: "claude",
   });
 
-  assert.ok(args.includes("Bash(node:*)"), "影响面扫描要起 node 子进程，必须预授权");
+  const deny = args.slice(args.indexOf("--disallowedTools") + 1);
+  // 原来靠 allowedTools 的 "Bash(node:*)" 白名单只放行 node，实测那个在无头 -p 下
+  // 根本不过滤（只放行 Bash(git:*) 时 node 命令照跑），等于这一档能跑任意命令。
+  // 现在扫描走 MCP，Bash 可以真禁掉。
+  assert.ok(deny.includes("Bash"), "扫描已改走 req_scan，Bash 必须真禁掉");
+  assert.ok(deny.includes("Edit") && deny.includes("MultiEdit"));
+  // 但要留着 Write——plan.md 得写得出来
+  assert.ok(!deny.includes("Write"), "plan.md 要写得出来");
 
-  const denyAt = args.indexOf("--disallowedTools");
-  assert.ok(denyAt > -1, "plan 档必须有 deny 列表");
-  const deny = args.slice(denyAt + 1);
-  assert.ok(deny.includes("Edit"), "不该改现存业务代码");
+  // allowedTools 里不该再有那个不起作用的 Bash 白名单
+  const allow = args.slice(args.indexOf("--allowedTools") + 1, args.indexOf("--disallowedTools"));
   assert.ok(
-    !deny.includes("Bash"),
-    "整个禁掉 Bash，影响面扫描会静默退化成 grep——不报错但结论不可信",
+    !allow.some((t) => t.startsWith("Bash(")),
+    "allowedTools 的 Bash(...) 参数模式在无头模式下不生效，留着是误导",
   );
+  assert.ok(allow.includes("mcp__docking__req_scan"), "扫描工具必须放行");
 });
 
 test("plan 档：三个引擎都能跑，但各自的边界不一样", async () => {
   const dir = freshWorkpackDir();
 
-  // claude：工具粒度——只预授权 node，禁掉改现存文件的工具
+  // claude：工具粒度——Bash 与编辑类工具全禁，扫描走 MCP
   freshUserData();
   const t1 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
   const claude = await runJobAndCaptureArgs({
     ids: [t1.id], cwd: "/mock/repo", mode: "plan", engine: "claude",
   });
-  assert.ok(claude.includes("Bash(node:*)"));
-  assert.ok(claude.slice(claude.indexOf("--disallowedTools") + 1).includes("Edit"));
+  const claudeDeny = claude.slice(claude.indexOf("--disallowedTools") + 1);
+  assert.ok(claudeDeny.includes("Bash") && claudeDeny.includes("Edit"));
 
   // codex：沙箱粒度——workspace-write，读全部、只在工作目录与工作包内可写
   freshUserData();
@@ -1403,7 +1406,7 @@ test("普通 IM 任务不受影响：没有 workpackDir 就不加 --add-dir", as
 
   assert.ok(!args.includes("--add-dir"));
   assert.ok(!args.includes("--append-system-prompt"));
-  assert.ok(!args.includes("Bash(node:*)"), "只读档不该被 plan 档的白名单串味");
+  assert.ok(!args.includes("--append-system-prompt"));
 });
 
 // ─── /plan 指令 ──────────────────────────────────────────────────────────────
@@ -1615,7 +1618,8 @@ test("/plan: 没有开关，收到就开跑，且固定走 plan 档 + claude", a
 
   assert.equal(calls.length, 1, "应该派出去一个 job");
   const { args } = calls[0];
-  assert.ok(args.includes("Bash(node:*)"), "plan 档才放行 node 子进程");
+  const deny = args.slice(args.indexOf("--disallowedTools") + 1);
+  assert.ok(deny.includes("Bash"), "plan 档禁 Bash，扫描走 req_scan");
   assert.equal(args[args.indexOf("--add-dir") + 1], dir);
   assert.match(args[args.indexOf("--append-system-prompt") + 1], /必须逐张 Read 截图/);
 
@@ -1879,27 +1883,7 @@ test("/plan: 光秃秃再发一次不重跑，只告诉你已经有这条了", a
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("plan 档：工具白名单的形状必须是 Bash(<前缀>:*)，少个冒号就等于没放行", async () => {
-  freshUserData();
-  const task = addTask({ title: "需求池任务", content: "产 plan" });
-  const args = await runJobAndCaptureArgs({
-    ids: [task.id], cwd: "/mock/repo", mode: "plan", engine: "claude",
-  });
 
-  const allowAt = args.indexOf("--allowedTools");
-  const denyAt = args.indexOf("--disallowedTools");
-  const bashRule = args.slice(allowAt + 1, denyAt).find((a) => a.startsWith("Bash("));
-  assert.ok(bashRule, "plan 档必须放行 node 子进程");
-
-  // 不跟源码比字符串——两边写着同一个错字就谁也发现不了（真踩过：冒号丢了写成
-  // "Bash(node *)"，claude 认不出来，影响面扫描被无头模式静默拒掉、退化成 grep）。
-  // 这里独立断言 claude CLI 要求的那个形状。
-  assert.match(
-    bashRule,
-    /^Bash\([a-z][\w.-]*:\*\)$/,
-    `工具模式写错了：${bashRule}。claude 的前缀匹配要求 Bash(<命令>:*)，冒号不能少`,
-  );
-});
 
 test("打包路径：asar → unpacked 只换一次，不会滚成 .unpacked.unpacked", async () => {
   const path = await import("node:path");
@@ -1928,4 +1912,41 @@ test("req-to-plan 不该知道 asar 的存在，路径换算只留在 vjtools �
     "config.mjs 里出现 asar 换算＝两边各换一次，会滚成 .unpacked.unpacked；" +
       "而且它的卖点是自包含可迁移，不该认识 Electron",
   );
+});
+
+test("req_scan 对所有档位都放行：影响面扫描是 plan 档唯一的检索手段", async () => {
+  for (const mode of ["analyze", "plan", "edit", "full"]) {
+    freshUserData();
+    const task = addTask({ title: "任务", content: "x" });
+    const args = await runJobAndCaptureArgs({
+      ids: [task.id], cwd: "/mock/repo", mode, engine: "claude",
+    });
+    const allow = args.slice(
+      args.indexOf("--allowedTools") + 1,
+      args.indexOf("--disallowedTools") === -1 ? undefined : args.indexOf("--disallowedTools"),
+    );
+    assert.ok(allow.includes("mcp__docking__req_scan"), `${mode} 档没放行 req_scan`);
+    assert.ok(allow.includes("mcp__docking__update_task"), `${mode} 档没放行 update_task`);
+  }
+});
+
+test("plan 档指引：对 claude 说没有 Bash，对 agy/codex 不说假话", async () => {
+  const dir = freshWorkpackDir();
+  for (const engine of ["claude", "agy", "codex"]) {
+    freshUserData();
+    const task = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
+    const args = await runJobAndCaptureArgs({
+      ids: [task.id], cwd: "/mock/repo", mode: "plan", engine,
+    });
+    const prompt = engine === "codex" ? args[args.length - 1] : args[args.indexOf("-p") + 1];
+
+    assert.match(prompt, /req_scan/, `${engine} 的指引里没提 req_scan`);
+    if (engine === "claude") {
+      assert.match(prompt, /没有 Bash/, "claude 档是真禁了，该说明白");
+    } else {
+      // agy/codex 其实有 Bash，说「没有」它一试就发现是假话，后半句也不信了
+      assert.ok(!/没有 Bash/.test(prompt), `${engine} 实际有 Bash，不该说没有`);
+    }
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
 });
