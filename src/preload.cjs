@@ -266,7 +266,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("update-progress", handler);
   },
 
-  // ── 赛博牛马（飞书需求面板）────────────────────────────────────────────────────
+  // ── AI 工单台（飞书需求面板）────────────────────────────────────────────────────
 
   // 探测 lark-cli 是否安装、事件总线是否在跑
   dockingProbe: () => ipcRenderer.invoke("docking-probe"),

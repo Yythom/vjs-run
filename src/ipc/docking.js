@@ -1,4 +1,4 @@
-// 赛博牛马面板 IPC。
+// AI 工单台面板 IPC。
 //
 // 数据流：飞书私聊 →(lark-cli event consume) listener → task-store → 面板勾选
 //        → buildPrompt 拼一段 prompt 给我复制走（不自动执行模型）

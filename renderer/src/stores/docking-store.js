@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { showToast } from "../utils/toast";
 
 /**
- * 赛博牛马 store。任务真身落在主进程的 docking-tasks.json，这里只做镜像：
+ * AI 工单台 store。任务真身落在主进程的 docking-tasks.json，这里只做镜像：
  * 打开面板时 loadTasks 拉一次，之后由主进程推 docking-task / docking-status 增量更新。
  *
  * 但那份文件不止主进程在写——MCP server 是独立进程，req-to-plan 的桥接脚本也会往里塞
@@ -14,7 +14,7 @@ const useDockingStore = create(() => ({
   // 飞书指令表，主进程是唯一事实来源（src/feishu/commands.js）。
   // 拉不到就保持空数组，提示栏整条不渲染——好过显示一份可能过期的硬编码
   commands: [],
-  status: { running: false, retrying: false, lastError: "" },
+  status: { running: false, connected: false, retrying: false, lastError: "" },
   settings: {
     ackEnabled: true,
     notifyOnComplete: true,
@@ -511,7 +511,7 @@ if (
 
   window.electronAPI.onDockingStatus((status) => {
     useDockingStore.setState({
-      status: status || { running: false, retrying: false, lastError: "" },
+      status: status || { running: false, connected: false, retrying: false, lastError: "" },
     });
   });
 

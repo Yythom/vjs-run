@@ -22,6 +22,8 @@ import {
   isOwnMessage,
   sendMessage,
   downloadMessageResource,
+  describeLarkError,
+  parseLarkError,
 } from "./lark-cli.js";
 import { buildAckCard } from "./cards.js";
 import { sendToAllWindows } from "../ui-channel.js";
@@ -61,6 +63,10 @@ const RETRY_BASE_MS = 2000;
 const RETRY_MAX_MS = 60000;
 // SIGTERM 之后等这么久还没退，就对进程组补 SIGKILL
 const KILL_GRACE_MS = 3000;
+// lark-cli 连上事件总线后打在 stderr 的固定就绪行（lark-event 的 Subprocess contract）
+const READY_MARKER = "[event] ready event_key=";
+// stderr 只留够解析错误信封的尾巴，常驻进程的输出不能无限攒
+const STDERR_TAIL_MAX = 8000;
 
 // 回给提出人的任务列表里用的状态措辞（面板上的措辞是另一套，不共用）
 const STATUS_TEXT = {
@@ -150,17 +156,35 @@ let stopping = false;
 let retryTimer = null;
 let retryCount = 0;
 let lastError = "";
+// 当前进程确认连上了（见过就绪行或收到过事件）。running 只说明进程还活着：
+// 没配置的机器上它会先活一百来毫秒再失败退出，拿 running 当「健康」页面会闪
+let connected = false;
 
 export function getListenerStatus() {
   return {
     running: Boolean(child) && !stopping,
-    retrying: Boolean(retryTimer),
+    connected: connected && Boolean(child) && !stopping,
+    // 在等退避定时器，或者这个进程本身就是失败后的重试、还没确认连上。
+    // 后一种不算的话，每次重试那一下状态会闪回「监听中」
+    retrying: Boolean(retryTimer) || (Boolean(child) && retryCount > 0),
     lastError,
   };
 }
 
 function broadcastStatus() {
   sendToAllWindows("docking-status", getListenerStatus());
+}
+
+/**
+ * 确认连接健康（就绪标记或收到事件）：重置退避，并把上次失败留下的报错抹掉——
+ * 否则面板会一直挂着一条早就恢复了的报错。
+ */
+function markHealthy() {
+  if (connected && !retryCount && !lastError) return;
+  connected = true;
+  retryCount = 0;
+  lastError = "";
+  broadcastStatus();
 }
 
 function broadcastTask(type, task) {
@@ -1344,6 +1368,7 @@ function scheduleRetry() {
 function launch() {
   if (child) return;
   stopping = false;
+  connected = false;
 
   // 上一个进程还在优雅退出的话，别等那 3 秒的补刀定时器了——它没死透就一直
   // 占着事件订阅，新进程和它抢同一条推送，而它抢到的又会被下面的 isCurrent()
@@ -1375,53 +1400,74 @@ function launch() {
     if (!trimmed || trimmed[0] !== "{") return; // 跳过就绪标记之类的非 JSON 行
     try {
       handleEvent(JSON.parse(trimmed));
-      // 收到过正常事件就认为连接健康：重置退避，并把上次的错误抹掉——
-      // 否则面板会一直挂着一条早就恢复了的报错
-      retryCount = 0;
-      if (lastError) {
-        lastError = "";
-        broadcastStatus();
-      }
+      procError = "";
+      markHealthy();
     } catch (err) {
       console.error("[docking] 事件解析失败", err.message, trimmed.slice(0, 200));
     }
   });
 
+  // 这个进程自己的报错，退出时用。不能读模块级的 lastError：
+  // 重试时那里还是上一个进程留下的，而且这个进程可能根本没报错
+  let stderrTail = "";
+  let procError = "";
+
   proc.stderr.on("data", (chunk) => {
     if (!isCurrent()) return;
     const text = chunk.toString().trim();
     if (!text) return;
-    // lark-cli 把 ready / 退出标记也打到 stderr，只把明显的错误留给 UI。
+    console.log("[docking][lark-cli]", text);
+
+    if (text.includes(READY_MARKER)) {
+      procError = "";
+      markHealthy();
+      return;
+    }
+
+    // 没配置、缺授权、网络失败都走错误信封，翻成人话。多行 JSON 可能被切成几个 chunk，攒着尾巴解析
+    stderrTail = `${stderrTail}\n${text}`.slice(-STDERR_TAIL_MAX);
+    const described = describeLarkError(parseLarkError(stderrTail));
+    // 不是信封的就只把明显的错误留给 UI。
     // 匹配得太宽会把 "0 errors" 这种也当成故障，所以排掉明显的正常行
-    if (
+    const plain =
       /\b(error|failed|denied|unauthorized)\b/i.test(text) &&
       !/\b(0 errors?|no error)\b/i.test(text)
-    ) {
-      lastError = text.slice(0, 500);
+        ? text.slice(0, 500)
+        : "";
+    const reason = described || plain;
+    if (!reason) return;
+    // 重试时这条多半跟 lastError 一样，也得记到本进程上，否则退出时又被退出码顶掉
+    procError = reason;
+    if (reason !== lastError) {
+      lastError = reason;
       broadcastStatus();
     }
-    console.log("[docking][lark-cli]", text);
   });
 
+  // 下面两处先 scheduleRetry 再广播：反过来会先推出一帧「没在监听也没在重连」，
+  // 顶栏按钮就在「重连中 · 点击停止」和「开始监听飞书」之间闪一下
   proc.on("error", (err) => {
     if (!isCurrent()) return;
     lastError = err.message;
     child = null;
-    broadcastStatus();
+    connected = false;
     scheduleRetry();
+    broadcastStatus();
   });
 
   proc.on("close", (code) => {
     rl.close(); // 自己的 readline 无论如何都要收掉
     if (!isCurrent()) return;
     child = null;
+    connected = false;
     if (stopping) {
       broadcastStatus();
       return;
     }
-    lastError = `事件流意外结束（退出码 ${code}）`;
-    broadcastStatus();
+    // stderr 里给过原因（没配置、缺授权…）就留着它，退出码对人没有信息量
+    lastError = procError || `事件流意外结束（退出码 ${code}）`;
     scheduleRetry();
+    broadcastStatus();
   });
 
   broadcastStatus();
@@ -1441,6 +1487,7 @@ export function startListener() {
  */
 export function stopListener({ force = false } = {}) {
   stopping = true;
+  connected = false;
   if (retryTimer) {
     clearTimeout(retryTimer);
     retryTimer = null;

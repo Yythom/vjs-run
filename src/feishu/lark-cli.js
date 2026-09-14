@@ -98,6 +98,64 @@ export function runLark(args, options) {
 }
 
 /**
+ * 从 lark-cli 的输出里取出错误信封 `{"ok":false,"error":{type,subtype,message,hint}}` 的 error 部分。
+ *
+ * lark-cli 启动 / 运行失败时往 stderr 打这个信封（约定见 `lark-cli skills read lark-event`
+ * 的 Subprocess contract）。它是多行缩进的 JSON，前后还可能夹着 `[event] …` 标记行，
+ * 所以按行找一段能完整解析的对象。找不到返回 null。
+ */
+export function parseLarkError(text) {
+  const lines = String(text || "").split("\n");
+  for (let start = lines.length - 1; start >= 0; start--) {
+    if (!lines[start].trim().startsWith("{")) continue;
+    for (let end = start; end < lines.length; end++) {
+      if (!lines[end].trim().endsWith("}")) continue;
+      try {
+        const payload = JSON.parse(lines.slice(start, end + 1).join("\n"));
+        if (payload?.ok === false && payload.error) return payload.error;
+      } catch {
+        // 还没到这段 JSON 的结尾，接着往下找
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 面板上建议的配置命令。不带 lark-cli 自己 hint 里的 --new：那是给 agent 的非交互建法，
+ * 只会新建应用；人在终端里跑交互模式，才能选绑定已有的机器人。
+ */
+export const LARK_SETUP_CMD = "lark-cli config init";
+
+/**
+ * 把错误信封翻成面板上给人看的话。
+ *
+ * 只按 type / subtype 分支，不匹配 message 文案（lark-cli 的约定就是这么要求的）。
+ * 认识的给能照做的中文说明；不认识的原样带上 lark-cli 的 message 和 hint，
+ * 至少比「退出码 3」有信息量。
+ */
+export function describeLarkError(error) {
+  if (!error) return "";
+  if (typeof error === "string") return `lark-cli 报错：${error}`;
+  if (error.subtype === "not_configured") {
+    return `lark-cli 还没绑定飞书应用：在终端运行 ${LARK_SETUP_CMD}，按提示完成配置`;
+  }
+  const kind = [error.type, error.subtype].filter(Boolean).join("/");
+  const msg =
+    error.message ||
+    error.detail ||
+    error.reason ||
+    (typeof error === "object" ? "" : String(error)) ||
+    "未知错误";
+  return [
+    `lark-cli 报错${kind ? `（${kind}）` : ""}：${msg}`,
+    error.hint,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
  * 长驻调用（event consume）。调用方自己接 stdout 并负责 kill。
  *
  * detached 让它自成进程组，停止时才能用 killProcessTree 把 lark-cli 连同它自己
@@ -141,6 +199,13 @@ export async function probeLarkCli() {
     };
   }
   const status = await runLark(["event", "status"], { timeout: 15000 });
+  // 装了但没配置（新电脑上最常见）时 event status 非零退出、stderr 是错误信封。
+  // 原因要带给面板：否则页面看着一切正常，点了「开始监听」才冒出一句看不懂的报错
+  const setupError = parseLarkError(status.stderr) || parseLarkError(status.stdout);
+  const described = describeLarkError(setupError);
+  const fallbackError = status.ok
+    ? ""
+    : status.error || status.stderr?.trim() || status.stdout?.trim() || "";
   return {
     installed: true,
     version: (version.stdout || "").trim(),
@@ -148,6 +213,8 @@ export async function probeLarkCli() {
     busRunning: /Bus:\s*running/i.test(status.stdout),
     appId: (status.stdout.match(/cli_[a-z0-9]+/i) || [])[0] || "",
     statusText: (status.stdout || status.stderr || "").trim(),
+    error: described || fallbackError,
+    setupCmd: setupError?.subtype === "not_configured" ? LARK_SETUP_CMD : "",
     installCmd: pkgInfo.installCmd,
     pkgName: pkgInfo.pkg,
   };

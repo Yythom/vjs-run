@@ -198,7 +198,7 @@ export default function Sidebar() {
         />
         <NavigationMenuItem
           icon="🐂"
-          label="赛博牛马"
+          label="AI 工单台"
           path="/docking"
           activePath={activePath}
           badge={pendingDockingCount}

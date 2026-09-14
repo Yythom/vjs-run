@@ -55,7 +55,7 @@ export default function CliInstallCard({
       </div>
 
       {desc && (
-        <p className="text-[11px] text-amber-700 leading-relaxed">{desc}</p>
+        <p className="text-[11px] text-amber-700 leading-relaxed whitespace-pre-line">{desc}</p>
       )}
 
       {installCmd && (
