@@ -26,7 +26,7 @@ const OPTIONS = [
   },
   {
     id: "dockingAssets",
-    label: "赛博牛马备料与附件",
+    label: "AI 工单台备料与附件",
     desc: "/plan 拉下来的需求文档与截图、飞书消息里的图片附件。任务记录不受影响，材料删了重新 /plan 会再备",
     sizeKey: "dockingAssetsBytes",
   },

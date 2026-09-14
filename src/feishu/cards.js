@@ -49,7 +49,7 @@ export function buildAckCard({ task, autoDispatching = false }) {
         elements: [
           {
             tag: "plain_text",
-            content: "由 赛博牛马 自动流转",
+            content: "由 AI 工单台 自动流转",
           },
         ],
       },
@@ -161,7 +161,7 @@ export function buildDoneCard({ task, note, modifiedFiles = [], branchName = "" 
     elements: [
       {
         tag: "plain_text",
-        content: "由 赛博牛马 自动处理",
+        content: "由 AI 工单台 自动处理",
       },
     ],
   });
@@ -212,7 +212,7 @@ export function buildIgnoredCard({ task, reason }) {
         elements: [
           {
             tag: "plain_text",
-            content: "由 赛博牛马 更新",
+            content: "由 AI 工单台 更新",
           },
         ],
       },
@@ -251,7 +251,7 @@ export function buildSolutionReplyCard({ task, text }) {
         elements: [
           {
             tag: "plain_text",
-            content: `提出人：${requester} · 来自赛博牛马`,
+            content: `提出人：${requester} · 来自 AI 工单台`,
           },
         ],
       },

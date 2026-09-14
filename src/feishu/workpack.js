@@ -1,4 +1,4 @@
-// req-to-plan 工作包 → 赛博牛马任务的翻译层。
+// req-to-plan 工作包 → AI 工单台任务的翻译层。
 //
 // 两个入口共用这一份：飞书里的 /plan 指令（listener 备完料直接建任务），
 // 和命令行的 scripts/req-to-docking.mjs（req watch --exec 的下游）。

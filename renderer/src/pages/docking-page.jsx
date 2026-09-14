@@ -114,20 +114,35 @@ export default function DockingPage() {
   // 任务库是磁盘上的一个文件，外部进程也在写它：MCP server 回写状态、req-to-plan 的桥
   // 往里塞需求池工作包。这些写入没有 IPC 增量可推，回到窗口时对一次账。
   // loadTasks 里有签名比对，没变化就不会 setState，所以 alt-tab 频繁触发也不会掉帧。
+  // 监听已健康运行时说明 lark-cli 事实上已就绪，不再对外暴露过期的 probe.error；
+  // 没装好或没配好时，人多半是切去终端处理了，回来顺手重探一次，
+  // 提示卡片才不会挂着过期的结论；好了之后就不探——每次切窗口都起两个 lark-cli 不值当
+  const isHealthy = Boolean(status.connected);
+  const probeError = isHealthy ? "" : probe?.error || "";
+  const setupCmd = isHealthy ? "" : probe?.setupCmd || "";
+  const larkNotReady = Boolean(probe && (!probe.installed || probeError));
   useEffect(() => {
-    const onFocus = () => loadTasks();
+    const onFocus = () => {
+      loadTasks();
+      if (larkNotReady) probeLark().then((p) => setProbe(p));
+    };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, []);
+  }, [larkNotReady]);
 
   const handleInstallLark = async () => {
     setLarkInstalling(true);
     try {
       const res = await installDockingCli("lark-cli");
       if (res?.success) {
-        showToast("lark-cli 安装成功！已就绪", "success");
         const p = await probeLark();
         setProbe(p);
+        // 刚装上的 lark-cli 在新电脑上必然还没配置，这时候说「已就绪」是误导
+        if (p?.error) {
+          showToast("lark-cli 已安装，还需要配置飞书应用", "warning");
+        } else {
+          showToast("lark-cli 安装成功！已就绪", "success");
+        }
       } else {
         showToast(`安装失败: ${res?.error || "未知错误"}`, "error");
       }
@@ -138,8 +153,11 @@ export default function DockingPage() {
     }
   };
 
+  // 重连中也算在监听：失败的监听会一直退避重试到退出应用，这时候按钮得是「停止」
+  const listening = status.running || status.retrying;
+
   const toggleListening = async () => {
-    if (!status.running && probe && !probe.installed) {
+    if (!listening && probe && !probe.installed) {
       const ok = await confirm({
         title: "未检测到 lark-cli",
         message:
@@ -152,9 +170,7 @@ export default function DockingPage() {
       }
       return;
     }
-    const result = status.running
-      ? await stopListening()
-      : await startListening();
+    const result = listening ? await stopListening() : await startListening();
     if (!result?.success) showToast(`操作失败: ${result?.error}`, "error");
   };
 
@@ -184,7 +200,7 @@ export default function DockingPage() {
 
   return (
     <PageShell
-      title="赛博牛马"
+      title="AI 工单台"
       subtitle="飞书需求与逻辑咨询入列 · 勾选交给 AI 分析或实现 · 原路飞书回复沟通"
       noCard
       actions={
@@ -209,13 +225,19 @@ export default function DockingPage() {
             type="button"
             className={clsx(
               "text-xs px-3 py-1.5 rounded border cursor-pointer",
-              status.running
-                ? "border-emerald-200 text-emerald-600 bg-emerald-50"
-                : "border-border text-slate-600 hover:bg-slate-50",
+              status.retrying
+                ? "border-amber-200 text-amber-700 bg-amber-50"
+                : status.running
+                  ? "border-emerald-200 text-emerald-600 bg-emerald-50"
+                  : "border-border text-slate-600 hover:bg-slate-50",
             )}
             onClick={toggleListening}
           >
-            {status.running ? "监听中 · 点击停止" : "开始监听飞书"}
+            {status.retrying
+              ? "重连中 · 点击停止"
+              : status.running
+                ? "监听中 · 点击停止"
+                : "开始监听飞书"}
           </button>
         </div>
       }
@@ -225,11 +247,18 @@ export default function DockingPage() {
         {probe && !probe.installed && (
           <CliInstallCard
             title="未检测到飞书 CLI (lark-cli)"
-            desc="赛博牛马需要本地全局安装 @larksuite/cli 来监听飞书私聊消息、发送回执与话题反问卡片。"
+            desc="AI 工单台需要本地全局安装 @larksuite/cli 来监听飞书私聊消息、发送回执与话题反问卡片。"
             installCmd={probe.installCmd || "npm install -g @larksuite/cli"}
             onInstall={handleInstallLark}
             installing={larkInstalling}
             btnText="一键安装 lark-cli"
+          />
+        )}
+        {probe?.installed && probeError && (
+          <CliInstallCard
+            title="lark-cli 已安装，但还不能用"
+            desc={probeError}
+            installCmd={setupCmd}
           />
         )}
         {status.lastError && (
@@ -367,7 +396,7 @@ export default function DockingPage() {
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse" />
               <span>
-                <strong>⚡ 无人值守赛博牛马已就绪</strong>：收到 /r
+                <strong>⚡ 无人值守 AI 工单台已就绪</strong>：收到 /r
                 需求后将自动派发 AI（
                 {RUN_MODE_SHORT[settings.autoDispatchMode] ||
                   settings.autoDispatchMode}{" "}

@@ -200,7 +200,7 @@ function clearCrashReports() {
   }
 }
 
-// 赛博牛马的本地产物，都在 userData 下：
+// AI 工单台的本地产物，都在 userData 下：
 //   req-workpacks/     —— /plan 备的料（需求文档 + 截图 + skill.md），一条需求几十张图很常见
 //   docking-attachments/ —— 飞书 IM 消息里的图片与附件
 // 任务删掉时这些文件不会跟着删（任务库只记路径），所以只增不减，得有个地方能清。

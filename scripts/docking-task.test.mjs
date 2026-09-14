@@ -1,4 +1,4 @@
-// 赛博牛马模块自动化测试：node --test scripts/docking-task.test.mjs
+// AI 工单台模块自动化测试：node --test scripts/docking-task.test.mjs
 // 每个用例使用独立的临时目录作为 userData，绝不触碰真实数据。
 
 import { test } from "node:test";
@@ -473,7 +473,7 @@ test("report: generateDockingReport 统计与格式化 Markdown 周报", async (
   assert.equal(report.metrics.doing, 1);
   assert.equal(report.metrics.filesCount, 1);
 
-  assert.match(report.markdown, /赛博牛马工作量周报/);
+  assert.match(report.markdown, /AI 工单台工作量周报/);
   assert.match(report.markdown, /#1 对接打标签接口/);
   assert.match(report.markdown, /#2 排查超时逻辑/);
   assert.match(report.markdown, /#3 导出表格需求/);

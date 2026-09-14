@@ -24,7 +24,7 @@ vjs-monorepo-run/       ← 项目配置目录
 
 没有 npm 依赖，把这个目录整个拷到任意位置就能跑。
 
-它现在同时是 vjtools（赛博牛马）的一部分，随 `src/**` 一起打包，所以飞书里的
+它现在同时是 vjtools（AI 工单台）的一部分，随 `src/**` 一起打包，所以飞书里的
 `/plan` 指令能直接调它备料——那条路径用 Electron 当 node 跑（`ELECTRON_RUN_AS_NODE=1`），
 才读得到打包进 asar 的这个目录。自己在命令行用则照常：
 
@@ -69,10 +69,10 @@ req prepare <目标>  # 只备料，不调 Claude（省 token）；--json 把工
 req watch           # 轮询新流转进「排实施」的需求，批量备料
 ```
 
-## 接赛博牛马
+## 接 AI 工单台
 
 `req plan` 是自己调 claude 产 plan，跑完就结束——没有队列、没有隔离分支、没有面板、
-反问也没地方回。要那些东西就把工作包交给赛博牛马，它的「产实施 plan」力度档就是为此加的
+反问也没地方回。要那些东西就把工作包交给 AI 工单台，它的「产实施 plan」力度档就是为此加的
 （放行 `Bash(node:*)` 跑影响面扫描，禁掉改现存文件）：
 
 ```bash
@@ -83,7 +83,7 @@ req watch           # 轮询新流转进「排实施」的需求，批量备料
 req watch --exec 'node /path/to/vjs-run/scripts/req-to-docking.mjs --repo <被分析仓库>'
 ```
 
-工作包里的 `skill.md` 是 prepare 阶段渲染的（占位符已填），赛博牛马会把它注入
+工作包里的 `skill.md` 是 prepare 阶段渲染的（占位符已填），AI 工单台会把它注入
 agent 的 system prompt，所以两条路径产出的 plan 遵循同一份规范。
 
 影响面工具可以单独用，跟需求流程无关：
@@ -99,7 +99,7 @@ req scan twins
 
 `src/skill/SKILL.md` 在 `req prepare` 时读出来、替换占位符后写进工作包的 `skill.md`，
 产 plan 时再注入 Claude 的 system prompt，所以目标仓库的 `.agents/skills/` 下**不需要**
-放这份 skill。工作包因此是自包含的：`req plan`、赛博牛马的无头进程、或者人手开的一个
+放这份 skill。工作包因此是自包含的：`req plan`、AI 工单台的无头进程、或者人手开的一个
 会话，谁接手都读到同一份规范。
 
 运行时替换的占位符：

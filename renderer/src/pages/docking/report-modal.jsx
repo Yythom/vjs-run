@@ -23,7 +23,7 @@ export default function ReportModal({ open, onClose }) {
     <Modal
       open={open}
       onClose={onClose}
-      title="📊 赛博牛马工作量周报 / 汇总"
+      title="📊 AI 工单台工作量周报 / 汇总"
       srOnly={false}
       className="w-[720px] p-4"
     >
