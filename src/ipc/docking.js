@@ -6,7 +6,9 @@
 //
 // 「发消息」是唯一的外发动作，只在渲染层显式点按钮时触发，主进程不主动发。
 
-import { clipboard } from "electron";
+import fs from "node:fs";
+import path from "node:path";
+import { clipboard, shell } from "electron";
 import { ipcSafe } from "./safe.js";
 import {
   probeLarkCli,
@@ -139,6 +141,35 @@ export function registerDockingIpc() {
   ipcSafe("docking-delete-tasks", (_e, { ids = [] }) => ({
     removed: deleteTasks(ids),
   }));
+
+  // ── 需求池工作包的 plan ─────────────────────────────────────────────────────
+  // plan.md 写在工作包目录（userData/req-workpacks 下），不进被分析的代码库。
+  // 路径只从任务上的 workpackDir 推，不接受渲染层传路径，免得变成任意读文件
+  const planFileOf = (id) => {
+    const task = getTask(id);
+    if (!task) throw new Error("任务不存在");
+    if (!task.workpackDir) throw new Error("这条任务没有工作包，也就没有 plan");
+    return path.join(task.workpackDir, "plan.md");
+  };
+
+  ipcSafe("docking-read-plan", (_e, { id }) => {
+    const file = planFileOf(id);
+    if (!fs.existsSync(file)) return { exists: false, path: file };
+    return {
+      exists: true,
+      path: file,
+      content: fs.readFileSync(file, "utf8"),
+      updatedAt: fs.statSync(file).mtimeMs,
+    };
+  });
+
+  ipcSafe("docking-open-plan", async (_e, { id }) => {
+    const file = planFileOf(id);
+    if (!fs.existsSync(file)) throw new Error("plan 还没写出来");
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+    return {};
+  });
 
   // ── 派给模型：只生成 prompt，不执行 ─────────────────────────────────────────
   ipcSafe("docking-build-prompt", (_e, { ids = [], copy = false }) => {

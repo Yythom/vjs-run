@@ -27,6 +27,7 @@ import {
   useDockingCommands,
   useDockingSettings,
   useDockingStatus,
+  useTaskById,
 } from "../stores/docking-store";
 import { RUN_MODE_SHORT } from "./docking/constants";
 import AskRequesterModal from "./docking/ask-requester-modal";
@@ -34,6 +35,7 @@ import AutoDispatchModal from "./docking/auto-dispatch-modal";
 import CliInstallCard from "./docking/cli-install-card";
 import CreateTaskModal from "./docking/create-task-modal";
 import JobHistoryModal from "./docking/job-history-modal";
+import PlanViewModal from "./docking/plan-view-modal";
 import PromptPreviewModal from "./docking/prompt-preview-modal";
 import ReplySolutionModal from "./docking/reply-solution-modal";
 import ReportModal from "./docking/report-modal";
@@ -61,6 +63,9 @@ export default function DockingPage() {
   // 话题详情弹窗做成页面级单例：以前每张卡都挂一个，N 条任务就是 N 份弹窗与展开态。
   // 存 id 而不是 task 快照，任务被 AI 回写后弹窗里的内容才跟着更新
   const [threadTaskId, setThreadTaskId] = useState(null);
+  // 查看 plan 的弹窗同样做成页面级单例，存 id 从 store 取任务
+  const [planTaskId, setPlanTaskId] = useState(null);
+  const planTask = useTaskById(planTaskId);
   const [prompt, setPrompt] = useState("");
 
   // 新建需求弹窗状态
@@ -177,6 +182,7 @@ export default function DockingPage() {
   // 目录、引擎、力度与三个引擎的探测都归 RunDispatchModal 自己管，
   // 它按 runTargets 条件挂载，挂载时读 settings 取初值
   const openThread = useEventCallback((task) => setThreadTaskId(task.id));
+  const openPlan = useEventCallback((task) => setPlanTaskId(task.id));
 
   const openRun = useEventCallback((taskOrTasks) => {
     const targets = Array.isArray(taskOrTasks) ? taskOrTasks : [taskOrTasks];
@@ -427,9 +433,14 @@ export default function DockingPage() {
           onRun={openRun}
           onOpenThread={openThread}
           onViewHistory={openHistoryForTask}
+          onViewPlan={openPlan}
           onPromptGenerated={setPrompt}
         />
       </div>
+
+      {planTask && (
+        <PlanViewModal task={planTask} onClose={() => setPlanTaskId(null)} />
+      )}
 
       {threadTaskId && (
         <TaskThreadModal
