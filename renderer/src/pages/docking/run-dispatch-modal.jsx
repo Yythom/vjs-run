@@ -66,13 +66,8 @@ function RunDispatchForm({ repos }) {
     if (hasWorkpack) return "plan";
     return settings.runMode || "analyze";
   });
-  const [engine, setEngine] = useState(() => {
-    const initialMode = hasWorkpack ? "plan" : settings.runMode || "analyze";
-    const initialEngine = settings.runEngine || "claude";
-    return initialMode === "plan" && initialEngine !== "claude"
-      ? "claude"
-      : initialEngine;
-  });
+  // 工作包任务也用上次选的引擎，不再强切 Claude；各引擎在 plan 档的边界差异下面有提示
+  const [engine, setEngine] = useState(() => settings.runEngine || "claude");
   const [createBranch, setCreateBranch] = useState(
     () => settings.createBranch ?? false,
   );

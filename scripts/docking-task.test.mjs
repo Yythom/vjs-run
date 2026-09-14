@@ -1602,9 +1602,54 @@ test("/plan: 备料成功后建出带 workpackDir 与真实飞书会话的任务
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("/plan: 没有开关，收到就开跑，且固定走 plan 档 + claude", async () => {
+test("/plan: 跟 /r 一样，没开自动派发就只备料进待处理，不起 AI", async () => {
   freshUserData();
-  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: false });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { restore } = await mockPrepare({ stdout: json });
+  const { calls, restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  assert.equal(calls.length, 0, "自动派发关着，不该起 AI 进程");
+  const [task] = listTasks();
+  assert.equal(task.workpackDir, dir);
+  assert.equal(task.status, "inbox");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 开了自动派发就开跑，力度固定 plan 档，引擎听预设", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: true, autoDispatchEngine: "agy", autoDispatchCreateBranch: false });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { onQueueIdle } = await import("../src/feishu/runner.js");
+  const { dir, json } = fakePreparedWorkpack();
+  const { restore } = await mockPrepare({ stdout: json });
+  const { calls, restore: restoreRun } = await captureSpawn();
+
+  await handlePlanCommand(fakeEvt(), "https://x.feishu.cn/wiki/abc", Date.now(), "om_plan_1");
+  await onQueueIdle();
+  restore();
+  restoreRun();
+
+  assert.equal(calls.length, 1, "应该派出去一个 job");
+  assert.equal(calls[0].bin, "agy", "预设选了 agy，/plan 就该走 agy");
+  const [task] = listTasks();
+  assert.equal(task.lastRunConfig.mode, "plan");
+  assert.equal(task.lastRunConfig.engine, "agy");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("/plan: 开了自动派发且预设 claude 时，走 plan 档的工具限制", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: true, autoDispatchEngine: "claude" });
   const { handlePlanCommand } = await import("../src/feishu/listener.js");
   const { onQueueIdle } = await import("../src/feishu/runner.js");
   const { dir, json } = fakePreparedWorkpack();
@@ -1649,6 +1694,35 @@ test("/plan: 同一份需求再 /plan 一次不重复建任务", async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("/plan: 已完成的任务带新交代再发一次，没开自动派发就放回待处理", async () => {
+  freshUserData();
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: false });
+  const { handlePlanCommand } = await import("../src/feishu/listener.js");
+  const { dir, json } = fakePreparedWorkpack();
+
+  let prep = await mockPrepare({ stdout: json });
+  await handlePlanCommand(fakeEvt(), "recPLAN01xyz", Date.now(), "om_plan_1");
+  prep.restore();
+  const [created] = listTasks();
+  updateTask(created.id, { status: "done" });
+
+  prep = await mockPrepare({ stdout: json });
+  await handlePlanCommand(
+    fakeEvt({ message_id: "om_plan_2" }),
+    "recPLAN01xyz 重点看图片业务线",
+    Date.now(),
+    "om_plan_2",
+  );
+  prep.restore();
+
+  assert.equal(listTasks().length, 1, "同一份需求不该再建一条");
+  const task = getTask(created.id);
+  assert.equal(task.status, "inbox");
+  assert.ok(task.thread.some((e) => e.text === "重点看图片业务线"), "新交代要挂进沟通记录");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("/plan: 备料失败不建任务，错误原因取 stderr 末尾几行", async () => {
   freshUserData();
   setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
@@ -1677,11 +1751,12 @@ test("/plan: 没配项目目录时直接拒，不拿工作包目录当仓库扫�
   assert.equal(listTasks().length, 0);
 });
 
-test("/plan: 白名单管的是「谁可以」而不是「要不要」，名单外只备料不派活", async () => {
+test("/plan: 开了自动派发，名单外的人也只备料不派活", async () => {
   freshUserData();
   setSettings({
     ackEnabled: false,
     autoDispatchCwd: "/mock/repo",
+    autoDispatchEnabled: true,
     allowedRequesters: ["ou_only_me"],
   });
   const { handlePlanCommand } = await import("../src/feishu/listener.js");
@@ -1771,7 +1846,7 @@ test("parsePlanTarget: 链接/record_id 挑出来备料，剩下的话是提出�
 
 test("/plan: 指令里顺带说的话进 prompt，并回显出来好让人发现拆错", async () => {
   freshUserData();
-  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: true });
   const { handlePlanCommand } = await import("../src/feishu/listener.js");
   const { onQueueIdle } = await import("../src/feishu/runner.js");
   const { dir, json } = fakePreparedWorkpack();
@@ -1821,7 +1896,7 @@ test("/plan: 没有交代时不硬塞一段空的「提出人另外交代」", a
 
 test("/plan: 同一份需求再 /plan 一次，新交代挂进沟通记录不丢", async () => {
   freshUserData();
-  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo" });
+  setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: true });
   const { handlePlanCommand } = await import("../src/feishu/listener.js");
   const { onQueueIdle } = await import("../src/feishu/runner.js");
   const { dir, json } = fakePreparedWorkpack();
