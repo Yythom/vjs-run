@@ -303,6 +303,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 勾选的任务拼成 prompt，copy=true 时同时写入系统剪贴板
   dockingBuildPrompt: (ids, copy) =>
     ipcRenderer.invoke("docking-build-prompt", { ids, copy }),
+  // 需求池工作包里 AI 写出的 plan.md：读内容 / 用系统默认应用打开
+  dockingReadPlan: (id) => ipcRenderer.invoke("docking-read-plan", { id }),
+  dockingOpenPlan: (id) => ipcRenderer.invoke("docking-open-plan", { id }),
 
   // 用飞书原路回问提出人（仅由用户在面板显式触发）
   dockingAsk: (id, question) =>

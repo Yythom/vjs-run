@@ -17,6 +17,7 @@ function TaskCard({
   queuedJob,
   onCancelJob,
   onOpenThread,
+  onViewPlan,
 }) {
   // 只订阅本卡片对应 Job 的最新一行日志，而不是页面级的整张 jobLogs 表
   const latestLog = useJobLatestLogText(runningJob?.id);
@@ -110,6 +111,20 @@ function TaskCard({
                 <span>📐</span>
                 <span>工作包</span>
               </span>
+            )}
+            {task.workpackDir && (
+              <button
+                type="button"
+                className="shrink-0 text-[10px] text-sky-800 bg-sky-50 border border-sky-300 hover:bg-sky-100 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5 cursor-pointer"
+                title="查看 AI 写出的实施 plan（plan.md 在软件目录的工作包里，不在代码库）"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewPlan(task);
+                }}
+              >
+                <span>📄</span>
+                <span>查看 plan</span>
+              </button>
             )}
             <span className="text-slate-300">·</span>
             <span className="text-slate-800 font-medium">

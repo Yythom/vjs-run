@@ -28,6 +28,7 @@ export default function TaskListSection({
   onRun,
   onOpenThread,
   onViewHistory,
+  onViewPlan,
   onPromptGenerated,
 }) {
   const tasks = useDockingTasks();
@@ -211,6 +212,7 @@ export default function TaskListSection({
               onRun={onRun}
               onViewHistory={onViewHistory}
               onOpenThread={onOpenThread}
+              onViewPlan={onViewPlan}
             />
           ))}
         </div>
