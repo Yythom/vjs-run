@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// req-to-plan 的工作包 → 赛博牛马任务库的单向桥（命令行入口）。
+// req-to-plan 的工作包 → AI 工单台任务库的单向桥（命令行入口）。
 //
 // 用于批量备料的场景：
 //   req watch --exec 'node <此文件>'    → 每备好一个工作包就往任务库塞一条 inbox 任务

@@ -1,4 +1,4 @@
-// req-to-plan 工作包 → 赛博牛马任务库 的桥接测试：node --test scripts/req-to-docking.test.mjs
+// req-to-plan 工作包 → AI 工单台任务库 的桥接测试：node --test scripts/req-to-docking.test.mjs
 // 脚本按子进程跑，测的是真实 CLI 契约（位置参数 / WORKPACK_DIR / RECORD_ID 环境变量）；
 // userData 一律用临时目录，绝不触碰真实任务库。
 

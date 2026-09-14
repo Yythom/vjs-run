@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 赛博牛马 MCP server —— 无头 claude / agy 的工具集。
+// AI 工单台 MCP server —— 无头 claude / agy 的工具集。
 //
 // 它不是给人手动配的：runner 起 claude 时自动挂载。有了这组工具，claude 才能
 // 在自动处理需求的过程中回写任务状态、需求含糊时直接飞书反问提出人，

@@ -196,7 +196,7 @@ export default function AgentProcessesModal({ onClose }) {
   }, []);
 
   // 关掉面板并把对应的需求卡滚到视野中央闪一下。
-  // 这是原来全局悬浮条上的「查看」，面板本来就开在赛博牛马页里，同页滚动即可
+  // 这是原来全局悬浮条上的「查看」，面板本来就开在 AI 工单台页里，同页滚动即可
   const handleLocate = (taskId) => {
     onClose();
     window.setTimeout(() => {

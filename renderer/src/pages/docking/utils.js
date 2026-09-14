@@ -1,4 +1,4 @@
-// 赛博牛马页面共用的纯函数工具。
+// AI 工单台页面共用的纯函数工具。
 
 export function pickSmartRepo(tasksToRun, repos, lastCwd) {
   if (!repos || !repos.length) return "";

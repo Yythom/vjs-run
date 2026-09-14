@@ -1,4 +1,4 @@
-// 赛博牛马周报 / 工作量聚合与 Markdown 格式化工具
+// AI 工单台周报 / 工作量聚合与 Markdown 格式化工具
 
 /**
  * 根据指定时间区间生成结构化工作量 Markdown 报告
@@ -55,7 +55,7 @@ export function generateDockingReport(tasks = [], range = "this_week") {
   };
 
   const lines = [
-    `# 赛博牛马工作量周报 / 汇总（${rangeTitleMap[range] || "全部"}）`,
+    `# AI 工单台工作量周报 / 汇总（${rangeTitleMap[range] || "全部"}）`,
     ``,
     `> **统计概览**：共对接 **${inRange.length}** 项需求/咨询 | 已闭环完成 **${doneTasks.length}** 项 | 进行中 **${doingTasks.length}** 项 | 改动代码文件 **${allModifiedFiles.size}** 个`,
     ``,

@@ -191,9 +191,11 @@ export default function TaskListSection({
         <div className="text-center text-[12px] text-slate-600 font-medium py-16 border border-dashed border-slate-300 rounded-lg bg-slate-50/50">
           {searchKeyword
             ? "没有找到匹配的需求"
-            : status.running
-              ? "监听中，等后端同学飞书私聊你……"
-              : "还没有任务。可点击右上角「+ 新建需求」或「开始监听飞书」"}
+            : status.retrying
+              ? "连接异常，正在自动重试（可在上方查看原因）…"
+              : status.running && !status.retrying
+                ? "监听中，等后端同学飞书私聊你……"
+                : "还没有任务。可点击右上角「+ 新建需求」或「开始监听飞书」"}
         </div>
       ) : (
         <div className="space-y-2">

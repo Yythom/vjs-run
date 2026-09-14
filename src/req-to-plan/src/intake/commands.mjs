@@ -68,7 +68,7 @@ const loadApiSearch = async (values) => {
 /**
  * 把工作规范渲染进工作包（skill.md）。
  *
- * 工作包因此自包含：接手的 agent —— req plan 自己、赛博牛马派下来的无头进程、
+ * 工作包因此自包含：接手的 agent —— req plan 自己、AI 工单台派下来的无头进程、
  * 或者人手开的一个会话 —— 读目录就拿得到同一份规范，不必知道 req-to-plan 装在哪。
  * 返回值给调用方复用，免得产 plan 时再扫一遍仓库。
  */
@@ -266,7 +266,7 @@ const runPrepare = async (target, values) => {
   if (result.assetCount) console.error(`  assets/           ${result.assetCount} 张截图`)
 
   // stderr 是给人看的进度，stdout 是给调用方解析的数据。
-  // 赛博牛马的 /plan 指令要拿 outDir 去建任务，不能靠 grep 上面那几行进度
+  // AI 工单台的 /plan 指令要拿 outDir 去建任务，不能靠 grep 上面那几行进度
   if (values.json) {
     console.log(
       JSON.stringify(
