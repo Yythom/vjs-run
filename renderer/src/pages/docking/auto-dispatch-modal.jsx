@@ -226,14 +226,14 @@ function AutoDispatchForm({ open, onClose, repos }) {
           </p>
         </div>
 
-        {/* /plan 说明：它没有开关，但会用这里的一部分设置 */}
+        {/* /plan 说明：跟 /r 同一套规则，只有力度档固定 */}
         <div className="pt-1 border-t border-slate-200">
           <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
             <strong className="text-slate-700">📐 关于 /plan</strong>
-            ：它没有开关——有人发 <code>/plan 需求文档链接</code> 就会备料并开跑，
-            走「产实施 plan」档 + Claude Code，不看上面选的力度与引擎（三个引擎都能跑这一档，
-            但 claude 的边界最紧，无人值守用它最稳）。
-            但<strong>默认项目、隔离分支、下面的白名单</strong>对它同样生效。
+            ：有人发 <code>/plan 需求文档链接</code> 会先备料，然后跟 /r 一样进待处理；
+            开了自动派发才会直接开跑，用上面选的<strong>引擎、默认项目、隔离分支</strong>，
+            下面的白名单同样生效。唯一不同的是力度固定为「产实施 plan」。
+            各引擎在这一档的边界差别很大，Antigravity 最松，选它时建议开着隔离分支。
           </p>
         </div>
 

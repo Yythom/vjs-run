@@ -82,8 +82,8 @@ function buildContent({ dir, recordId, pack, remark }) {
     remark ? "⚡ 提出人在指令里另外交代了一句，这是本次的重点，plan 要正面回应它：" : null,
     remark ? `> ${remark.split("\n").join("\n> ")}` : null,
     "",
-    "派活请用「产 plan」档 + Claude Code 引擎：影响面扫描要起 node 子进程，只有这一档",
-    "预授权了 node，又不像「全自动」那样把 Bash 全放开。",
+    "派活请用「产实施 plan」档：影响面扫描走 req_scan 工具，这一档只放开写 plan.md，",
+    "不像「全自动」那样把命令执行全放开。",
   ]
     // 空串是刻意留的段落分隔，只能滤掉条件分支产出的 null
     .filter((line) => line !== null)

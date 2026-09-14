@@ -800,14 +800,19 @@ export async function handlePlanCommand(evt, body, createdAt, messageId) {
   const repoLabel = repoRoot.split(/[\\/]/).pop();
 
   /**
-   * 把一条工作包任务交出去跑。
+   * 备好料的工作包任务怎么往下走。
    *
-   * 这里没有「要不要自动产 plan」的开关：人打出 /plan 就是在下命令，意图已经写在指令里了，
-   * 再要一次预先授权是多余的。/r 需要开关是因为「提个需求」和「自动交给 AI 跑」本来是两件事，
-   * /plan 没有这个分裂。白名单照旧生效——它管的是「谁可以驱动这台机器」，不是「要不要」。
+   * /plan 跟 /r 只差在「备料」这一步，状态流转是同一套：先进待处理，
+   * 开了「收到需求自动交给 AI」才自动派活，引擎、隔离分支也听预设规则；
+   * 唯一固定的是力度档——工作包要的产出就是 plan。白名单同样生效。
    */
   const launch = async (task, summary) => {
     const stopHere = async (why) => {
+      // 已完成 / 已忽略的任务带新交代回来，跟话题里追问一样放回待处理，不然人在面板上看不见它
+      if (task.status === "done" || task.status === "ignored") {
+        const reopened = updateTask(task.id, { status: "inbox" });
+        if (reopened) broadcastTask("updated", reopened);
+      }
       await replyText(evt, `${summary}\n\n${why}`);
       showDesktopNotification({
         title: `【需求池工作包】#${task.seq}「${task.title}」`,
@@ -815,23 +820,21 @@ export async function handlePlanCommand(evt, body, createdAt, messageId) {
       });
     };
 
-    if (!isAutoDispatchAllowed(evt.sender_id)) {
-      await stopHere("材料已备好，等面板上确认后再开跑。");
+    if (!settings.autoDispatchEnabled || !isAutoDispatchAllowed(evt.sender_id)) {
+      await stopHere("材料已备好，已放进待处理，在面板上派活后开始产 plan。");
       return;
     }
 
+    const engine = settings.autoDispatchEngine || "claude";
     const result = dispatchToAI({
       task,
       cwd: repoRoot,
       mode: "plan",
-      // 三个引擎都跑得了 plan 档，这里写死 claude 是因为它的边界最紧：
-      // Bash 只预授权 node、Edit/MultiEdit 被禁。无人值守由一条飞书消息触发，
-      // 该用最紧的那个；想换引擎在面板上手动派活时选。
-      engine: "claude",
+      engine,
       createBranch: settings.autoDispatchCreateBranch ?? true,
       notify: {
         title: `【产 plan】#${task.seq}「${task.title}」`,
-        body: `已进入 Claude Code 队列 · 📁 ${repoLabel}`,
+        body: `已进入 ${ENGINE_LABEL[engine] || engine} 队列 · 📁 ${repoLabel}`,
       },
     });
 
