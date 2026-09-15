@@ -33,7 +33,7 @@ import { SRC_DIR } from "../paths.js";
 import { buildSpawnEnv } from "../shell-env.js";
 import { sendToAllWindows } from "../ui-channel.js";
 import { buildPrompt } from "./prompt.js";
-import { appendThread, getTask, updateTask } from "./task-store.js";
+import { appendThread, getDataDir, getTask, updateTask } from "./task-store.js";
 import { saveJobRun } from "./history-store.js";
 import { showDesktopNotification } from "./listener.js";
 import { sendMessage } from "./lark-cli.js";
@@ -52,22 +52,132 @@ export function sanitizeBranchSlug(text) {
     .slice(0, 30);
 }
 
-/**
- * 执行前切隔离分支。
- *
- * 返回 { ok, branchName, error }：
- *   - 不需要分支（没开开关 / analyze 只读档）→ ok:true, branchName:""
- *   - 不在 git 仓库里 → ok:true, branchName:""，只记一条日志，照跑
- *   - 工作区有未提交改动 / checkout 失败 → ok:false，**调用方必须中止本次 job**。
- *     隔离开着却切不过去，还硬在当前分支上让 AI 改代码，比不隔离更危险。
- *
- * 任务已经有 branchName（澄清后恢复执行的第二轮）时优先回到那条分支，
- * 否则按 tasks[0] 的短号+标题新建。
- */
-export function setupGitBranch({ cwd, tasks, createBranch, mode, emitLog = () => {} }) {
-  if (!createBranch || mode === "analyze" || !tasks || tasks.length === 0) {
-    return { ok: true, branchName: "" };
+/** 分支名 → 这条任务的 worktree 目录。按仓库分组，路径稳定，续接会话才找得到同一个 cwd */
+export function worktreePathFor(cwd, branchName) {
+  let real = cwd;
+  try {
+    real = fs.realpathSync(cwd);
+  } catch (_) {}
+  const repoKey = `${path.basename(real)}-${crypto
+    .createHash("sha1")
+    .update(real)
+    .digest("hex")
+    .slice(0, 8)}`;
+  return path.join(getDataDir(), "docking-worktrees", repoKey, branchName.replace(/\//g, "__"));
+}
+
+/** 解析 `git worktree list --porcelain`，第一项永远是主工作区 */
+function listWorktrees(git) {
+  return git(["worktree", "list", "--porcelain"])
+    .split("\n\n")
+    .map((block) => {
+      const entry = {};
+      for (const line of block.split("\n")) {
+        if (line.startsWith("worktree ")) entry.path = line.slice(9);
+        else if (line.startsWith("branch ")) entry.branch = line.slice(7).replace(/^refs\/heads\//, "");
+      }
+      return entry;
+    })
+    .filter((e) => e.path);
+}
+
+const samePath = (a, b) => {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch (_) {
+    return path.resolve(a) === path.resolve(b);
   }
+};
+
+/**
+ * 把主仓库的 node_modules 软链进 worktree，省掉每条任务装一遍依赖。
+ *
+ * 只找浅层的（根目录与 monorepo 子包，深度 ≤ 3），不进 node_modules 和隐藏目录。
+ * worktree 里对应目录不存在（未跟踪的子包）或已经有 node_modules 的都跳过。
+ *
+ * 软链会被 git 当成普通文件：`.gitignore` 里的 `node_modules/` 带斜杠，只匹配目录，
+ * 匹配不到软链——不处理的话 AI 一个 `git add -A` 就把它提交了。
+ * 所以没被忽略的那几条写进公共的 info/exclude（主工作区本来就忽略 node_modules，不受影响）。
+ */
+function linkNodeModules(git, repoDir, workdir, emitLog) {
+  const found = [];
+  const walk = (rel, depth) => {
+    const abs = path.join(repoDir, rel);
+    let entries;
+    try {
+      entries = fs.readdirSync(abs, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
+      const childRel = rel ? path.join(rel, ent.name) : ent.name;
+      if (ent.name === "node_modules") found.push(childRel);
+      else if (depth < 3) walk(childRel, depth + 1);
+    }
+  };
+  walk("", 0);
+
+  const linked = [];
+  for (const rel of found) {
+    const target = path.join(workdir, rel);
+    if (!fs.existsSync(path.dirname(target))) continue;
+    try {
+      fs.lstatSync(target);
+      continue; // 已有（上一轮链过，或 AI 自己装过），不动
+    } catch (_) {}
+    fs.symlinkSync(path.join(repoDir, rel), target, "dir");
+    linked.push(rel);
+  }
+  if (!linked.length) return;
+
+  const unignored = linked.filter((rel) => {
+    try {
+      git(["-C", workdir, "check-ignore", "-q", rel]);
+      return false;
+    } catch (_) {
+      return true;
+    }
+  });
+  if (unignored.length) {
+    const commonDir = path.resolve(
+      workdir,
+      git(["-C", workdir, "rev-parse", "--git-common-dir"]).trim(),
+    );
+    const excludeFile = path.join(commonDir, "info", "exclude");
+    fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+    const existing = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, "utf8") : "";
+    const lines = unignored
+      .map((rel) => `/${rel.split(path.sep).join("/")}`)
+      .filter((line) => !existing.split("\n").includes(line));
+    if (lines.length) {
+      fs.appendFileSync(
+        excludeFile,
+        `${existing && !existing.endsWith("\n") ? "\n" : ""}# vjtools 工单台 worktree 的 node_modules 软链\n${lines.join("\n")}\n`,
+      );
+    }
+  }
+  emitLog("meta", `🔗 已软链主仓库依赖: ${linked.join("、")}`);
+}
+
+/**
+ * 执行前给任务准备隔离 worktree。
+ *
+ * 以前是在主仓库里直接 checkout 隔离分支：AI 跑的时候你自己的工作区被切走，
+ * 跑完也不切回来；工作区一脏就派不了活；同一仓库的改代码任务只能排队。
+ * 现在每条任务一个 worktree，落在 userData/docking-worktrees/ 下，主仓库完全不动。
+ *
+ * 返回 { ok, branchName, workdir, error }：
+ *   - 不需要隔离（没开开关 / analyze 只读档）/ 不是 git 仓库 → ok:true，workdir 就是 cwd
+ *   - 建 worktree 失败 → ok:false，**调用方必须中止本次 job**。
+ *     隔离开着却建不出来，还硬在主仓库里让 AI 改代码，比不隔离更危险。
+ *
+ * 任务已经有 branchName（澄清后恢复执行的第二轮）时回到那条分支的 worktree，
+ * 否则按 tasks[0] 的短号+标题新建，从主仓库当前 HEAD 拉出。
+ */
+export function setupWorktree({ cwd, tasks, createBranch, mode, emitLog = () => {} }) {
+  const skip = { ok: true, branchName: "", workdir: cwd };
+  if (!createBranch || mode === "analyze" || !tasks || tasks.length === 0) return skip;
 
   const git = (args) =>
     execFileSync("git", args, {
@@ -76,78 +186,92 @@ export function setupGitBranch({ cwd, tasks, createBranch, mode, emitLog = () =>
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-  // 1. 检查是否在 Git 仓库内。不是仓库就没得隔离，但也没必要拦着不跑
+  // 1. 不是仓库就没得隔离，但也没必要拦着不跑
   try {
-    if (git(["rev-parse", "--is-inside-work-tree"]).trim() !== "true") {
-      emitLog("meta", "⚠️ 该目录不是 Git 仓库，跳过隔离分支");
-      return { ok: true, branchName: "" };
-    }
+    if (git(["rev-parse", "--is-inside-work-tree"]).trim() !== "true") throw new Error();
   } catch (_) {
-    emitLog("meta", "⚠️ 该目录不是 Git 仓库，跳过隔离分支");
-    return { ok: true, branchName: "" };
+    emitLog("meta", "⚠️ 该目录不是 Git 仓库，跳过隔离 worktree");
+    return skip;
   }
 
-  // 2. 已跟踪文件必须干净。脏着切分支会把别人没提交的改动一起拖过去，
-  //    等 AI 再改一轮，就再也分不清哪些是谁动的了。
-  //    但未跟踪文件（??）不算脏：它们不属于任何分支，git diff 看不到，
-  //    切分支时原地不动，混不进 AI 的改动里。工具生成物、本地草稿目录
-  //    常年躺在工作区，把它们也算脏会让派活 100% 失败。
-  //    真出现同名冲突时 checkout 自己会拒绝，下面的 catch 兜得住。
-  try {
-    const dirty = git(["status", "--porcelain", "--untracked-files=no"]).trim();
-    if (dirty) {
-      const files = dirty.split("\n").slice(0, 5).join("\n");
-      return {
-        ok: false,
-        branchName: "",
-        error:
-          `工作区有未提交改动，无法安全切到隔离分支：\n${files}` +
-          `${dirty.split("\n").length > 5 ? "\n…" : ""}\n` +
-          "请先提交或 stash，或关掉「自动创建隔离分支」再派活。",
-      };
-    }
-  } catch (err) {
-    return { ok: false, branchName: "", error: `检查工作区状态失败: ${err.message}` };
-  }
-
-  // 3. 构造分支名。恢复执行时沿用任务上已有的那条
+  // 2. 分支名。恢复执行时沿用任务上已有的那条
   const firstTask = tasks[0];
   const existing = tasks.find((t) => t.branchName)?.branchName || "";
   const slug = sanitizeBranchSlug(firstTask.title) || "docking-task";
   const branchName = existing || `docking/seq-${firstTask.seq || 1}-${slug}`;
 
   try {
-    const current = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-    if (current === branchName) {
-      emitLog("meta", `🌿 已在隔离分支上: ${branchName}`);
+    // 目录被人手动删掉的 worktree，git 那边的登记先清掉，否则 add 会说已存在
+    git(["worktree", "prune"]);
+    const worktrees = listWorktrees(git);
+    const holder = worktrees.find((w) => w.branch === branchName);
+    let workdir = worktreePathFor(cwd, branchName);
+
+    if (holder && samePath(holder.path, worktrees[0].path)) {
+      // 旧版隔离分支是直接 checkout 在主仓库里的，git 不允许同一分支检出两处
+      return {
+        ok: false,
+        branchName: "",
+        workdir: cwd,
+        error:
+          `分支 ${branchName} 正检出在主仓库里（旧版隔离分支的残留），无法再建 worktree。\n` +
+          "请先在主仓库切回其他分支，再重新派活。",
+      };
+    }
+
+    if (holder) {
+      // git 报的是 realpath，跟算出来的路径可能差一层软链（/var → /private/var）。
+      // 同一个目录就沿用算出来的写法：续接会话按路径字符串比对，前后两轮必须一致
+      if (!samePath(holder.path, workdir)) workdir = holder.path;
+      emitLog("meta", `🌿 复用隔离 worktree: ${branchName} → ${workdir}`);
     } else {
+      // 走到这里说明该路径没有登记在册的 worktree；目录还在就是上次半途失败的残骸，
+      // 在我们自己管的目录里，清掉重建
+      if (fs.existsSync(workdir)) fs.rmSync(workdir, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(workdir), { recursive: true });
+
       let branchExists = false;
       try {
-        git(["rev-parse", "--verify", branchName]);
+        git(["rev-parse", "--verify", "--quiet", `refs/heads/${branchName}`]);
         branchExists = true;
       } catch (_) {}
 
-      git(branchExists ? ["checkout", branchName] : ["checkout", "-b", branchName]);
+      const base = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
+      git(
+        branchExists
+          ? ["worktree", "add", workdir, branchName]
+          : ["worktree", "add", "-b", branchName, workdir, "HEAD"],
+      );
       emitLog(
         "meta",
         branchExists
-          ? `🌿 检出既有隔离分支: ${branchName}`
-          : `🌿 已创建并切入隔离分支: ${branchName}`,
+          ? `🌿 为既有分支建隔离 worktree: ${branchName} → ${workdir}`
+          : `🌿 已从 ${base} 拉出隔离 worktree: ${branchName} → ${workdir}`,
       );
+
+      // 主仓库没提交的改动不会跟进 worktree。不拦，但得说一声，免得 AI 基于旧代码改完才发现
+      const dirty = git(["status", "--porcelain", "--untracked-files=no"]).trim();
+      if (dirty && !branchExists) {
+        emitLog("meta", "⚠️ 主仓库有未提交的改动，这些改动不在 worktree 里");
+      }
     }
 
-    // 回写 branchName 到任务库中
+    linkNodeModules(git, cwd, workdir, emitLog);
+
     for (const t of tasks) {
-      updateTask(t.id, { branchName });
+      updateTask(t.id, { branchName, worktreePath: workdir });
       t.branchName = branchName;
+      t.worktreePath = workdir;
     }
 
-    return { ok: true, branchName };
+    return { ok: true, branchName, workdir };
   } catch (err) {
+    const detail = String(err.stderr || "").trim() || err.message;
     return {
       ok: false,
       branchName: "",
-      error: `切换隔离分支 ${branchName} 失败: ${err.message}`,
+      workdir: cwd,
+      error: `创建隔离 worktree ${branchName} 失败: ${detail}`,
     };
   }
 }
@@ -266,7 +390,7 @@ const MAX_JOB_LOGS = 5000;
 
 const queue = new PQueue({ concurrency: 2 });
 const jobs = new Map(); // jobId -> Job
-const repoLocks = new Map(); // cwd -> Promise chain (写操作互斥锁)
+const repoLocks = new Map(); // 工作目录 -> Promise chain (写操作互斥锁)
 let lastEngine = "claude";
 
 /** 结束的 job 攒太多会一直占着内存（每个还挂着几千条日志），按结束时间淘汰 */
@@ -337,6 +461,7 @@ function serializeJob(job) {
     engine: job.engine || "claude",
     createBranch: Boolean(job.createBranch),
     branchName: job.branchName || "",
+    workdir: job.workdir || job.cwd || "",
     status: job.status, // "queued" | "running" | "done" | "error" | "aborted"
     createdAt: job.createdAt || 0,
     startTime: job.startTime || 0,
@@ -449,6 +574,7 @@ function persistJobRun(job, code, modifiedFiles = []) {
       mode: job.mode,
       cwd: job.cwd,
       branchName: job.branchName,
+      workdir: job.workdir || job.cwd,
       status: job.status,
       exitCode: code,
       error: job.error,
@@ -564,8 +690,9 @@ function claudeSessionExists(sessionId, cwd) {
 function pickResumeSession(job, tasks) {
   if (job.freshSession || job.engine !== "claude" || tasks.length !== 1) return null;
   const session = tasks[0].agentSession;
-  if (!session?.id || session.engine !== "claude" || session.cwd !== job.cwd) return null;
-  return claudeSessionExists(session.id, job.cwd) ? session : null;
+  // claude 按进程 cwd 存会话，所以比的是实际跑的目录（开了隔离就是 worktree）
+  if (!session?.id || session.engine !== "claude" || session.cwd !== job.workdir) return null;
+  return claudeSessionExists(session.id, job.workdir) ? session : null;
 }
 
 /**
@@ -582,13 +709,28 @@ function recordAgentSession(job) {
       agentSession: {
         engine: "claude",
         id: job.sessionId,
-        cwd: job.cwd,
+        cwd: job.workdir || job.cwd,
         endedAt: Date.now(),
       },
     });
   } else if (job.resumedFrom) {
     updateTask(tid, { agentSession: null });
   }
+}
+
+/**
+ * 在隔离 worktree 里跑时补给 Agent 的说明。
+ * node_modules 是软链到主仓库的：装包、删包会直接改到主仓库，必须明说。
+ */
+function worktreeNotice(job) {
+  if (!job.workdir || job.workdir === job.cwd) return [];
+  return [
+    "",
+    "隔离工作区：",
+    `- 你在隔离 worktree \`${job.workdir}\`（分支 \`${job.branchName}\`）里工作，主仓库 \`${job.cwd}\` 不要动。`,
+    "- 这里的 node_modules 是软链到主仓库的，**不要安装、升级或删除依赖**（pnpm/npm install 之类会直接改到主仓库）；",
+    "  确实缺依赖时在 note 里说明，由人来装。",
+  ];
 }
 
 /** 各档力度的约束与收尾规则 */
@@ -816,6 +958,7 @@ export function enqueueJob({
     createBranch: Boolean(createBranch),
     freshSession: Boolean(freshSession),
     branchName: "",
+    workdir: cwd,
     status: "queued",
     createdAt: Date.now(),
     startTime: 0,
@@ -848,21 +991,26 @@ export function enqueueJob({
   queue.add(async () => {
     if (job.status === "aborted") return;
 
-    // Repo 互斥锁：如果当前 job 涉及修改文件（edit / full），同一 cwd 必须串行
+    // 写操作互斥锁：会动文件的 job，同一个工作目录必须串行。
+    // 开了隔离 worktree 的，每条任务一个独立目录，锁到任务粒度——同一仓库的不同任务可以并行；
+    // 同一任务的前后两轮仍然串行（它们落在同一个 worktree 里）
     let releaseLock = () => {};
     if (mode !== "analyze") {
-      const prevLock = repoLocks.get(cwd) || Promise.resolve();
+      const lockKey = createBranch
+        ? `${cwd}::${tasks.find((t) => t.branchName)?.branchName || tasks[0].id}`
+        : cwd;
+      const prevLock = repoLocks.get(lockKey) || Promise.resolve();
       let currentRelease;
       const currentLock = new Promise((resolve) => {
         currentRelease = resolve;
       });
       const chain = prevLock.then(() => currentLock);
-      repoLocks.set(cwd, chain);
+      repoLocks.set(lockKey, chain);
       releaseLock = () => {
         currentRelease();
-        // 我是这条 cwd 上最后一个排队的，就把 key 一起清掉，
+        // 我是这把锁上最后一个排队的，就把 key 一起清掉，
         // 否则 promise 链和 Map 只增不减
-        if (repoLocks.get(cwd) === chain) repoLocks.delete(cwd);
+        if (repoLocks.get(lockKey) === chain) repoLocks.delete(lockKey);
       };
       await prevLock;
     }
@@ -919,8 +1067,8 @@ function runJobProcess(job, tasks) {
       resolve();
     };
 
-    // 先切隔离分支，再起 Agent。切不过去就别跑——宁可不做，也不能闷头改在用户当前分支上
-    const branch = setupGitBranch({
+    // 先建隔离 worktree，再起 Agent。建不出来就别跑——宁可不做，也不能闷头改在主仓库里
+    const branch = setupWorktree({
       cwd: job.cwd,
       tasks,
       createBranch: job.createBranch,
@@ -928,18 +1076,23 @@ function runJobProcess(job, tasks) {
       emitLog: (kind, text) => emitJobLog(job.id, kind, text),
     });
     if (!branch.ok) {
-      bail(branch.error || "切换隔离分支失败");
+      bail(branch.error || "创建隔离 worktree 失败");
       return;
     }
     job.branchName = branch.branchName;
+    // job.cwd 始终是主仓库（锁、lastRunConfig、repoPath 都按它），Agent 实际在 workdir 里跑
+    job.workdir = branch.workdir || job.cwd;
 
     // 读最新的任务快照：enqueue 之后、真正开跑之前，thread 里可能又进了新消息
     const freshTasks = tasks.map((t) => getTask(t.id) || t);
     const resumeSession = pickResumeSession(job, freshTasks);
     job.resumedFrom = resumeSession?.id || "";
-    const prompt = resumeSession
-      ? buildResumeInstructions(freshTasks[0], resumeSession, job.mode, job.engine)
-      : buildInstructions(freshTasks, job.mode, job.engine);
+    const prompt = [
+      resumeSession
+        ? buildResumeInstructions(freshTasks[0], resumeSession, job.mode, job.engine)
+        : buildInstructions(freshTasks, job.mode, job.engine),
+      ...worktreeNotice(job),
+    ].join("\n");
     job.prompt = prompt;
     const isAgy = job.engine === "agy";
     const isCodex = job.engine === "codex";
@@ -968,7 +1121,7 @@ function runJobProcess(job, tasks) {
     let proc;
     try {
       proc = spawnImpl(bin, args, {
-        cwd: job.cwd,
+        cwd: job.workdir,
         env: buildSpawnEnv(),
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
@@ -986,7 +1139,7 @@ function runJobProcess(job, tasks) {
     emitJobLog(
       job.id,
       "meta",
-      `${bin} ${isCodex ? "exec" : "-p"}（${job.mode} 模式）· ${job.cwd}${
+      `${bin} ${isCodex ? "exec" : "-p"}（${job.mode} 模式）· ${job.workdir}${
         job.branchName ? ` · 🌿 ${job.branchName}` : ""
       }`,
     );
@@ -1269,7 +1422,7 @@ function renderEvent(evt, job) {
       } else if (block.type === "tool_use") {
         const name = String(block.name || "").replace(/^mcp__docking__/, "");
         if (EDIT_TOOLS.has(name) || EDIT_TOOLS.has(block.name)) {
-          const fp = extractFilePath(block.input, job.cwd);
+          const fp = extractFilePath(block.input, job.workdir);
           if (fp) job.modifiedFiles.add(fp);
         }
         emitJobLog(job.id, "tool", `${name} ${summarizeInput(block.input)}`.trim());
@@ -1292,7 +1445,7 @@ function renderAgyEvent(evt, job, textBuffer) {
       const name = su.tool_name === "call_mcp_tool" ? params.ToolName : su.tool_name;
       const input = su.tool_name === "call_mcp_tool" ? params.Arguments : params;
       if (EDIT_TOOLS.has(name) || EDIT_TOOLS.has(su.tool_name)) {
-        const fp = extractFilePath(input, job.cwd);
+        const fp = extractFilePath(input, job.workdir);
         if (fp) job.modifiedFiles.add(fp);
       }
       emitJobLog(job.id, "tool", `${name || "tool"} ${summarizeInput(input)}`.trim());
@@ -1341,12 +1494,12 @@ function renderCodexEvent(evt, job) {
       const name = String(item.tool || item.name || "").replace(/^mcp__docking__/, "");
       const input = item.arguments || item.input || {};
       if (EDIT_TOOLS.has(name) || EDIT_TOOLS.has(item.tool || item.name)) {
-        const fp = extractFilePath(input, job.cwd);
+        const fp = extractFilePath(input, job.workdir);
         if (fp) job.modifiedFiles.add(fp);
       }
       emitJobLog(job.id, "tool", `${name || "mcp"} ${summarizeInput(input)}`.trim());
     } else if (item.type === "apply_patch" || item.type === "file_change" || item.type === "patch") {
-      const fp = extractFilePath(item, job.cwd);
+      const fp = extractFilePath(item, job.workdir);
       if (fp) job.modifiedFiles.add(fp);
       emitJobLog(job.id, "tool", `apply_patch ${fp || summarizeInput(item)}`.trim());
     } else if (item.type === "command_execution") {
