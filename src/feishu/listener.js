@@ -602,8 +602,8 @@ export function setPrepareSpawnImpl(fn) {
 /**
  * 工作包落 userData，不落被分析仓库。
  *
- * 落仓库里也能跑（未跟踪文件不算脏，setupGitBranch 用的是 --untracked-files=no），
- * 但那样工作包会跟着隔离分支走、会被 clean 扫掉、多个仓库还各存一份。
+ * 落仓库里也能跑，但那样工作包不会出现在隔离 worktree 里、会被 clean 扫掉、
+ * 多个仓库还各存一份。
  */
 function workpackRoot() {
   return path.join(getDataDir(), "req-workpacks");
