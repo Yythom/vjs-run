@@ -305,13 +305,21 @@ export async function cancelDockingJob(jobId) {
   return result;
 }
 
-export async function startRun(ids, cwd, mode, engine, createBranch = false) {
+export async function startRun(
+  ids,
+  cwd,
+  mode,
+  engine,
+  createBranch = false,
+  freshSession = false,
+) {
   const result = await window.electronAPI.dockingRunStart(
     ids,
     cwd,
     mode,
     engine,
     createBranch,
+    freshSession,
   );
   if (result?.success && result.queue) {
     useDockingStore.setState({ queue: result.queue });

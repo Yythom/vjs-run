@@ -2023,3 +2023,224 @@ test("plan 档指引：对 claude 说没有 Bash，对 agy/codex 不说假话", 
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ─── 收尾兜底与会话续接 ──────────────────────────────────────────────────────
+
+/**
+ * 起一个会吐 stream-json 的 mock spawn。script(call) 返回 { lines, code, before }：
+ * before 在吐日志前执行（用来模拟 AI 经 MCP 回写任务库），lines 逐行写 stdout。
+ */
+async function scriptedSpawn(script) {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const { setSpawnImpl } = await import("../src/feishu/runner.js");
+  const calls = [];
+  setSpawnImpl((bin, args, opts) => {
+    const call = { bin, args, opts };
+    calls.push(call);
+    const { lines = [], code = 0, before } = script(call, calls.length) || {};
+    const proc = new EventEmitter();
+    proc.stdout = new PassThrough();
+    proc.stderr = new PassThrough();
+    proc.kill = () => proc.emit("close", 0);
+    setImmediate(() => {
+      before?.();
+      for (const l of lines) proc.stdout.write(`${JSON.stringify(l)}\n`);
+      proc.stdout.end();
+      proc.stderr.end();
+      // 等 readline 把最后几行吐完再 close
+      setTimeout(() => proc.emit("close", code), 10);
+    });
+    return proc;
+  });
+  return { calls, restore: () => setSpawnImpl(null) };
+}
+
+/** 在临时 CLAUDE_CONFIG_DIR 里放一份会话文件，让 claudeSessionExists 认得到 */
+function fakeClaudeSession(cwd, sessionId) {
+  const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "docking-claude-cfg-"));
+  const projDir = path.join(configDir, "projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"));
+  fs.mkdirSync(projDir, { recursive: true });
+  fs.writeFileSync(path.join(projDir, `${sessionId}.jsonl`), "{}\n");
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = configDir;
+  return () => {
+    if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prev;
+    fs.rmSync(configDir, { recursive: true, force: true });
+  };
+}
+
+test("收尾兜底：正常退出但 AI 没回写状态，任务放回待处理并留下它最后的输出", async () => {
+  freshUserData();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const t = addTask({ title: "没回写的任务", content: "查个逻辑" });
+  updateTask(t.id, { status: "doing" });
+
+  const { restore } = await scriptedSpawn(() => ({
+    lines: [
+      { type: "system", subtype: "init", session_id: "s-1" },
+      { type: "result", subtype: "success", is_error: false, result: "结论：超时在 order.js 里处理", session_id: "s-1" },
+    ],
+  }));
+  try {
+    enqueueJob({ ids: [t.id], cwd: "/mock/repo", mode: "analyze", engine: "claude" });
+    await onQueueIdle();
+  } finally {
+    restore();
+  }
+
+  const after = getTask(t.id);
+  assert.equal(after.status, "inbox", "不能卡在 doing");
+  const last = after.thread[after.thread.length - 1];
+  assert.equal(last.role, "system");
+  assert.match(last.text, /没有回写任务状态/);
+  assert.match(last.text, /超时在 order\.js 里处理/, "AI 最后说的话要留下来给人判断");
+});
+
+test("收尾兜底：AI 自己回写了 done / awaiting 的任务不被动", async () => {
+  freshUserData();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const done = addTask({ title: "回写了完成", content: "a" });
+  const asked = addTask({ title: "反问了", content: "b" });
+  updateTask(done.id, { status: "doing" });
+  updateTask(asked.id, { status: "doing" });
+
+  const { restore } = await scriptedSpawn(() => ({
+    before: () => {
+      updateTask(done.id, { status: "done", note: "搞定" });
+      updateTask(asked.id, { status: "awaiting" });
+    },
+  }));
+  try {
+    enqueueJob({ ids: [done.id, asked.id], cwd: "/mock/repo", mode: "analyze", engine: "claude" });
+    await onQueueIdle();
+  } finally {
+    restore();
+  }
+
+  assert.equal(getTask(done.id).status, "done");
+  assert.equal(getTask(asked.id).status, "awaiting");
+  assert.ok(!(getTask(done.id).thread || []).some((e) => /没有回写/.test(e.text)));
+});
+
+test("会话续接：claude 单任务跑完记下 session，下一轮 --resume 且只送新进展", async () => {
+  freshUserData();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const cwd = "/mock/resume-repo";
+  const t = addTask({ title: "要反问的需求", content: "原始需求正文-独一无二" });
+  const cleanup = fakeClaudeSession(cwd, "sess-abc");
+
+  const { calls, restore } = await scriptedSpawn((_call, n) =>
+    n === 1
+      ? {
+          lines: [{ type: "system", subtype: "init", session_id: "sess-abc" }],
+          before: () => updateTask(t.id, { status: "awaiting" }),
+        }
+      : { lines: [], before: () => updateTask(t.id, { status: "done" }) },
+  );
+  try {
+    enqueueJob({ ids: [t.id], cwd, mode: "analyze", engine: "claude" });
+    await onQueueIdle();
+
+    const session = getTask(t.id).agentSession;
+    assert.equal(session.id, "sess-abc");
+    assert.equal(session.cwd, cwd);
+
+    await new Promise((r) => setTimeout(r, 5));
+    appendThread(t.id, { role: "them", text: "超时是 30 分钟", at: Date.now() });
+
+    enqueueJob({ ids: [t.id], cwd, mode: "edit", engine: "claude" });
+    await onQueueIdle();
+  } finally {
+    restore();
+    cleanup();
+  }
+
+  const args = calls[1].args;
+  assert.equal(args[args.indexOf("--resume") + 1], "sess-abc");
+  const prompt = args[args.indexOf("-p") + 1];
+  assert.match(prompt, /超时是 30 分钟/, "新进展要送进去");
+  assert.ok(!prompt.includes("原始需求正文-独一无二"), "上一轮已有的需求正文不重发");
+  assert.match(prompt, /允许改代码/, "力度变了要以本轮为准");
+  assert.ok(!calls[0].args.includes("--resume"), "首轮是冷启动");
+});
+
+test("会话续接：换了仓库、会话文件不在、批量任务、非 claude 都冷启动", async () => {
+  freshUserData();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const cwd = "/mock/resume-repo-2";
+  const session = { engine: "claude", id: "sess-x", cwd, endedAt: 1 };
+  const a = addTask({ title: "a", content: "a" });
+  const b = addTask({ title: "b", content: "b" });
+  updateTask(a.id, { agentSession: session });
+  updateTask(b.id, { agentSession: session });
+  const cleanup = fakeClaudeSession(cwd, "sess-x");
+
+  const { calls, restore } = await scriptedSpawn(() => ({}));
+  try {
+    enqueueJob({ ids: [a.id], cwd: "/mock/other-repo", mode: "analyze", engine: "claude" });
+    enqueueJob({ ids: [a.id, b.id], cwd, mode: "analyze", engine: "claude" });
+    enqueueJob({ ids: [a.id], cwd, mode: "analyze", engine: "codex" });
+    await onQueueIdle();
+  } finally {
+    restore();
+    cleanup();
+  }
+  for (const c of calls) assert.ok(!c.args.includes("--resume"), `${c.bin} 不该续接`);
+
+  // 会话文件被清掉：同仓库同任务也冷启动
+  const { calls: calls2, restore: restore2 } = await scriptedSpawn(() => ({}));
+  try {
+    enqueueJob({ ids: [a.id], cwd, mode: "analyze", engine: "claude" });
+    await onQueueIdle();
+  } finally {
+    restore2();
+  }
+  assert.ok(!calls2[0].args.includes("--resume"));
+});
+
+test("会话续接：续接轮失败就作废会话，下一轮冷启动", async () => {
+  freshUserData();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const cwd = "/mock/resume-repo-3";
+  const t = addTask({ title: "c", content: "c" });
+  updateTask(t.id, { agentSession: { engine: "claude", id: "sess-bad", cwd, endedAt: 1 } });
+  const cleanup = fakeClaudeSession(cwd, "sess-bad");
+
+  const { calls, restore } = await scriptedSpawn(() => ({ code: 1 }));
+  try {
+    enqueueJob({ ids: [t.id], cwd, mode: "analyze", engine: "claude" });
+    await onQueueIdle();
+  } finally {
+    restore();
+    cleanup();
+  }
+  assert.ok(calls[0].args.includes("--resume"));
+  assert.equal(getTask(t.id).agentSession, null);
+});
+
+test("会话续接：派活时勾了「从头开始」就不续接，跑完换成新会话", async () => {
+  freshUserData();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  const cwd = "/mock/resume-repo-4";
+  const t = addTask({ title: "d", content: "原始需求正文-从头来" });
+  updateTask(t.id, { agentSession: { engine: "claude", id: "sess-old", cwd, endedAt: 1 } });
+  const cleanup = fakeClaudeSession(cwd, "sess-old");
+
+  const { calls, restore } = await scriptedSpawn(() => ({
+    lines: [{ type: "system", subtype: "init", session_id: "sess-new" }],
+    before: () => updateTask(t.id, { status: "done" }),
+  }));
+  try {
+    enqueueJob({ ids: [t.id], cwd, mode: "analyze", engine: "claude", freshSession: true });
+    await onQueueIdle();
+  } finally {
+    restore();
+    cleanup();
+  }
+  const args = calls[0].args;
+  assert.ok(!args.includes("--resume"));
+  assert.match(args[args.indexOf("-p") + 1], /原始需求正文-从头来/, "从头来要发完整需求");
+  assert.equal(getTask(t.id).agentSession.id, "sess-new");
+});

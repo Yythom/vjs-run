@@ -20,6 +20,7 @@
 //             （面板上的「配置 codex」按钮干这事）；以 exec --json 驱动。
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import crypto from "node:crypto";
@@ -459,6 +460,8 @@ function persistJobRun(job, code, modifiedFiles = []) {
       logs: job.logs || [],
       modifiedFiles,
       resultNote: job.resultNote || "",
+      sessionId: job.sessionId || "",
+      resumedFrom: job.resumedFrom || "",
     });
   } catch (err) {
     console.error("[runner] 持久化历史记录失败:", err);
@@ -492,8 +495,104 @@ function rollbackDoingTasks(taskIds = [], reason = "") {
   }
 }
 
-/** 给 Agent 的执行指引。需求正文由 buildPrompt 生成，并根据 mode 注入约束与收尾规则 */
-function buildInstructions(tasks, mode = "analyze", engine = "claude") {
+/**
+ * job 正常退出，但 AI 没用 update_task / ask_requester 回写状态，任务还停在 doing。
+ *
+ * 退出码 0 只说明 CLI 跑完了，不说明闭环走完了——agy / codex 忘了调 MCP 很常见，
+ * claude 偶尔也会把结论只写在最后一段回复里。不处理的话任务永远显示「进行中」，
+ * 队列里却早就没有它了。放回 inbox，把 AI 最后说的话留进沟通记录，人来判断。
+ *
+ * 不发飞书：结论还没人确认过，对提出人说「未完成」或「完成」都可能是错的。
+ */
+function settleUnreportedTasks(job) {
+  const unreported = [];
+  for (const tid of job.taskIds) {
+    const task = getTask(tid);
+    if (!task || task.status !== "doing") continue;
+    updateTask(tid, { status: "inbox" });
+    const tail = String(job.lastText || "").trim().slice(-1500);
+    appendThread(tid, {
+      role: "system",
+      text: tail
+        ? `AI 已结束，但没有回写任务状态，已放回待处理。它最后的输出：\n${tail}`
+        : "AI 已结束，但没有回写任务状态，也没有留下结论，已放回待处理。",
+      at: Date.now(),
+    });
+    unreported.push(`#${task.seq} ${task.title}`);
+  }
+  if (unreported.length) {
+    emitJobLog(job.id, "error", `AI 未回写状态，已放回待处理：${unreported.join("、")}`);
+    showDesktopNotification({
+      title: "【AI 未回写结论】",
+      body: `${unreported.join("、")} 已放回待处理，请人工确认`,
+    });
+  }
+  return unreported;
+}
+
+// ─── 会话续接（仅 claude） ───────────────────────────────────────────────────
+//
+// 反问被回复、话题里追加指令、运行期间攒下的 followup，都会对同一任务再派一轮。
+// 冷启动的话上一轮读过的代码、推理过程全丢，只能靠 get_task 把 thread 再读一遍。
+// claude 的 -p 会话默认落盘，--resume 就能接着聊。
+//
+// 只对单任务 job 记会话：批量 job 的会话里混着好几条需求，拿去续其中一条会串味。
+// agy / codex 暂不支持（codex 走 --ephemeral，agy 没有等价参数）。
+
+/** claude 把会话存在 <config>/projects/<cwd 非字母数字换成 -> 下 */
+function claudeSessionExists(sessionId, cwd) {
+  if (!sessionId || !cwd) return false;
+  const configDir =
+    buildSpawnEnv().CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+  const dirs = new Set([cwd]);
+  try {
+    dirs.add(fs.realpathSync(cwd));
+  } catch (_) {}
+  for (const dir of dirs) {
+    const encoded = dir.replace(/[^a-zA-Z0-9]/g, "-");
+    if (fs.existsSync(path.join(configDir, "projects", encoded, `${sessionId}.jsonl`))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 这一轮能不能续上一轮的会话。任何一条不满足就冷启动——
+ * 续错会话（换了仓库、会话文件被清）比冷启动更糟，AI 会基于错的上下文干活。
+ */
+function pickResumeSession(job, tasks) {
+  if (job.freshSession || job.engine !== "claude" || tasks.length !== 1) return null;
+  const session = tasks[0].agentSession;
+  if (!session?.id || session.engine !== "claude" || session.cwd !== job.cwd) return null;
+  return claudeSessionExists(session.id, job.cwd) ? session : null;
+}
+
+/**
+ * job 收尾时记下（或作废）任务的会话。
+ *   - 正常跑完、拿到了 session_id → 记下，下一轮续它
+ *   - 续接轮失败/被中断 → 作废，下一轮冷启动。会话可能停在半截工具调用上，再续大概率还是坏的
+ *   - 冷启动轮失败 → 不动（本来就没有可续的）
+ */
+function recordAgentSession(job) {
+  if (job.engine !== "claude" || job.taskIds.length !== 1) return;
+  const [tid] = job.taskIds;
+  if (job.status === "done" && job.sessionId) {
+    updateTask(tid, {
+      agentSession: {
+        engine: "claude",
+        id: job.sessionId,
+        cwd: job.cwd,
+        endedAt: Date.now(),
+      },
+    });
+  } else if (job.resumedFrom) {
+    updateTask(tid, { agentSession: null });
+  }
+}
+
+/** 各档力度的约束与收尾规则 */
+function modeGuidelinesFor(mode = "analyze", engine = "claude") {
   const modeGuidelines = {
     analyze: [
       "【当前为「只读分析 / 逻辑排查」模式】",
@@ -528,7 +627,24 @@ function buildInstructions(tasks, mode = "analyze", engine = "claude") {
     ],
   };
 
-  const guidelines = modeGuidelines[mode] || modeGuidelines.analyze;
+  return modeGuidelines[mode] || modeGuidelines.analyze;
+}
+
+/** 首轮和续接轮共用的收尾约定 */
+function conventionsFor(tasks) {
+  return [
+    "处理约定：",
+    `- 这些任务的短号分别是：${tasks.map((t) => `#${t.seq}`).join("、")}`,
+    "- 需要更完整的上下文（含历次澄清记录）时，用 get_task 按短号取。",
+    "- **信息不足或逻辑疑问未明确时不要猜**：用 ask_requester 直接飞书问提出人，问完这条就停在那，等他回复。",
+    "- 每条任务处理完，必须用 update_task 回写：做完/答复完毕置 done，做不了置 ignored；",
+    "  note 里写清楚逻辑排查解答、或者改了哪些文件做了什么修改、或者为什么做不了。",
+  ];
+}
+
+/** 给 Agent 的执行指引。需求正文由 buildPrompt 生成，并根据 mode 注入约束与收尾规则 */
+function buildInstructions(tasks, mode = "analyze", engine = "claude") {
+  const guidelines = modeGuidelinesFor(mode, engine);
 
   // 工作包类任务（req-to-plan 从需求池备的料）：目录已 --add-dir 放行，
   // 里面的 skill.md 也已注入 system prompt，这里只把「哪条任务对应哪个目录」说清楚
@@ -551,12 +667,40 @@ function buildInstructions(tasks, mode = "analyze", engine = "claude") {
     ...guidelines,
     ...workpackSection,
     "",
-    "处理约定：",
-    `- 这些任务的短号分别是：${tasks.map((t) => `#${t.seq}`).join("、")}`,
-    "- 需要更完整的上下文（含历次澄清记录）时，用 get_task 按短号取。",
-    "- **信息不足或逻辑疑问未明确时不要猜**：用 ask_requester 直接飞书问提出人，问完这条就停在那，等他回复。",
-    "- 每条任务处理完，必须用 update_task 回写：做完/答复完毕置 done，做不了置 ignored；",
-    "  note 里写清楚逻辑排查解答、或者改了哪些文件做了什么修改、或者为什么做不了。",
+    ...conventionsFor(tasks),
+  ].join("\n");
+}
+
+/**
+ * 续接轮的 prompt：上一轮的需求正文和推理都在会话里了，只送「之后发生了什么」。
+ * 力度可能变了（关键词提权、面板上换档），所以约束整段重发，并明确以本轮为准。
+ */
+function buildResumeInstructions(task, session, mode = "analyze", engine = "claude") {
+  const whoOf = (role) =>
+    role === "me"
+      ? "我追问/说明"
+      : role === "assistant"
+        ? "AI 回复"
+        : role === "system"
+          ? "系统记录"
+          : `${task.requester?.name || "提出人"}回复/指令`;
+  const since = session.endedAt || 0;
+  const fresh = (task.thread || []).filter((e) => (e.at || 0) > since);
+  const updates = fresh.length
+    ? fresh.map((e) => `- **[${whoOf(e.role)}]**：${String(e.text || "").trim()}`)
+    : ["- 上一轮结束后没有新消息，是人工重新派的活：请检查上一轮结论是否完整，没做完的接着做。"];
+
+  return [
+    `继续处理 #${task.seq}「${task.title}」。你上一轮的上下文仍然有效，下面是之后的新进展：`,
+    "",
+    ...updates,
+    "",
+    "---",
+    "",
+    "本轮力度以下面为准，与上一轮不同时覆盖上一轮的约束：",
+    ...modeGuidelinesFor(mode, engine),
+    "",
+    ...conventionsFor([task]),
   ].join("\n");
 }
 
@@ -582,7 +726,7 @@ function collectWorkpacks(tasks = []) {
 }
 
 /** claude：MCP 配置直接拼进命令行，不落文件 */
-function claudeArgs(prompt, mode, { addDirs = [], systemPrompt = "" } = {}) {
+function claudeArgs(prompt, mode, { addDirs = [], systemPrompt = "", resumeSessionId = "" } = {}) {
   const conf = MODES[mode] || MODES.analyze;
   const mcpConfig = JSON.stringify({
     mcpServers: {
@@ -614,6 +758,7 @@ function claudeArgs(prompt, mode, { addDirs = [], systemPrompt = "" } = {}) {
     ...(conf.allow || []),
   ];
   if (conf.deny.length) args.push("--disallowedTools", ...conf.deny);
+  if (resumeSessionId) args.push("--resume", resumeSessionId);
   // 工作包在仓库外，不放行就既读不到 context.md 也写不出 plan.md
   for (const dir of addDirs) args.push("--add-dir", dir);
   if (systemPrompt) args.push("--append-system-prompt", systemPrompt);
@@ -653,6 +798,8 @@ export function enqueueJob({
   mode = "analyze",
   engine = "claude",
   createBranch = false,
+  // 人在面板上明确要求从头来：不续上一轮会话
+  freshSession = false,
 }) {
   if (!cwd) throw new Error("必须指定工作目录");
   const tasks = ids.map((id) => getTask(id)).filter(Boolean);
@@ -667,6 +814,7 @@ export function enqueueJob({
     mode,
     engine,
     createBranch: Boolean(createBranch),
+    freshSession: Boolean(freshSession),
     branchName: "",
     status: "queued",
     createdAt: Date.now(),
@@ -785,7 +933,13 @@ function runJobProcess(job, tasks) {
     }
     job.branchName = branch.branchName;
 
-    const prompt = buildInstructions(tasks, job.mode, job.engine);
+    // 读最新的任务快照：enqueue 之后、真正开跑之前，thread 里可能又进了新消息
+    const freshTasks = tasks.map((t) => getTask(t.id) || t);
+    const resumeSession = pickResumeSession(job, freshTasks);
+    job.resumedFrom = resumeSession?.id || "";
+    const prompt = resumeSession
+      ? buildResumeInstructions(freshTasks[0], resumeSession, job.mode, job.engine)
+      : buildInstructions(freshTasks, job.mode, job.engine);
     job.prompt = prompt;
     const isAgy = job.engine === "agy";
     const isCodex = job.engine === "codex";
@@ -808,6 +962,7 @@ function runJobProcess(job, tasks) {
         : claudeArgs(finalPrompt, job.mode, {
             addDirs: workpacks.dirs,
             systemPrompt: workpacks.systemPrompt,
+            resumeSessionId: job.resumedFrom,
           });
 
     let proc;
@@ -838,6 +993,9 @@ function runJobProcess(job, tasks) {
     // 异常退出时第一件要排除的事：跑的到底是不是我们以为的那个二进制。
     // 打包后的 Electron PATH 和登录 shell 的 PATH 未必一致，解析结果要能回看。
     emitJobLog(job.id, "meta", `可执行文件: ${resolveBinPath(bin) || "未在 PATH 中找到"}`);
+    if (job.resumedFrom) {
+      emitJobLog(job.id, "meta", `♻️ 续接上一轮会话: ${job.resumedFrom}`);
+    }
     if (workpacks.dirs.length) {
       emitJobLog(
         job.id,
@@ -922,6 +1080,8 @@ function runJobProcess(job, tasks) {
           job.taskIds,
           job.status === "aborted" ? "已被手动中断" : job.error || `异常退出（${code}）`,
         );
+      } else {
+        settleUnreportedTasks(job);
       }
 
       const modifiedFilesArr = Array.from(job.modifiedFiles);
@@ -972,6 +1132,10 @@ function runJobProcess(job, tasks) {
           }`,
         });
       }
+
+      // 放在所有回写 thread 的收尾之后：endedAt 是续接轮筛「新进展」的分界线，
+      // 我们自己补的系统记录、改动文件清单不该算进下一轮的新消息
+      recordAgentSession(job);
 
       emitQueueStatus();
       emitRunStatus();
@@ -1095,9 +1259,12 @@ export function stopRun() {
 
 /** 把 stream-json 事件翻译成人能看的一行 */
 function renderEvent(evt, job) {
+  // init / assistant / result 事件都带 session_id，取第一次出现的
+  if (evt.session_id && !job.sessionId) job.sessionId = evt.session_id;
   if (evt.type === "assistant") {
     for (const block of evt.message?.content || []) {
       if (block.type === "text" && block.text.trim()) {
+        job.lastText = block.text.trim();
         emitJobLog(job.id, "text", block.text.trim());
       } else if (block.type === "tool_use") {
         const name = String(block.name || "").replace(/^mcp__docking__/, "");
@@ -1109,6 +1276,9 @@ function renderEvent(evt, job) {
       }
     }
   } else if (evt.type === "result") {
+    if (!evt.is_error && typeof evt.result === "string" && evt.result.trim()) {
+      job.lastText = evt.result.trim();
+    }
     if (evt.is_error) emitJobLog(job.id, "error", evt.result || "执行出错");
   }
 }
@@ -1137,7 +1307,10 @@ function renderAgyEvent(evt, job, textBuffer) {
       if (su.state === "DONE") {
         const text = (textBuffer.get(key) || "").trim();
         textBuffer.delete(key);
-        if (text) emitJobLog(job.id, "text", text);
+        if (text) {
+          job.lastText = text;
+          emitJobLog(job.id, "text", text);
+        }
       }
     }
     return;
@@ -1146,6 +1319,9 @@ function renderAgyEvent(evt, job, textBuffer) {
   if (evt.event === "result") {
     textBuffer.clear();
     const r = evt.result || {};
+    if (r.status === "SUCCESS" && typeof r.response === "string" && r.response.trim()) {
+      job.lastText = r.response.trim();
+    }
     if (r.status && r.status !== "SUCCESS") {
       emitJobLog(job.id, "error", r.response || `执行结束：${r.status}`);
     }
@@ -1157,7 +1333,10 @@ function renderCodexEvent(evt, job) {
     const item = evt.item || {};
     if (item.type === "agent_message" && item.text) {
       const text = item.text.trim();
-      if (text) emitJobLog(job.id, "text", text);
+      if (text) {
+        job.lastText = text;
+        emitJobLog(job.id, "text", text);
+      }
     } else if (item.type === "mcp_tool_call") {
       const name = String(item.tool || item.name || "").replace(/^mcp__docking__/, "");
       const input = item.arguments || item.input || {};

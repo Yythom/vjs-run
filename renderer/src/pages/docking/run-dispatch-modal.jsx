@@ -71,6 +71,15 @@ function RunDispatchForm({ repos }) {
   const [createBranch, setCreateBranch] = useState(
     () => settings.createBranch ?? false,
   );
+  // 不续接上一轮会话。只在这次派活有效，不记进 settings：
+  // 「从头来」是针对某条任务的临时决定，记住了会让之后每次派活都白丢上下文
+  const [freshSession, setFreshSession] = useState(false);
+  // 续接条件的前半截在这儿判断（引擎、单条、同仓库），会话文件还在不在由主进程查
+  const resumable =
+    engine === "claude" &&
+    runTargets.length === 1 &&
+    runTargets[0].agentSession?.engine === "claude" &&
+    runTargets[0].agentSession?.cwd === cwd;
 
   const {
     claudeProbe,
@@ -136,7 +145,14 @@ function RunDispatchForm({ repos }) {
       });
       if (!ok) return;
     }
-    const result = await startRun(ids, cwd, mode, engine, createBranch);
+    const result = await startRun(
+      ids,
+      cwd,
+      mode,
+      engine,
+      createBranch,
+      resumable && freshSession,
+    );
     if (result?.success) {
       saveSettings({
         lastCwd: cwd,
@@ -409,6 +425,28 @@ function RunDispatchForm({ repos }) {
           onChange={(e) => setCreateBranch(e.target.checked)}
         />
       </div>
+
+      {/* 续接开关：只有真的会续接时才出现 */}
+      {resumable && (
+        <label className="mt-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50/80 flex items-center justify-between cursor-pointer">
+          <div>
+            <div className="text-[12px] font-medium text-slate-700 flex items-center gap-1">
+              <span>♻️</span>
+              <span>不续接上一轮会话，从头开始</span>
+            </div>
+            <div className="text-[11px] text-slate-400">
+              默认会接着上一轮的上下文继续，只把之后的新消息发给 AI；
+              上一轮方向跑偏或上下文太乱时勾上
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            className="w-4 h-4 accent-sky-600 rounded cursor-pointer"
+            checked={freshSession}
+            onChange={(e) => setFreshSession(e.target.checked)}
+          />
+        </label>
+      )}
 
       <div className="flex justify-end gap-2 mt-3">
         <button

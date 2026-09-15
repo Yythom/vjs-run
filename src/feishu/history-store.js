@@ -100,6 +100,8 @@ export function saveJobRun(record = {}) {
     logs: cleanedLogs,
     modifiedFiles: record.modifiedFiles ? Array.from(record.modifiedFiles) : [],
     resultNote: record.resultNote || "",
+    sessionId: record.sessionId || "",
+    resumedFrom: record.resumedFrom || "",
   };
 
   // 1. 写详情文件
