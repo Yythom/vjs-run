@@ -11,6 +11,9 @@ import { app, session } from "electron";
 import { ipcSafe } from "./safe.js";
 import { resetStore } from "../config/store.js";
 import { ensureUserMockAssets } from "../mock/user-assets.js";
+import { listTasks } from "../feishu/task-store.js";
+import { hasActiveJobForTask } from "../feishu/runner.js";
+import { cleanupStaleWorktrees, staleWorktreesBytes } from "../feishu/worktree.js";
 
 function userDataDir() {
   return app.getPath("userData");
@@ -234,6 +237,10 @@ function clearDockingAssets() {
   return before;
 }
 
+// AI 工单台的隔离 worktree（userData/docking-worktrees/）。只收已完成、已忽略、任务已删的，
+// 未提交改动先自动提交进分支，分支保留——删的只是一份检出的源码，什么都不丢
+const worktreeScope = () => ({ tasks: listTasks(), isBusy: hasActiveJobForTask });
+
 const WEBVIEW_STORAGE_ITEMS = [
   "SharedStorage",
   "Trust Tokens",
@@ -275,6 +282,7 @@ export function registerCleanupIpc() {
       crashReportsBytes: crashReportsBytes(),
       webviewStorageBytes: webviewStorageBytes(),
       dockingAssetsBytes: dockingAssetsBytes(),
+      dockingWorktreesBytes: staleWorktreesBytes(worktreeScope()),
     },
   }));
 
@@ -312,6 +320,21 @@ export function registerCleanupIpc() {
         results.dockingAssets = { ok: true, reclaimedBytes: bytes };
       } catch (err) {
         results.dockingAssets = { ok: false, error: err.message };
+      }
+    }
+
+    if (set.has("dockingWorktrees")) {
+      try {
+        const summary = cleanupStaleWorktrees(worktreeScope());
+        reclaimedBytes += summary.reclaimedBytes;
+        results.dockingWorktrees = {
+          ok: summary.failed.length === 0,
+          reclaimedBytes: summary.reclaimedBytes,
+          ...summary,
+          error: summary.failed.join("\n"),
+        };
+      } catch (err) {
+        results.dockingWorktrees = { ok: false, error: err.message };
       }
     }
 

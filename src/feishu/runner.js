@@ -24,7 +24,8 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import crypto from "node:crypto";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { setupWorktree } from "./worktree.js";
 import { killProcessTree } from "../kill-tree.js";
 import electron from "electron";
 const app = electron?.app || (typeof electron === "object" ? electron.default?.app : null);
@@ -33,7 +34,7 @@ import { SRC_DIR } from "../paths.js";
 import { buildSpawnEnv } from "../shell-env.js";
 import { sendToAllWindows } from "../ui-channel.js";
 import { buildPrompt } from "./prompt.js";
-import { appendThread, getDataDir, getTask, updateTask } from "./task-store.js";
+import { appendThread, getTask, updateTask } from "./task-store.js";
 import { saveJobRun } from "./history-store.js";
 import { showDesktopNotification } from "./listener.js";
 import { sendMessage } from "./lark-cli.js";
@@ -43,238 +44,8 @@ export function setSpawnImpl(fn) {
   spawnImpl = fn || spawn;
 }
 
-export function sanitizeBranchSlug(text) {
-  return String(text || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w\u4e00-\u9fa5-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 30);
-}
-
-/** 分支名 → 这条任务的 worktree 目录。按仓库分组，路径稳定，续接会话才找得到同一个 cwd */
-export function worktreePathFor(cwd, branchName) {
-  let real = cwd;
-  try {
-    real = fs.realpathSync(cwd);
-  } catch (_) {}
-  const repoKey = `${path.basename(real)}-${crypto
-    .createHash("sha1")
-    .update(real)
-    .digest("hex")
-    .slice(0, 8)}`;
-  return path.join(getDataDir(), "docking-worktrees", repoKey, branchName.replace(/\//g, "__"));
-}
-
-/** 解析 `git worktree list --porcelain`，第一项永远是主工作区 */
-function listWorktrees(git) {
-  return git(["worktree", "list", "--porcelain"])
-    .split("\n\n")
-    .map((block) => {
-      const entry = {};
-      for (const line of block.split("\n")) {
-        if (line.startsWith("worktree ")) entry.path = line.slice(9);
-        else if (line.startsWith("branch ")) entry.branch = line.slice(7).replace(/^refs\/heads\//, "");
-      }
-      return entry;
-    })
-    .filter((e) => e.path);
-}
-
-const samePath = (a, b) => {
-  try {
-    return fs.realpathSync(a) === fs.realpathSync(b);
-  } catch (_) {
-    return path.resolve(a) === path.resolve(b);
-  }
-};
-
-/**
- * 把主仓库的 node_modules 软链进 worktree，省掉每条任务装一遍依赖。
- *
- * 只找浅层的（根目录与 monorepo 子包，深度 ≤ 3），不进 node_modules 和隐藏目录。
- * worktree 里对应目录不存在（未跟踪的子包）或已经有 node_modules 的都跳过。
- *
- * 软链会被 git 当成普通文件：`.gitignore` 里的 `node_modules/` 带斜杠，只匹配目录，
- * 匹配不到软链——不处理的话 AI 一个 `git add -A` 就把它提交了。
- * 所以没被忽略的那几条写进公共的 info/exclude（主工作区本来就忽略 node_modules，不受影响）。
- */
-function linkNodeModules(git, repoDir, workdir, emitLog) {
-  const found = [];
-  const walk = (rel, depth) => {
-    const abs = path.join(repoDir, rel);
-    let entries;
-    try {
-      entries = fs.readdirSync(abs, { withFileTypes: true });
-    } catch (_) {
-      return;
-    }
-    for (const ent of entries) {
-      if (!ent.isDirectory() || ent.name.startsWith(".")) continue;
-      const childRel = rel ? path.join(rel, ent.name) : ent.name;
-      if (ent.name === "node_modules") found.push(childRel);
-      else if (depth < 3) walk(childRel, depth + 1);
-    }
-  };
-  walk("", 0);
-
-  const linked = [];
-  for (const rel of found) {
-    const target = path.join(workdir, rel);
-    if (!fs.existsSync(path.dirname(target))) continue;
-    try {
-      fs.lstatSync(target);
-      continue; // 已有（上一轮链过，或 AI 自己装过），不动
-    } catch (_) {}
-    fs.symlinkSync(path.join(repoDir, rel), target, "dir");
-    linked.push(rel);
-  }
-  if (!linked.length) return;
-
-  const unignored = linked.filter((rel) => {
-    try {
-      git(["-C", workdir, "check-ignore", "-q", rel]);
-      return false;
-    } catch (_) {
-      return true;
-    }
-  });
-  if (unignored.length) {
-    const commonDir = path.resolve(
-      workdir,
-      git(["-C", workdir, "rev-parse", "--git-common-dir"]).trim(),
-    );
-    const excludeFile = path.join(commonDir, "info", "exclude");
-    fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
-    const existing = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, "utf8") : "";
-    const lines = unignored
-      .map((rel) => `/${rel.split(path.sep).join("/")}`)
-      .filter((line) => !existing.split("\n").includes(line));
-    if (lines.length) {
-      fs.appendFileSync(
-        excludeFile,
-        `${existing && !existing.endsWith("\n") ? "\n" : ""}# vjtools 工单台 worktree 的 node_modules 软链\n${lines.join("\n")}\n`,
-      );
-    }
-  }
-  emitLog("meta", `🔗 已软链主仓库依赖: ${linked.join("、")}`);
-}
-
-/**
- * 执行前给任务准备隔离 worktree。
- *
- * 以前是在主仓库里直接 checkout 隔离分支：AI 跑的时候你自己的工作区被切走，
- * 跑完也不切回来；工作区一脏就派不了活；同一仓库的改代码任务只能排队。
- * 现在每条任务一个 worktree，落在 userData/docking-worktrees/ 下，主仓库完全不动。
- *
- * 返回 { ok, branchName, workdir, error }：
- *   - 不需要隔离（没开开关 / analyze 只读档）/ 不是 git 仓库 → ok:true，workdir 就是 cwd
- *   - 建 worktree 失败 → ok:false，**调用方必须中止本次 job**。
- *     隔离开着却建不出来，还硬在主仓库里让 AI 改代码，比不隔离更危险。
- *
- * 任务已经有 branchName（澄清后恢复执行的第二轮）时回到那条分支的 worktree，
- * 否则按 tasks[0] 的短号+标题新建，从主仓库当前 HEAD 拉出。
- */
-export function setupWorktree({ cwd, tasks, createBranch, mode, emitLog = () => {} }) {
-  const skip = { ok: true, branchName: "", workdir: cwd };
-  if (!createBranch || mode === "analyze" || !tasks || tasks.length === 0) return skip;
-
-  const git = (args) =>
-    execFileSync("git", args, {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-  // 1. 不是仓库就没得隔离，但也没必要拦着不跑
-  try {
-    if (git(["rev-parse", "--is-inside-work-tree"]).trim() !== "true") throw new Error();
-  } catch (_) {
-    emitLog("meta", "⚠️ 该目录不是 Git 仓库，跳过隔离 worktree");
-    return skip;
-  }
-
-  // 2. 分支名。恢复执行时沿用任务上已有的那条
-  const firstTask = tasks[0];
-  const existing = tasks.find((t) => t.branchName)?.branchName || "";
-  const slug = sanitizeBranchSlug(firstTask.title) || "docking-task";
-  const branchName = existing || `docking/seq-${firstTask.seq || 1}-${slug}`;
-
-  try {
-    // 目录被人手动删掉的 worktree，git 那边的登记先清掉，否则 add 会说已存在
-    git(["worktree", "prune"]);
-    const worktrees = listWorktrees(git);
-    const holder = worktrees.find((w) => w.branch === branchName);
-    let workdir = worktreePathFor(cwd, branchName);
-
-    if (holder && samePath(holder.path, worktrees[0].path)) {
-      // 旧版隔离分支是直接 checkout 在主仓库里的，git 不允许同一分支检出两处
-      return {
-        ok: false,
-        branchName: "",
-        workdir: cwd,
-        error:
-          `分支 ${branchName} 正检出在主仓库里（旧版隔离分支的残留），无法再建 worktree。\n` +
-          "请先在主仓库切回其他分支，再重新派活。",
-      };
-    }
-
-    if (holder) {
-      // git 报的是 realpath，跟算出来的路径可能差一层软链（/var → /private/var）。
-      // 同一个目录就沿用算出来的写法：续接会话按路径字符串比对，前后两轮必须一致
-      if (!samePath(holder.path, workdir)) workdir = holder.path;
-      emitLog("meta", `🌿 复用隔离 worktree: ${branchName} → ${workdir}`);
-    } else {
-      // 走到这里说明该路径没有登记在册的 worktree；目录还在就是上次半途失败的残骸，
-      // 在我们自己管的目录里，清掉重建
-      if (fs.existsSync(workdir)) fs.rmSync(workdir, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(workdir), { recursive: true });
-
-      let branchExists = false;
-      try {
-        git(["rev-parse", "--verify", "--quiet", `refs/heads/${branchName}`]);
-        branchExists = true;
-      } catch (_) {}
-
-      const base = git(["rev-parse", "--abbrev-ref", "HEAD"]).trim();
-      git(
-        branchExists
-          ? ["worktree", "add", workdir, branchName]
-          : ["worktree", "add", "-b", branchName, workdir, "HEAD"],
-      );
-      emitLog(
-        "meta",
-        branchExists
-          ? `🌿 为既有分支建隔离 worktree: ${branchName} → ${workdir}`
-          : `🌿 已从 ${base} 拉出隔离 worktree: ${branchName} → ${workdir}`,
-      );
-
-      // 主仓库没提交的改动不会跟进 worktree。不拦，但得说一声，免得 AI 基于旧代码改完才发现
-      const dirty = git(["status", "--porcelain", "--untracked-files=no"]).trim();
-      if (dirty && !branchExists) {
-        emitLog("meta", "⚠️ 主仓库有未提交的改动，这些改动不在 worktree 里");
-      }
-    }
-
-    linkNodeModules(git, cwd, workdir, emitLog);
-
-    for (const t of tasks) {
-      updateTask(t.id, { branchName, worktreePath: workdir });
-      t.branchName = branchName;
-      t.worktreePath = workdir;
-    }
-
-    return { ok: true, branchName, workdir };
-  } catch (err) {
-    const detail = String(err.stderr || "").trim() || err.message;
-    return {
-      ok: false,
-      branchName: "",
-      workdir: cwd,
-      error: `创建隔离 worktree ${branchName} 失败: ${detail}`,
-    };
-  }
-}
+// worktree 的建立与清理在 worktree.js；这两个在这里再导出一次，老调用方与测试不用改
+export { sanitizeBranchSlug, setupWorktree } from "./worktree.js";
 
 const MCP_SERVER = path.join(SRC_DIR, "feishu", "mcp-server.mjs");
 

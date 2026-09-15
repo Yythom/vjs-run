@@ -8,6 +8,7 @@ import {
 } from "../../stores/docking-store";
 import { RUN_MODES, STATUS_BADGE } from "./constants";
 import { formatTime } from "./utils";
+import WorktreePanel from "./worktree-panel";
 
 // ─── 话题详情弹窗 ────────────────────────────────────────────────────────────
 /**
@@ -379,6 +380,13 @@ export default function TaskThreadModal({
         </div>
       )}
       </div>
+
+      {/* 隔离 worktree 现状与清理 */}
+      {task.branchName && task.repoPath && (
+        <div className="px-4 pb-3 shrink-0">
+          <WorktreePanel task={task} busy={Boolean(runningJob)} />
+        </div>
+      )}
 
       {/* 底部功能动作栏：钉在下面，长对话滚动时不跟着走 */}
       <div className="shrink-0 flex flex-wrap gap-2 px-4 py-3 border-t border-border bg-slate-50/50">

@@ -36,8 +36,10 @@ import {
   enqueueJob,
   getQueueStatus,
   getRunStatus,
+  hasActiveJobForTask,
   stopAllJobs,
 } from "../feishu/runner.js";
+import { cleanupTaskWorktree, getWorktreeInfo } from "../feishu/worktree.js";
 import {
   addTask,
   appendThread,
@@ -169,6 +171,42 @@ export function registerDockingIpc() {
     const error = await shell.openPath(file);
     if (error) throw new Error(error);
     return {};
+  });
+
+  // ── 隔离 worktree：查看现状、打开目录、清理 ─────────────────────────────────
+  // 同一个 worktree / 分支可能挂着好几条任务（批量派发），其中任一条在跑都算忙
+  const isWorktreeBusy = (task) =>
+    listTasks().some(
+      (t) =>
+        (t.id === task.id ||
+          (t.repoPath === task.repoPath &&
+            ((task.worktreePath && t.worktreePath === task.worktreePath) ||
+              (task.branchName && t.branchName === task.branchName)))) &&
+        hasActiveJobForTask(t.id),
+    );
+
+  ipcSafe("docking-worktree-info", (_e, { id }) => {
+    const task = getTask(id);
+    if (!task) throw new Error("任务不存在");
+    const busy = isWorktreeBusy(task);
+    return { info: getWorktreeInfo(task), busy };
+  });
+
+  ipcSafe("docking-worktree-open", async (_e, { id }) => {
+    const info = getWorktreeInfo(getTask(id) || {});
+    if (!info.exists) throw new Error("worktree 目录不存在");
+    const error = await shell.openPath(info.path);
+    if (error) throw new Error(error);
+    return {};
+  });
+
+  ipcSafe("docking-worktree-cleanup", (_e, { id, deleteBranch = false }) => {
+    const task = getTask(id);
+    if (!task) throw new Error("任务不存在");
+    // AI 还在里面改文件时删目录，等于把它脚下的地抽掉
+    const busy = isWorktreeBusy(task);
+    if (busy) throw new Error("AI 正在这个 worktree 里处理，先中断或等它跑完");
+    return { result: cleanupTaskWorktree(task, { deleteBranch }), task: getTask(id) };
   });
 
   // ── 派给模型：只生成 prompt，不执行 ─────────────────────────────────────────
