@@ -490,6 +490,7 @@ export function updateTask(id, patch = {}) {
     "lastRunConfig",
     "autoDispatched",
     "pendingFollowup",
+    "agentSession",
   ]) {
     if (key in patch) task[key] = patch[key];
   }

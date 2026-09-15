@@ -318,14 +318,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // ── 自动处理（无头 Agent） ──────────────────────────────────────────────────────
 
   // 在 cwd 起一个无头会话处理需求
-  // mode: analyze | edit | full；engine: claude | agy；createBranch: boolean
-  dockingRunStart: (ids, cwd, mode, engine, createBranch) =>
+  // mode: analyze | plan | edit | full；engine: claude | agy | codex；createBranch: boolean
+  // freshSession: true 时不续接上一轮会话（仅 claude 会续接）
+  dockingRunStart: (ids, cwd, mode, engine, createBranch, freshSession) =>
     ipcRenderer.invoke("docking-run-start", {
       ids,
       cwd,
       mode,
       engine,
       createBranch,
+      freshSession,
     }),
 
   // agy 接入：检测 / 配置 / 撤销（会动全局 MCP 注册和 settings.json）

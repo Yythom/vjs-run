@@ -181,8 +181,8 @@ export function registerDockingIpc() {
   });
 
   // ── 交给模型自动处理（调度队列） ──────────────────────────────────────────
-  ipcSafe("docking-run-start", (_e, { ids, cwd, mode, engine, createBranch }) =>
-    enqueueJob({ ids, cwd, mode, engine, createBranch }),
+  ipcSafe("docking-run-start", (_e, { ids, cwd, mode, engine, createBranch, freshSession }) =>
+    enqueueJob({ ids, cwd, mode, engine, createBranch, freshSession }),
   );
 
   ipcSafe("docking-job-cancel", (_e, { jobId }) => ({
