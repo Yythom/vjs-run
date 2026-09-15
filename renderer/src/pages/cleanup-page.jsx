@@ -31,6 +31,12 @@ const OPTIONS = [
     sizeKey: "dockingAssetsBytes",
   },
   {
+    id: "dockingWorktrees",
+    label: "AI 工单台隔离 worktree",
+    desc: "已完成、已忽略或已删除任务的隔离工作目录。未提交的改动会先自动提交到对应分支再删，分支保留；依赖是软链，不影响主仓库",
+    sizeKey: "dockingWorktreesBytes",
+  },
+  {
     id: "webviewStorage",
     label: "浏览器缓存扩展项",
     desc: "清除 SharedStorage、Trust Tokens 和安全证书状态等扩展缓存",
@@ -114,6 +120,11 @@ export default function CleanupPage() {
         reclaimed = res.reclaimedBytes || 0;
         needsRestart = res.needsRestart;
         relaunching = res.relaunching;
+        const wt = res.results?.dockingWorktrees;
+        if (wt?.saved) {
+          showToast(`${wt.saved} 个 worktree 有未提交改动，已自动提交到各自分支`, "info");
+        }
+        if (wt?.error) showToast(`部分 worktree 没清掉：${wt.error}`, "warning");
       }
 
       // 恢复出厂：主进程会在稍后自动重启，此处只提示，不再拉取存储信息（进程即将退出）

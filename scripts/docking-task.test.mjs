@@ -2342,3 +2342,155 @@ test("会话续接：派活时勾了「从头开始」就不续接，跑完换�
   assert.match(args[args.indexOf("-p") + 1], /原始需求正文-从头来/, "从头来要发完整需求");
   assert.equal(getTask(t.id).agentSession.id, "sess-new");
 });
+
+// ─── worktree 清理 ───────────────────────────────────────────────────────────
+
+/** 建一个带 node_modules 的仓库，并给一条任务建好 worktree */
+async function repoWithTaskWorktree(title = "要清理的任务") {
+  const { setupWorktree } = await import("../src/feishu/worktree.js");
+  const { dir, git } = makeGitRepo();
+  fs.writeFileSync(path.join(dir, ".gitignore"), "node_modules/\n");
+  git(["add", "."]);
+  git(["commit", "-qm", "ignore"]);
+  fs.mkdirSync(path.join(dir, "node_modules", "left-pad"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "node_modules", "left-pad", "index.js"), "module.exports = 1\n");
+
+  const t = addTask({ title, content: "x", status: "inbox" });
+  updateTask(t.id, { repoPath: dir });
+  const res = setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "edit" });
+  assert.equal(res.ok, true, res.error);
+  const wt = (args) => execFileSync("git", args, { cwd: res.workdir, encoding: "utf8" });
+  return { dir, git, task: getTask(t.id), workdir: res.workdir, branch: res.branchName, wt };
+}
+
+test("worktree 信息：未提交改动、比基线多的提交、是否已合并", async () => {
+  freshUserData();
+  const { getWorktreeInfo } = await import("../src/feishu/worktree.js");
+  const { task, workdir, wt } = await repoWithTaskWorktree();
+
+  fs.writeFileSync(path.join(workdir, "b.txt"), "提交过的\n");
+  wt(["add", "b.txt"]);
+  wt(["commit", "-qm", "AI 改了 b"]);
+  fs.writeFileSync(path.join(workdir, "a.txt"), "没提交的改动\n");
+
+  const info = getWorktreeInfo(getTask(task.id));
+  assert.equal(info.exists, true);
+  assert.equal(info.dirtyCount, 1, `软链不该算进未提交改动：${info.dirty}`);
+  assert.deepEqual(info.commits.map((c) => c.subject), ["AI 改了 b"]);
+  assert.match(info.shortstat, /2 files changed/);
+  assert.equal(info.merged, false);
+  assert.ok(info.baseBranch);
+});
+
+test("清理单条 worktree：未提交改动先存进分支，删目录不伤主仓库依赖，下次派活原样重建", async () => {
+  freshUserData();
+  const { cleanupTaskWorktree, getWorktreeInfo, setupWorktree } = await import("../src/feishu/worktree.js");
+  const { dir, git, task, workdir, branch } = await repoWithTaskWorktree();
+  fs.writeFileSync(path.join(workdir, "a.txt"), "AI 没提交的改动\n");
+  // 仓库的 pre-commit 钩子挂了也不能挡住清理
+  fs.writeFileSync(path.join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+
+  const res = cleanupTaskWorktree(getTask(task.id));
+  assert.ok(res.savedCommit, "有未提交改动时要自动提交");
+  assert.equal(res.removed, true);
+  assert.ok(!fs.existsSync(workdir));
+  assert.ok(fs.existsSync(path.join(dir, "node_modules", "left-pad", "index.js")), "主仓库的依赖必须还在");
+  assert.equal(git(["show", `${branch}:a.txt`]).toString(), "AI 没提交的改动\n");
+  assert.equal(getTask(task.id).worktreePath, "");
+  assert.equal(getTask(task.id).branchName, branch, "默认保留分支");
+  assert.equal(getWorktreeInfo(getTask(task.id)).exists, false);
+
+  const again = setupWorktree({ cwd: dir, tasks: [getTask(task.id)], createBranch: true, mode: "edit" });
+  assert.equal(again.workdir, workdir, "重建在同一路径，续接会话对得上");
+  assert.equal(fs.readFileSync(path.join(workdir, "a.txt"), "utf8"), "AI 没提交的改动\n");
+});
+
+test("清理单条 worktree：勾了删分支就连分支一起删，任务上的隔离信息清空", async () => {
+  freshUserData();
+  const { cleanupTaskWorktree } = await import("../src/feishu/worktree.js");
+  const { git, task, branch } = await repoWithTaskWorktree();
+  updateTask(task.id, { agentSession: { engine: "claude", id: "s", cwd: "x", endedAt: 1 } });
+
+  const res = cleanupTaskWorktree(getTask(task.id), { deleteBranch: true });
+  assert.equal(res.branchDeleted, true);
+  assert.equal(git(["branch", "--list", branch]).toString().trim(), "");
+  const after = getTask(task.id);
+  assert.equal(after.branchName, "");
+  assert.equal(after.worktreeBase, null);
+  assert.equal(after.agentSession, null);
+});
+
+test("批量清理：只收已完成/已忽略/任务已删的 worktree，进行中和跑着的不碰，分支都留着", async () => {
+  freshUserData();
+  const { cleanupStaleWorktrees, staleWorktreesBytes } = await import("../src/feishu/worktree.js");
+  const done = await repoWithTaskWorktree("完成的");
+  const busy = await repoWithTaskWorktree("完成但还在跑");
+  const inbox = await repoWithTaskWorktree("还没做完");
+  const orphan = await repoWithTaskWorktree("任务被删了");
+  updateTask(done.task.id, { status: "done" });
+  updateTask(busy.task.id, { status: "done" });
+  deleteTask(orphan.task.id);
+  fs.writeFileSync(path.join(orphan.workdir, "a.txt"), "孤儿里没提交的\n");
+
+  const isBusy = (id) => id === busy.task.id;
+  assert.ok(staleWorktreesBytes({ tasks: listTasks(), isBusy }) > 0);
+  const summary = cleanupStaleWorktrees({ tasks: listTasks(), isBusy });
+
+  assert.equal(summary.removed, 2, JSON.stringify(summary));
+  assert.equal(summary.saved, 1);
+  assert.ok(!fs.existsSync(done.workdir));
+  assert.ok(!fs.existsSync(orphan.workdir));
+  assert.ok(fs.existsSync(busy.workdir));
+  assert.ok(fs.existsSync(inbox.workdir));
+  assert.equal(orphan.git(["show", `${orphan.branch}:a.txt`]).toString(), "孤儿里没提交的\n");
+  assert.equal(getTask(done.task.id).worktreePath, "");
+  for (const r of [done, orphan]) {
+    assert.ok(fs.existsSync(path.join(r.dir, "node_modules", "left-pad", "index.js")));
+  }
+});
+
+test("批量派活多任务共享 worktree：只要有一个任务未完成，就不收；清理单条连带更新同组任务", async () => {
+  freshUserData();
+  const { cleanupStaleWorktrees, cleanupTaskWorktree, setupWorktree } = await import("../src/feishu/worktree.js");
+  const { dir, git } = makeGitRepo();
+  const t1 = addTask({ title: "任务1", content: "x", status: "inbox" });
+  const t2 = addTask({ title: "任务2", content: "y", status: "inbox" });
+  updateTask(t1.id, { repoPath: dir });
+  updateTask(t2.id, { repoPath: dir });
+
+  const res = setupWorktree({ cwd: dir, tasks: [getTask(t1.id), getTask(t2.id)], createBranch: true, mode: "edit" });
+  assert.equal(res.ok, true);
+  assert.equal(getTask(t1.id).worktreePath, res.workdir);
+  assert.equal(getTask(t2.id).worktreePath, res.workdir);
+
+  // t1 完成，但 t2 还在 inbox，批量清理不能收掉这个 worktree
+  updateTask(t1.id, { status: "done" });
+  const midSummary = cleanupStaleWorktrees({ tasks: listTasks(), isBusy: () => false });
+  assert.equal(midSummary.removed, 0);
+  assert.ok(fs.existsSync(res.workdir));
+
+  // 单条清理（删分支）：t1 和 t2 上的 worktreePath 和 branchName 都应被清空
+  cleanupTaskWorktree(getTask(t1.id), { deleteBranch: true });
+  assert.equal(getTask(t1.id).worktreePath, "");
+  assert.equal(getTask(t1.id).branchName, "");
+  assert.equal(getTask(t2.id).worktreePath, "");
+  assert.equal(getTask(t2.id).branchName, "");
+  assert.ok(!fs.existsSync(res.workdir));
+});
+
+
+test("清理单条 worktree：自动提交失败就中止，不能把没存下来的改动连目录一起删了", async () => {
+  freshUserData();
+  const { cleanupTaskWorktree } = await import("../src/feishu/worktree.js");
+  const { git, task, workdir, branch } = await repoWithTaskWorktree();
+  fs.writeFileSync(path.join(workdir, "a.txt"), "AI 的改动\n");
+  // 强制签名 + 一个必定失败的 gpg：--no-verify 绕不过去
+  git(["config", "commit.gpgsign", "true"]);
+  git(["config", "gpg.program", "false"]);
+
+  assert.throws(() => cleanupTaskWorktree(getTask(task.id)), /已中止清理/);
+  assert.ok(fs.existsSync(workdir), "worktree 必须原样保留");
+  assert.equal(fs.readFileSync(path.join(workdir, "a.txt"), "utf8"), "AI 的改动\n");
+  assert.equal(getTask(task.id).worktreePath, workdir);
+  assert.equal(git(["show", `${branch}:a.txt`]).toString(), "hello\n");
+});

@@ -307,6 +307,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   dockingReadPlan: (id) => ipcRenderer.invoke("docking-read-plan", { id }),
   dockingOpenPlan: (id) => ipcRenderer.invoke("docking-open-plan", { id }),
 
+  // 任务的隔离 worktree：现状 / 在 Finder 打开 / 清理（未提交改动先存进分支）
+  dockingWorktreeInfo: (id) => ipcRenderer.invoke("docking-worktree-info", { id }),
+  dockingWorktreeOpen: (id) => ipcRenderer.invoke("docking-worktree-open", { id }),
+  dockingWorktreeCleanup: (id, deleteBranch) =>
+    ipcRenderer.invoke("docking-worktree-cleanup", { id, deleteBranch }),
+
   // 用飞书原路回问提出人（仅由用户在面板显式触发）
   dockingAsk: (id, question) =>
     ipcRenderer.invoke("docking-ask", { id, question }),
