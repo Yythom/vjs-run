@@ -206,7 +206,7 @@ function AutoDispatchForm({ open, onClose, repos }) {
           </div>
         </div>
 
-        {/* 隔离分支 */}
+        {/* 隔离 worktree */}
         <div className="pt-1">
           <label className="flex items-center gap-2 cursor-pointer text-slate-800">
             <input
@@ -215,14 +215,14 @@ function AutoDispatchForm({ open, onClose, repos }) {
               checked={autoCreateBranch}
               onChange={(e) => setAutoCreateBranch(e.target.checked)}
             />
-            <span className="font-bold">🌿 自动创建临时隔离分支</span>
+            <span className="font-bold">🌿 在隔离 worktree 里执行</span>
             <span className="text-[11px] text-slate-600">
-              （若为改代码或全自动模式，自动切出独立分支）
+              （只读分析以外的档位，每条任务单独一个工作目录与分支）
             </span>
           </label>
           <p className="text-[11px] text-slate-500 mt-1 pl-6 leading-relaxed">
-            工作区必须干净：有未提交改动时会中止本次派发并把任务放回待处理，
-            不会带着你没提交的改动切分支。
+            从主仓库当前 HEAD 拉出，主仓库的分支与未提交改动都不受影响（但也不会带进去）；
+            node_modules 软链复用主仓库，AI 不能在里面装依赖。
           </p>
         </div>
 
@@ -231,9 +231,9 @@ function AutoDispatchForm({ open, onClose, repos }) {
           <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
             <strong className="text-slate-700">📐 关于 /plan</strong>
             ：有人发 <code>/plan 需求文档链接</code> 会先备料，然后跟 /r 一样进待处理；
-            开了自动派发才会直接开跑，用上面选的<strong>引擎、默认项目、隔离分支</strong>，
+            开了自动派发才会直接开跑，用上面选的<strong>引擎、默认项目、隔离 worktree</strong>，
             下面的白名单同样生效。唯一不同的是力度固定为「产实施 plan」。
-            各引擎在这一档的边界差别很大，Antigravity 最松，选它时建议开着隔离分支。
+            各引擎在这一档的边界差别很大，Antigravity 最松，选它时建议开着隔离 worktree。
           </p>
         </div>
 

@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS = {
   ackEnabled: true,
   // 任务完成/忽略时是否自动通知提出人
   notifyOnComplete: true,
-  // 是否在执行代码改动前自动切出独立隔离分支
+  // 是否在执行代码改动前为任务建独立的隔离 worktree（分支 docking/seq-N-…，主仓库不动）
   createBranch: false,
   // 收到提出人澄清回复后是否自动恢复 AI 会话继续执行（仅对 awaiting 的任务生效）
   autoResumeOnClarification: true,
@@ -491,6 +491,7 @@ export function updateTask(id, patch = {}) {
     "autoDispatched",
     "pendingFollowup",
     "agentSession",
+    "worktreePath",
   ]) {
     if (key in patch) task[key] = patch[key];
   }

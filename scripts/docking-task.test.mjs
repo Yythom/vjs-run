@@ -962,14 +962,18 @@ function makeGitRepo() {
   git(["commit", "-qm", "init"]);
   return { dir, git };
 }
-test("setupGitBranch: 干净工作区切出隔离分支并回写 branchName", async () => {
-  freshUserData();
-  const { setupGitBranch } = await import("../src/feishu/runner.js");
-  const { dir, git } = makeGitRepo();
+const headOf = (dir) =>
+  execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+
+test("setupWorktree: 建独立 worktree，主仓库分支不动，回写 branchName 与 worktreePath", async () => {
+  const userData = freshUserData();
+  const { setupWorktree } = await import("../src/feishu/runner.js");
+  const { dir } = makeGitRepo();
+  const before = headOf(dir);
 
   const t = addTask({ content: "订单超时要改成 30 分钟", status: "inbox" });
   const logs = [];
-  const res = setupGitBranch({
+  const res = setupWorktree({
     cwd: dir,
     tasks: [getTask(t.id)],
     createBranch: true,
@@ -977,109 +981,143 @@ test("setupGitBranch: 干净工作区切出隔离分支并回写 branchName", as
     emitLog: (kind, text) => logs.push(text),
   });
 
-  assert.equal(res.ok, true);
+  assert.equal(res.ok, true, res.error);
   assert.match(res.branchName, /^docking\/seq-\d+-/);
-  const current = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-    cwd: dir,
-    encoding: "utf8",
-  }).trim();
-  assert.equal(current, res.branchName, "应该真的切过去了");
-  assert.equal(getTask(t.id).branchName, res.branchName, "branchName 要回写到任务上");
+  assert.ok(res.workdir.startsWith(path.join(userData, "docking-worktrees")), "worktree 落在 userData 下");
+  assert.equal(headOf(dir), before, "主仓库不该被切走");
+  assert.equal(headOf(res.workdir), res.branchName, "worktree 在隔离分支上");
+  assert.ok(fs.existsSync(path.join(res.workdir, "a.txt")));
+  assert.equal(getTask(t.id).branchName, res.branchName);
+  assert.equal(getTask(t.id).worktreePath, res.workdir);
   assert.ok(logs.some((l) => l.includes(res.branchName)));
 
-  // 再跑一次：已经在这条分支上，不重复创建也不报错
-  const again = setupGitBranch({
-    cwd: dir,
-    tasks: [getTask(t.id)],
-    createBranch: true,
-    mode: "edit",
-  });
-  assert.equal(again.ok, true);
-  assert.equal(again.branchName, res.branchName);
-  void git;
+  // 第二轮：复用同一个 worktree，路径不变（续接会话靠它）
+  const again = setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "edit" });
+  assert.equal(again.ok, true, again.error);
+  assert.equal(again.workdir, res.workdir);
 });
 
-test("setupGitBranch: 工作区脏时中止，不带着未提交改动切分支", async () => {
+test("setupWorktree: 主仓库有未提交改动也照常建，改动留在主仓库不带进去", async () => {
   freshUserData();
-  const { setupGitBranch } = await import("../src/feishu/runner.js");
+  const { setupWorktree } = await import("../src/feishu/runner.js");
   const { dir } = makeGitRepo();
-
   fs.writeFileSync(path.join(dir, "a.txt"), "我改了一半还没提交\n");
-  const before = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-    cwd: dir,
-    encoding: "utf8",
-  }).trim();
 
   const t = addTask({ content: "随便一条需求", status: "inbox" });
-  const res = setupGitBranch({
+  const logs = [];
+  const res = setupWorktree({
     cwd: dir,
     tasks: [getTask(t.id)],
     createBranch: true,
     mode: "edit",
+    emitLog: (kind, text) => logs.push(text),
   });
 
-  assert.equal(res.ok, false);
-  assert.match(res.error, /未提交改动/);
-  const after = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-    cwd: dir,
-    encoding: "utf8",
-  }).trim();
-  assert.equal(after, before, "分支不该被切走");
-  assert.equal(getTask(t.id).branchName, "", "失败时不该回写 branchName");
+  assert.equal(res.ok, true, res.error);
+  assert.equal(fs.readFileSync(path.join(dir, "a.txt"), "utf8"), "我改了一半还没提交\n");
+  assert.equal(fs.readFileSync(path.join(res.workdir, "a.txt"), "utf8"), "hello\n");
+  assert.ok(logs.some((l) => /未提交的改动/.test(l)), "要提示主仓库的改动不在 worktree 里");
 });
 
-test("setupGitBranch: 未跟踪文件不算脏，照常切分支", async () => {
+test("setupWorktree: node_modules 软链复用主仓库，且不会被 git 当成新文件", async () => {
   freshUserData();
-  const { setupGitBranch } = await import("../src/feishu/runner.js");
+  const { setupWorktree } = await import("../src/feishu/runner.js");
+  const { dir, git } = makeGitRepo();
+  // .gitignore 写的是带斜杠的 node_modules/——它匹配不到软链，正是要兜的情况
+  fs.writeFileSync(path.join(dir, ".gitignore"), "node_modules/\n");
+  fs.mkdirSync(path.join(dir, "pkg"));
+  fs.writeFileSync(path.join(dir, "pkg", "index.js"), "\n");
+  git(["add", "."]);
+  git(["commit", "-qm", "pkg"]);
+  fs.mkdirSync(path.join(dir, "node_modules", "left-pad"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "pkg", "node_modules", "dep"), { recursive: true });
+  // 没被跟踪的目录下的 node_modules 不链：worktree 里没有它的父目录
+  fs.mkdirSync(path.join(dir, "scratch", "node_modules"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "scratch", "draft.md"), "草稿\n");
+
+  const t = addTask({ content: "要跑测试的需求", status: "inbox" });
+  const res = setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "full" });
+  assert.equal(res.ok, true, res.error);
+
+  for (const rel of ["node_modules", path.join("pkg", "node_modules")]) {
+    const link = path.join(res.workdir, rel);
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), `${rel} 应该是软链`);
+    assert.equal(fs.realpathSync(link), fs.realpathSync(path.join(dir, rel)));
+  }
+  assert.ok(!fs.existsSync(path.join(res.workdir, "scratch")));
+
+  const status = execFileSync("git", ["status", "--porcelain"], { cwd: res.workdir, encoding: "utf8" });
+  assert.equal(status.trim(), "", `软链不该出现在 git status 里：\n${status}`);
+  assert.equal(
+    execFileSync("git", ["status", "--porcelain"], { cwd: dir, encoding: "utf8" }).trim(),
+    "?? scratch/",
+    "主仓库的忽略规则不受影响",
+  );
+
+  // 再建一次不重复写 exclude
+  setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "full" });
+  const exclude = fs.readFileSync(path.join(dir, ".git", "info", "exclude"), "utf8");
+  assert.equal(exclude.split("\n").filter((l) => l === "/node_modules").length, 1);
+});
+
+test("setupWorktree: worktree 目录被人删了，下一轮重建并沿用原分支上的提交", async () => {
+  freshUserData();
+  const { setupWorktree } = await import("../src/feishu/runner.js");
   const { dir } = makeGitRepo();
+  const t = addTask({ content: "两轮的需求", status: "inbox" });
 
-  // 工具生成物 / 本地草稿目录常年躺在工作区，不该拦住派活
-  fs.mkdirSync(path.join(dir, ".agents/skills/whatever"), { recursive: true });
-  fs.writeFileSync(path.join(dir, ".agents/skills/whatever/SKILL.md"), "# 草稿\n");
+  const first = setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "edit" });
+  const wtGit = (args) =>
+    execFileSync("git", args, { cwd: first.workdir, stdio: ["ignore", "pipe", "pipe"] });
+  fs.writeFileSync(path.join(first.workdir, "b.txt"), "AI 第一轮的改动\n");
+  wtGit(["add", "b.txt"]);
+  wtGit(["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-qm", "round1"]);
+  fs.rmSync(first.workdir, { recursive: true, force: true });
 
-  const t = addTask({ content: "随便一条需求", status: "inbox" });
-  const res = setupGitBranch({
-    cwd: dir,
-    tasks: [getTask(t.id)],
-    createBranch: true,
-    mode: "edit",
-  });
-
-  assert.equal(res.ok, true, "未跟踪文件不该阻止切分支");
-  assert.match(res.branchName, /^docking\/seq-\d+-/);
-  const current = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-    cwd: dir,
-    encoding: "utf8",
-  }).trim();
-  assert.equal(current, res.branchName, "应该真的切过去了");
-  assert.ok(
-    fs.existsSync(path.join(dir, ".agents/skills/whatever/SKILL.md")),
-    "未跟踪文件应原地保留",
-  );
+  const second = setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "edit" });
+  assert.equal(second.ok, true, second.error);
+  assert.equal(second.workdir, first.workdir);
+  assert.equal(fs.readFileSync(path.join(second.workdir, "b.txt"), "utf8"), "AI 第一轮的改动\n");
 });
 
-test("setupGitBranch: 只读档与关闭开关时直接跳过，不碰 git", async () => {
+test("setupWorktree: 分支还检出在主仓库（旧版残留）时中止并说清楚怎么办", async () => {
   freshUserData();
-  const { setupGitBranch } = await import("../src/feishu/runner.js");
-  const t = addTask({ content: "只读排查", status: "inbox" });
+  const { setupWorktree } = await import("../src/feishu/runner.js");
+  const { dir, git } = makeGitRepo();
+  const t = addTask({ content: "旧任务", status: "inbox" });
+  updateTask(t.id, { branchName: "docking/seq-1-old" });
+  git(["checkout", "-qb", "docking/seq-1-old"]);
 
-  assert.deepEqual(
-    setupGitBranch({ cwd: "/not/a/repo", tasks: [t], createBranch: true, mode: "analyze" }),
-    { ok: true, branchName: "" },
-  );
-  assert.deepEqual(
-    setupGitBranch({ cwd: "/not/a/repo", tasks: [t], createBranch: false, mode: "edit" }),
-    { ok: true, branchName: "" },
-  );
+  const res = setupWorktree({ cwd: dir, tasks: [getTask(t.id)], createBranch: true, mode: "edit" });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /检出在主仓库/);
+  assert.match(res.error, /切回其他分支/);
 });
 
-test("runner: 切分支失败时中止 job，并把任务从 doing 放回 inbox", async () => {
+test("setupWorktree: 只读档、关闭开关、非 git 目录都直接在原目录跑", async () => {
+  freshUserData();
+  const { setupWorktree } = await import("../src/feishu/runner.js");
+  const t = addTask({ content: "只读排查", status: "inbox" });
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), "docking-plain-"));
+
+  const skip = (cwd) => ({ ok: true, branchName: "", workdir: cwd });
+  assert.deepEqual(
+    setupWorktree({ cwd: "/not/a/repo", tasks: [t], createBranch: true, mode: "analyze" }),
+    skip("/not/a/repo"),
+  );
+  assert.deepEqual(
+    setupWorktree({ cwd: "/not/a/repo", tasks: [t], createBranch: false, mode: "edit" }),
+    skip("/not/a/repo"),
+  );
+  assert.deepEqual(setupWorktree({ cwd: plain, tasks: [t], createBranch: true, mode: "edit" }), skip(plain));
+});
+
+test("runner: 建 worktree 失败时中止 job，并把任务从 doing 放回 inbox", async () => {
   freshUserData();
   const { enqueueJob, getQueueStatus, onQueueIdle, setSpawnImpl } = await import(
     "../src/feishu/runner.js"
   );
-  const { dir } = makeGitRepo();
-  fs.writeFileSync(path.join(dir, "a.txt"), "脏\n");
+  const { dir, git } = makeGitRepo();
 
   let spawned = 0;
   setSpawnImpl(() => {
@@ -1093,7 +1131,8 @@ test("runner: 切分支失败时中止 job，并把任务从 doing 放回 inbox"
     messageId: "om_dirty_1",
     chatId: "oc_dirty_chat",
   });
-  updateTask(t.id, { status: "doing" });
+  updateTask(t.id, { status: "doing", branchName: "docking/seq-9-stuck" });
+  git(["checkout", "-qb", "docking/seq-9-stuck"]);
 
   const { jobId } = enqueueJob({
     ids: [t.id],
@@ -1104,10 +1143,10 @@ test("runner: 切分支失败时中止 job，并把任务从 doing 放回 inbox"
   });
   await onQueueIdle();
 
-  assert.equal(spawned, 0, "分支没切成功就不该起 Agent");
+  assert.equal(spawned, 0, "worktree 没建成就不该起 Agent");
   const job = getQueueStatus().jobs.find((j) => j.id === jobId);
   assert.equal(job.status, "error");
-  assert.match(job.error, /未提交改动/);
+  assert.match(job.error, /检出在主仓库/);
   assert.equal(getTask(t.id).status, "inbox", "任务要放回待处理，不能卡在 doing");
   const thread = getTask(t.id).thread || [];
   assert.ok(
@@ -1116,6 +1155,65 @@ test("runner: 切分支失败时中止 job，并把任务从 doing 放回 inbox"
   );
 
   setSpawnImpl(null);
+});
+
+test("runner: 开了隔离时 Agent 在 worktree 里跑，prompt 说明依赖是软链的", async () => {
+  freshUserData();
+  const { dir } = makeGitRepo();
+  const t = addTask({ title: "改代码", content: "改一下" });
+
+  const { calls, restore } = await captureSpawn();
+  const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
+  try {
+    enqueueJob({ ids: [t.id], cwd: dir, mode: "edit", engine: "claude", createBranch: true });
+    await onQueueIdle();
+  } finally {
+    restore();
+  }
+  const wt = getTask(t.id).worktreePath;
+  assert.ok(wt);
+  assert.equal(calls[0].opts.cwd, wt);
+  const prompt = calls[0].args[calls[0].args.indexOf("-p") + 1];
+  assert.match(prompt, /不要安装、升级或删除依赖/);
+  assert.equal(getTask(t.id).repoPath, dir, "repoPath 仍是主仓库");
+});
+
+test("runner: 同一仓库不同任务的隔离 job 可以并行，不开隔离时仍串行", async () => {
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const { enqueueJob, onQueueIdle, setSpawnImpl } = await import("../src/feishu/runner.js");
+
+  const maxParallel = async (createBranch) => {
+    freshUserData();
+    const { dir } = makeGitRepo();
+    let running = 0;
+    let peak = 0;
+    setSpawnImpl(() => {
+      running += 1;
+      peak = Math.max(peak, running);
+      const proc = new EventEmitter();
+      proc.stdout = new PassThrough();
+      proc.stderr = new PassThrough();
+      proc.kill = () => proc.emit("close", 0);
+      setTimeout(() => {
+        running -= 1;
+        proc.stdout.end();
+        proc.stderr.end();
+        proc.emit("close", 0);
+      }, 50);
+      return proc;
+    });
+    const a = addTask({ title: "a", content: "a" });
+    const b = addTask({ title: "b", content: "b" });
+    enqueueJob({ ids: [a.id], cwd: dir, mode: "edit", engine: "claude", createBranch });
+    enqueueJob({ ids: [b.id], cwd: dir, mode: "edit", engine: "claude", createBranch });
+    await onQueueIdle();
+    setSpawnImpl(null);
+    return peak;
+  };
+
+  assert.equal(await maxParallel(true), 2);
+  assert.equal(await maxParallel(false), 1);
 });
 
 test("runner: engine=codex 支持 exec --json 参数构造与结构化事件解析", async () => {

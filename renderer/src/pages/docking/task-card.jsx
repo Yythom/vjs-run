@@ -163,11 +163,19 @@ function TaskCard({
             {task.branchName && (
               <span
                 className="shrink-0 text-[10px] text-emerald-900 bg-emerald-50 border border-emerald-300 px-1.5 py-0.5 rounded font-mono font-medium flex items-center gap-0.5"
-                title={`隔离分支: ${task.branchName} (点击复制)`}
+                title={
+                  task.worktreePath
+                    ? `隔离分支: ${task.branchName}\nworktree: ${task.worktreePath}\n（点击复制 worktree 路径）`
+                    : `隔离分支: ${task.branchName} (点击复制)`
+                }
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigator.clipboard.writeText(task.branchName);
-                  showToast(`已复制分支: ${task.branchName}`, "success");
+                  const text = task.worktreePath || task.branchName;
+                  navigator.clipboard.writeText(text);
+                  showToast(
+                    task.worktreePath ? "已复制 worktree 路径" : `已复制分支: ${text}`,
+                    "success",
+                  );
                 }}
               >
                 <span>🌿</span>

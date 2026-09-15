@@ -406,16 +406,16 @@ function RunDispatchForm({ repos }) {
         </div>
       )}
 
-      {/* 隔离分支开关 */}
+      {/* 隔离 worktree 开关 */}
       <div className="mt-3 p-2.5 rounded-lg border border-slate-200 bg-slate-50/80 flex items-center justify-between">
         <div>
           <div className="text-[12px] font-medium text-slate-700 flex items-center gap-1">
             <span>🌿</span>
-            <span>自动创建临时隔离分支</span>
+            <span>在隔离 worktree 里执行</span>
           </div>
           <div className="text-[11px] text-slate-400">
-            执行代码修改前自动切出独立分支 (如 <code>docking/seq-7-...</code>
-            )，防止污染当前分支
+            为任务单独建一个工作目录与分支 (如 <code>docking/seq-7-...</code>
+            )，主仓库不动、不要求工作区干净；node_modules 软链复用主仓库
           </div>
         </div>
         <input

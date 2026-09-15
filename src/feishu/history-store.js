@@ -87,6 +87,7 @@ export function saveJobRun(record = {}) {
     mode: record.mode || "analyze",
     cwd: record.cwd || "",
     branchName: record.branchName || "",
+    workdir: record.workdir || record.cwd || "",
     status: record.status || "done",
     exitCode: record.exitCode ?? 0,
     error: record.error || "",

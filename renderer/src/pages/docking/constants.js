@@ -100,6 +100,6 @@ export const PLAN_MODE_LIMITS = {
   },
   agy: {
     level: "最松",
-    text: "无头模式只有「全自动批准」一档，不改业务代码全靠 prompt 约束——建议配合隔离分支",
+    text: "无头模式只有「全自动批准」一档，不改业务代码全靠 prompt 约束——建议配合隔离 worktree",
   },
 };
