@@ -492,6 +492,7 @@ export function updateTask(id, patch = {}) {
     "pendingFollowup",
     "agentSession",
     "worktreePath",
+    "worktreeBase",
   ]) {
     if (key in patch) task[key] = patch[key];
   }
