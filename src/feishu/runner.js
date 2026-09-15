@@ -36,7 +36,7 @@ import { sendToAllWindows } from "../ui-channel.js";
 import { buildPrompt } from "./prompt.js";
 import { appendThread, getTask, updateTask } from "./task-store.js";
 import { saveJobRun } from "./history-store.js";
-import { showDesktopNotification } from "./listener.js";
+import { showDesktopNotification } from "./notify.js";
 import { sendMessage } from "./lark-cli.js";
 
 let spawnImpl = spawn;

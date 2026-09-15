@@ -2494,3 +2494,22 @@ test("清理单条 worktree：自动提交失败就中止，不能把没存下�
   assert.equal(getTask(task.id).worktreePath, workdir);
   assert.equal(git(["show", `${branch}:a.txt`]).toString(), "hello\n");
 });
+
+test("模块加载顺序：先加载 runner 或 cleanup 链路也不能崩（runner 不得依赖 listener）", () => {
+  // 本文件顶部已经加载过 listener，同进程测不出顺序问题，得起一个干净的子进程。
+  // 应用里 ipc/index.js 先注册 cleanup（它导入 runner），runner 就会先于 listener 被加载
+  for (const order of [
+    ["../src/feishu/runner.js", "../src/feishu/listener.js"],
+    ["../src/feishu/worktree.js", "../src/feishu/runner.js", "../src/feishu/listener.js"],
+  ]) {
+    const code = order
+      .map((m) => `await import(${JSON.stringify(new URL(m, import.meta.url).href)});`)
+      .join("");
+    execFileSync(process.execPath, ["--input-type=module", "-e", code], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, VJTOOLS_USER_DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "docking-order-")) },
+    });
+  }
+  const runnerSrc = fs.readFileSync(new URL("../src/feishu/runner.js", import.meta.url), "utf8");
+  assert.ok(!/from "\.\/listener\.js"/.test(runnerSrc), "runner 导入 listener 会形成循环引用");
+});

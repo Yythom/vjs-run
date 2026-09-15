@@ -29,6 +29,7 @@ import { buildAckCard } from "./cards.js";
 import { sendToAllWindows } from "../ui-channel.js";
 import { killProcessTree } from "../kill-tree.js";
 import { enqueueJob, hasActiveJobForTask, setJobSettledHook } from "./runner.js";
+import { showDesktopNotification } from "./notify.js";
 import { pickSmartRepo } from "./repo-matcher.js";
 import { getConfig } from "../config/store.js";
 import {
@@ -460,43 +461,6 @@ export function parseMessageContent(evt) {
   }
 
   return typeof rawContent === "string" ? rawContent : String(rawContent || "");
-}
-
-let electronModule = null;
-async function getElectron() {
-  if (!electronModule) {
-    try {
-      electronModule = await import("electron");
-    } catch {
-      electronModule = null;
-    }
-  }
-  return electronModule;
-}
-
-export async function showDesktopNotification({ title, body }) {
-  try {
-    const electron = await getElectron();
-    const NotificationClass = electron?.Notification;
-    if (NotificationClass && typeof NotificationClass.isSupported === "function" && NotificationClass.isSupported()) {
-      const notif = new NotificationClass({
-        title,
-        body: body ? String(body).slice(0, 200) : "",
-        silent: false,
-      });
-      notif.on("click", () => {
-        const windows = electron?.BrowserWindow?.getAllWindows?.() || [];
-        if (windows.length > 0) {
-          const win = windows[0];
-          if (win.isMinimized?.()) win.restore?.();
-          win.focus?.();
-        }
-      });
-      notif.show();
-    }
-  } catch (err) {
-    console.error("[docking] 发送桌面通知失败", err);
-  }
 }
 
 /**
