@@ -226,14 +226,15 @@ function AutoDispatchForm({ open, onClose, repos }) {
           </p>
         </div>
 
-        {/* /plan 说明：跟 /r 同一套规则，只有力度档固定 */}
+        {/* /plan 说明：跟 /r 同一套规则，但力度档和引擎都是固定的 */}
         <div className="pt-1 border-t border-slate-200">
           <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
             <strong className="text-slate-700">📐 关于 /plan</strong>
             ：有人发 <code>/plan 需求文档链接</code> 会先备料，然后跟 /r 一样进待处理；
-            开了自动派发才会直接开跑，用上面选的<strong>引擎、默认项目、隔离 worktree</strong>，
-            下面的白名单同样生效。唯一不同的是力度固定为「产实施 plan」。
-            各引擎在这一档的边界差别很大，Antigravity 最松，选它时建议开着隔离 worktree。
+            开了自动派发才会直接开跑，用上面选的<strong>默认项目、隔离 worktree</strong>，
+            下面的白名单同样生效。不同的是力度固定为「产实施 plan」、引擎固定为
+            <strong>Claude Code</strong>（不跟随上面选的引擎）：只有它能在这一档把 Bash
+            整个禁掉，扫影响面走 req_scan 工具。
           </p>
         </div>
 

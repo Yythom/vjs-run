@@ -15,7 +15,7 @@ import {
 } from "../../stores/docking-store";
 import CliInstallCard from "./cli-install-card";
 import useEngineProbes from "./use-engine-probes";
-import { ENGINES, PLAN_MODE_LIMITS, RUN_MODES } from "./constants";
+import { ENGINES, PLAN_MODE_LIMIT, RUN_MODES } from "./constants";
 import { pickSmartRepo } from "./utils";
 
 /**
@@ -66,8 +66,13 @@ function RunDispatchForm({ repos }) {
     if (hasWorkpack) return "plan";
     return settings.runMode || "analyze";
   });
-  // 工作包任务也用上次选的引擎，不再强切 Claude；各引擎在 plan 档的边界差异下面有提示
-  const [engine, setEngine] = useState(() => settings.runEngine || "claude");
+  // 引擎的「人选了什么」和「这次实际用什么」是两回事：产 plan 档固定走 claude
+  // （主进程 enqueueJob 里也兜底），但别把这次的强制值写回成下次的默认选择。
+  const [engineChoice, setEngineChoice] = useState(
+    () => settings.runEngine || "claude",
+  );
+  const planLocked = mode === "plan";
+  const engine = planLocked ? "claude" : engineChoice;
   const [createBranch, setCreateBranch] = useState(
     () => settings.createBranch ?? false,
   );
@@ -157,7 +162,7 @@ function RunDispatchForm({ repos }) {
       saveSettings({
         lastCwd: cwd,
         runMode: mode === "plan" ? (settings.runMode || "analyze") : mode,
-        runEngine: engine,
+        runEngine: engineChoice,
         createBranch,
       });
       // 记录任务关联的 repoPath
@@ -257,9 +262,13 @@ function RunDispatchForm({ repos }) {
               engine === e.key
                 ? "border-sky-300 bg-sky-50 text-sky-600 font-medium"
                 : "border-border text-slate-500 hover:bg-slate-50",
+              planLocked &&
+                e.key !== "claude" &&
+                "opacity-40 cursor-not-allowed hover:bg-transparent",
             )}
+            disabled={planLocked && e.key !== "claude"}
             onClick={() => {
-              setEngine(e.key);
+              setEngineChoice(e.key);
               saveSettings({ runEngine: e.key });
               refreshProbe(e.key);
             }}
@@ -395,14 +404,13 @@ function RunDispatchForm({ repos }) {
         ))}
       </div>
 
-      {/* plan 档三个引擎的边界差很大，别让人以为选了这档就一定安全 */}
-      {mode === "plan" && PLAN_MODE_LIMITS[engine] && (
+      {/* 产 plan 固定用 claude，说清楚为什么别的引擎这会儿点不动 */}
+      {planLocked && (
         <div className="mt-2 p-2.5 rounded-lg border border-amber-200 bg-amber-50/70 text-[11px] text-amber-900 leading-relaxed">
-          <strong>
-            {ENGINES.find((e) => e.key === engine)?.label || engine} 的产 plan 档 ·{" "}
-            {PLAN_MODE_LIMITS[engine].level}
-          </strong>
-          ：{PLAN_MODE_LIMITS[engine].text}
+          <strong>产 plan 固定走 Claude Code</strong>
+          ：这一档要的是只读扫影响面 + 写一份 plan.md，只有 claude
+          能按工具名把 Bash 整个禁掉。边界·{PLAN_MODE_LIMIT.level}：
+          {PLAN_MODE_LIMIT.text}
         </div>
       )}
 

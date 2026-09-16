@@ -126,9 +126,9 @@ const MODES = {
  */
 const AGY_MODES = {
   analyze: ["--dangerously-skip-permissions"],
-  // agy 自带一个 --mode plan，但语义没文档，两个枚举值（accept-edits / plan）之外什么都没写。
-  // 「只读产计划」多半连 plan.md 都写不出来，还可能像 claude 的 --permission-mode plan
-  // 那样把 MCP 工具一起挡掉（闭环就断了）。不赌，这一档跟其它档一样靠 prompt 约束。
+  // 产 plan 已固定走 claude（enqueueJob 里强制），这条正常走不到，留着只是别让
+  // AGY_MODES[mode] 取出 undefined。真要放开时也别用 agy 自带的 --mode plan：
+  // 语义没文档，可能连 plan.md 都写不出来，还可能把 MCP 工具一起挡掉。
   plan: ["--dangerously-skip-permissions"],
   edit: ["--dangerously-skip-permissions"],
   full: ["--dangerously-skip-permissions"],
@@ -140,9 +140,8 @@ const AGY_MODES = {
  */
 const CODEX_MODES = {
   analyze: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
-  // codex 的沙箱策略是可选的，产 plan 这档不必整台机器敞开：workspace-write 允许读全部、
-  // 在 workspace（cwd + --add-dir 放行的工作包）内写、跑命令——正好够跑影响面扫描和写 plan.md。
-  // 三个引擎里只有 codex 的 plan 档有工具层约束之外的第二道边界。
+  // 同 AGY_MODES.plan：产 plan 固定走 claude，这条走不到。留着的话至少是收紧的
+  // （workspace-write 只在 cwd + --add-dir 的工作包内可写），不会把整台机器敞开。
   plan: ["--sandbox", "workspace-write", "--skip-git-repo-check"],
   edit: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
   full: ["--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
@@ -505,7 +504,7 @@ function worktreeNotice(job) {
 }
 
 /** 各档力度的约束与收尾规则 */
-function modeGuidelinesFor(mode = "analyze", engine = "claude") {
+function modeGuidelinesFor(mode = "analyze") {
   const modeGuidelines = {
     analyze: [
       "【当前为「只读分析 / 逻辑排查」模式】",
@@ -516,11 +515,8 @@ function modeGuidelinesFor(mode = "analyze", engine = "claude") {
     plan: [
       "【当前为「产实施 plan」模式】",
       "- 产出是一份 markdown 实施计划，不是代码改动：严禁修改任何业务代码。",
-      // claude 档真的没有 Bash（deny 掉了），agy/codex 其实有——对它们说「没有 Bash」
-      // 是假话，说了它一试就发现能跑，反而不信后面那半句
-      engine === "claude"
-        ? "- **没有 Bash，跑不了任何命令**。影响面扫描用 req_scan 工具："
-        : "- 影响面扫描一律走 req_scan 工具，不要自己拼命令去跑：",
+      // 这一档固定走 claude，Bash 是真 deny 掉的，说「没有」不是虚张声势
+      "- **没有 Bash，跑不了任何命令**。影响面扫描用 req_scan 工具：",
       "  工作规范里写成 `node .../req scan locate \"文案\" --scope \"目录\"` 的，",
       "  在这里一律改成 req_scan({ seq, command: \"locate\", target: \"文案\", scope: \"目录\" })；",
       "  siblings / mirror / twins 同理。别因为命令跑不通就退回用 Grep 猜。",
@@ -556,8 +552,8 @@ function conventionsFor(tasks) {
 }
 
 /** 给 Agent 的执行指引。需求正文由 buildPrompt 生成，并根据 mode 注入约束与收尾规则 */
-function buildInstructions(tasks, mode = "analyze", engine = "claude") {
-  const guidelines = modeGuidelinesFor(mode, engine);
+function buildInstructions(tasks, mode = "analyze") {
+  const guidelines = modeGuidelinesFor(mode);
 
   // 工作包类任务（req-to-plan 从需求池备的料）：目录已 --add-dir 放行，
   // 里面的 skill.md 也已注入 system prompt，这里只把「哪条任务对应哪个目录」说清楚
@@ -588,7 +584,7 @@ function buildInstructions(tasks, mode = "analyze", engine = "claude") {
  * 续接轮的 prompt：上一轮的需求正文和推理都在会话里了，只送「之后发生了什么」。
  * 力度可能变了（关键词提权、面板上换档），所以约束整段重发，并明确以本轮为准。
  */
-function buildResumeInstructions(task, session, mode = "analyze", engine = "claude") {
+function buildResumeInstructions(task, session, mode = "analyze") {
   const whoOf = (role) =>
     role === "me"
       ? "我追问/说明"
@@ -611,7 +607,7 @@ function buildResumeInstructions(task, session, mode = "analyze", engine = "clau
     "---",
     "",
     "本轮力度以下面为准，与上一轮不同时覆盖上一轮的约束：",
-    ...modeGuidelinesFor(mode, engine),
+    ...modeGuidelinesFor(mode),
     "",
     ...conventionsFor([task]),
   ].join("\n");
@@ -717,6 +713,11 @@ export function enqueueJob({
   if (!cwd) throw new Error("必须指定工作目录");
   const tasks = ids.map((id) => getTask(id)).filter(Boolean);
   if (!tasks.length) throw new Error("没有勾选任何任务");
+
+  // 产 plan 固定走 claude：这一档要的是「只读扫影响面 + 写一份 plan.md」，
+  // 只有 claude 能按工具名把 Bash 整个禁掉（codex 只能挑沙箱策略，agy 无头下只有全自动批准）。
+  // 在这儿兜底，UI、/plan 自动派发、旧的 startRun 入口就都不会再漏。
+  if (mode === "plan") engine = "claude";
 
   lastEngine = engine;
   const jobId = crypto.randomUUID();
@@ -860,8 +861,8 @@ function runJobProcess(job, tasks) {
     job.resumedFrom = resumeSession?.id || "";
     const prompt = [
       resumeSession
-        ? buildResumeInstructions(freshTasks[0], resumeSession, job.mode, job.engine)
-        : buildInstructions(freshTasks, job.mode, job.engine),
+        ? buildResumeInstructions(freshTasks[0], resumeSession, job.mode)
+        : buildInstructions(freshTasks, job.mode),
       ...worktreeNotice(job),
     ].join("\n");
     job.prompt = prompt;
