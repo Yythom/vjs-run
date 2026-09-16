@@ -1331,8 +1331,8 @@ async function captureSpawn() {
   return { calls, restore: () => setSpawnImpl(null) };
 }
 
-/** 跑一个 job 并等它收尾，返回 spawn 到的参数。 */
-async function runJobAndCaptureArgs(opts) {
+/** 跑一个 job 并等它收尾，返回 spawn 到的 { bin, args, opts }。 */
+async function runJobAndCaptureCall(opts) {
   const { enqueueJob, onQueueIdle } = await import("../src/feishu/runner.js");
   const { calls, restore } = await captureSpawn();
   try {
@@ -1342,7 +1342,12 @@ async function runJobAndCaptureArgs(opts) {
     restore();
   }
   assert.equal(calls.length, 1, "应该正好起了一个子进程");
-  return calls[0].args;
+  return calls[0];
+}
+
+/** 同上，只要参数。 */
+async function runJobAndCaptureArgs(opts) {
+  return (await runJobAndCaptureCall(opts)).args;
 }
 
 /** 造一个带 skill.md 的工作包。 */
@@ -1378,55 +1383,42 @@ test("plan 档：Bash 整个禁掉，扫描改走 req_scan 工具", async () => 
   assert.ok(allow.includes("mcp__docking__req_scan"), "扫描工具必须放行");
 });
 
-test("plan 档：三个引擎都能跑，但各自的边界不一样", async () => {
+test("plan 档固定走 claude：请求别的引擎也会被强制切回", async () => {
   const dir = freshWorkpackDir();
 
-  // claude：工具粒度——Bash 与编辑类工具全禁，扫描走 MCP
-  freshUserData();
-  const t1 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
-  const claude = await runJobAndCaptureArgs({
-    ids: [t1.id], cwd: "/mock/repo", mode: "plan", engine: "claude",
-  });
-  const claudeDeny = claude.slice(claude.indexOf("--disallowedTools") + 1);
-  assert.ok(claudeDeny.includes("Bash") && claudeDeny.includes("Edit"));
+  for (const requested of ["claude", "codex", "agy"]) {
+    freshUserData();
+    const task = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
+    const { bin, args } = await runJobAndCaptureCall({
+      ids: [task.id], cwd: "/mock/repo", mode: "plan", engine: requested,
+    });
 
-  // codex：沙箱粒度——workspace-write，读全部、只在工作目录与工作包内可写
-  freshUserData();
-  const t2 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
-  const codex = await runJobAndCaptureArgs({
-    ids: [t2.id], cwd: "/mock/repo", mode: "plan", engine: "codex",
-  });
-  assert.equal(codex[codex.indexOf("--sandbox") + 1], "workspace-write");
-  assert.ok(
-    !codex.includes("--dangerously-bypass-approvals-and-sandbox"),
-    "产 plan 不该整台机器敞开——codex 是唯一能收紧沙箱的",
-  );
-  // prompt 必须排在所有选项后面，它是位置参数
-  assert.equal(codex[codex.length - 1], codex.find((a) => a.includes("产实施 plan")));
-
-  // agy：无头模式只有「全自动批准」一档，边界只能靠 prompt
-  freshUserData();
-  const t3 = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
-  const agy = await runJobAndCaptureArgs({
-    ids: [t3.id], cwd: "/mock/repo", mode: "plan", engine: "agy",
-  });
-  assert.ok(agy.includes("--dangerously-skip-permissions"));
-  assert.ok(
-    !agy.includes("--mode"),
-    "别用 agy 自带的 --mode plan：语义没文档，可能连 plan.md 都写不出、还可能挡掉 MCP",
-  );
+    // 产 plan 要的是「只读扫影响面 + 写一份 plan.md」，只有 claude 能按工具名禁 Bash；
+    // codex 只能挑沙箱策略，agy 无头下只有「全自动批准」——所以这一档不给选
+    assert.match(bin, /claude/, `请求 ${requested} 时没切回 claude`);
+    assert.ok(!args.includes("--sandbox"), "不该走 codex 的参数");
+    assert.ok(
+      !args.includes("--dangerously-skip-permissions"),
+      "不该走 agy 的参数",
+    );
+    const deny = args.slice(args.indexOf("--disallowedTools") + 1);
+    assert.ok(deny.includes("Bash") && deny.includes("Edit"));
+    assert.ok(!deny.includes("Write"), "plan.md 要写得出来");
+  }
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("plan 档：三个引擎都要放行工作包目录，规范按各自能力送进去", async () => {
+test("工作包目录：三个引擎都要 --add-dir 放行，规范按各自能力送进去", async () => {
   const dir = freshWorkpackDir("# 工作规范\n必须逐张 Read 截图。");
 
-  for (const engine of ["claude", "codex", "agy"]) {
+  // 产 plan 固定走 claude，所以另外两个引擎拿只读档验证——要断言的是工作包
+  // 目录与规范怎么送进去，跟档位无关
+  for (const [engine, mode] of [["claude", "plan"], ["codex", "analyze"], ["agy", "analyze"]]) {
     freshUserData();
     const task = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
     const args = await runJobAndCaptureArgs({
-      ids: [task.id], cwd: "/mock/repo", mode: "plan", engine,
+      ids: [task.id], cwd: "/mock/repo", mode, engine,
     });
 
     // 工作包在仓库外，三个引擎都有 --add-dir，都得放行
@@ -1435,12 +1427,12 @@ test("plan 档：三个引擎都要放行工作包目录，规范按各自能力
     if (engine === "claude") {
       // 只有 claude 有 --append-system-prompt，规范注进 system prompt 跳不掉
       assert.match(args[args.indexOf("--append-system-prompt") + 1], /必须逐张 Read 截图/);
+      assert.match(args[args.indexOf("-p") + 1], /产实施 plan/);
     } else {
       // 另外两个没这个参数，规范只能拼进 prompt 正文
       assert.ok(!args.includes("--append-system-prompt"));
       const prompt = engine === "codex" ? args[args.length - 1] : args[args.indexOf("-p") + 1];
       assert.match(prompt, /必须逐张 Read 截图/, `${engine} 的规范没送进去`);
-      assert.match(prompt, /产实施 plan/, `${engine} 的 plan 档指引没送进去`);
     }
   }
 
@@ -1722,7 +1714,7 @@ test("/plan: 跟 /r 一样，没开自动派发就只备料进待处理，不起
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("/plan: 开了自动派发就开跑，力度固定 plan 档，引擎听预设", async () => {
+test("/plan: 开了自动派发就开跑，力度固定 plan 档，引擎固定 claude", async () => {
   freshUserData();
   setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: true, autoDispatchEngine: "agy", autoDispatchCreateBranch: false });
   const { handlePlanCommand } = await import("../src/feishu/listener.js");
@@ -1737,15 +1729,16 @@ test("/plan: 开了自动派发就开跑，力度固定 plan 档，引擎听预�
   restoreRun();
 
   assert.equal(calls.length, 1, "应该派出去一个 job");
-  assert.equal(calls[0].bin, "agy", "预设选了 agy，/plan 就该走 agy");
+  // 自动派发预设选的是 agy，但产 plan 这一档不跟随预设：只有 claude 能真禁 Bash
+  assert.match(calls[0].bin, /claude/, "产 plan 固定走 claude，不听引擎预设");
   const [task] = listTasks();
   assert.equal(task.lastRunConfig.mode, "plan");
-  assert.equal(task.lastRunConfig.engine, "agy");
+  assert.equal(task.lastRunConfig.engine, "claude");
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("/plan: 开了自动派发且预设 claude 时，走 plan 档的工具限制", async () => {
+test("/plan: 自动派发跑起来后，走 plan 档的工具限制", async () => {
   freshUserData();
   setSettings({ ackEnabled: false, autoDispatchCwd: "/mock/repo", autoDispatchEnabled: true, autoDispatchEngine: "claude" });
   const { handlePlanCommand } = await import("../src/feishu/listener.js");
@@ -2101,23 +2094,23 @@ test("req_scan 对所有档位都放行：影响面扫描是 plan 档唯一的�
   }
 });
 
-test("plan 档指引：对 claude 说没有 Bash，对 agy/codex 不说假话", async () => {
+test("plan 档指引：说没有 Bash，是因为这一档真禁了", async () => {
   const dir = freshWorkpackDir();
-  for (const engine of ["claude", "agy", "codex"]) {
+  // 请求 agy 也一样：引擎被强制切回 claude，Bash 是真 deny 掉的，这句不是虚张声势
+  for (const requested of ["claude", "agy"]) {
     freshUserData();
     const task = addTask({ title: "工作包", content: "产 plan", workpackDir: dir });
     const args = await runJobAndCaptureArgs({
-      ids: [task.id], cwd: "/mock/repo", mode: "plan", engine,
+      ids: [task.id], cwd: "/mock/repo", mode: "plan", engine: requested,
     });
-    const prompt = engine === "codex" ? args[args.length - 1] : args[args.indexOf("-p") + 1];
+    const prompt = args[args.indexOf("-p") + 1];
 
-    assert.match(prompt, /req_scan/, `${engine} 的指引里没提 req_scan`);
-    if (engine === "claude") {
-      assert.match(prompt, /没有 Bash/, "claude 档是真禁了，该说明白");
-    } else {
-      // agy/codex 其实有 Bash，说「没有」它一试就发现是假话，后半句也不信了
-      assert.ok(!/没有 Bash/.test(prompt), `${engine} 实际有 Bash，不该说没有`);
-    }
+    assert.match(prompt, /req_scan/, `请求 ${requested} 时指引里没提 req_scan`);
+    assert.match(prompt, /没有 Bash/);
+    assert.ok(
+      args.slice(args.indexOf("--disallowedTools") + 1).includes("Bash"),
+      "说了没有 Bash，就得真禁掉",
+    );
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });
