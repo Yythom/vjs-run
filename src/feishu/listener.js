@@ -767,8 +767,8 @@ export async function handlePlanCommand(evt, body, createdAt, messageId) {
    * 备好料的工作包任务怎么往下走。
    *
    * /plan 跟 /r 只差在「备料」这一步，状态流转是同一套：先进待处理，
-   * 开了「收到需求自动交给 AI」才自动派活，引擎、隔离分支也听预设规则；
-   * 唯一固定的是力度档——工作包要的产出就是 plan。白名单同样生效。
+   * 开了「收到需求自动交给 AI」才自动派活，隔离分支听预设规则；
+   * 力度档和引擎是固定的——工作包要的产出就是 plan，产 plan 只走 claude。白名单同样生效。
    */
   const launch = async (task, summary) => {
     const stopHere = async (why) => {
@@ -789,7 +789,8 @@ export async function handlePlanCommand(evt, body, createdAt, messageId) {
       return;
     }
 
-    const engine = settings.autoDispatchEngine || "claude";
+    // 产 plan 固定走 claude，不跟随自动派发的引擎设置（理由见 runner.enqueueJob）
+    const engine = "claude";
     const result = dispatchToAI({
       task,
       cwd: repoRoot,

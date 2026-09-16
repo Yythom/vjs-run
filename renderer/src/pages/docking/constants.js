@@ -83,23 +83,12 @@ export const RUN_MODE_SHORT = {
 //
 // 「产实施 plan」不在其中：那一档是为需求池工作包（带 context.md + skill.md）设计的，
 // /r 来的 IM 提问没有工作包，选了它只是多放行了 node 子进程，产不出带影响面的 plan。
-// /plan 指令自己固定走 plan 档 + Claude Code，也不从这里取。
+// /plan 指令自己固定走 plan 档 + Claude Code（引擎在 runner 里强制），也不从这里取。
 export const AUTO_DISPATCH_MODES = RUN_MODES.filter((m) => m.key !== "plan");
 
-// 「产实施 plan」档在三个引擎上的实际边界差很大，选之前得知道。
-// 它们的力度不是同一套机制：claude 能按工具名禁用，codex 能挑 OS 沙箱策略，
-// agy 无头模式下只有「全自动批准」一种。
-export const PLAN_MODE_LIMITS = {
-  claude: {
-    level: "最紧",
-    text: "Bash 整个禁掉，跑不了任何命令；影响面扫描走 req_scan 工具（参数结构化，扫哪个仓库由任务决定）。能写文件，但改不了现存文件",
-  },
-  codex: {
-    level: "居中",
-    text: "OS 沙箱设为 workspace-write：出不了工作目录与工作包，但范围内可以跑命令、改文件",
-  },
-  agy: {
-    level: "最松",
-    text: "无头模式只有「全自动批准」一档，不改业务代码全靠 prompt 约束——建议配合隔离 worktree",
-  },
+// 「产实施 plan」固定走 claude（见 runner.enqueueJob），这是它在这一档的实际边界。
+// 另外两个引擎给不了同样的约束：codex 只能挑 OS 沙箱策略，agy 无头下只有「全自动批准」。
+export const PLAN_MODE_LIMIT = {
+  level: "最紧",
+  text: "Bash 整个禁掉，跑不了任何命令；影响面扫描走 req_scan 工具（参数结构化，扫哪个仓库由任务决定）。能写文件，但改不了现存文件",
 };
