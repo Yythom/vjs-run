@@ -136,6 +136,7 @@ test("校验失败均非 0 退出并带原因", () => {
     [["set"], "缺少 --path"],
     [["set", "--method", "GET", "--path", "api/no-slash"], "必须以 \\/ 开头"],
     [["set", "--method", "GET", "--path", "/api/a", "--status", "abc"], "status 必须是整数"],
+    [["set", "--method", "GET", "--path", "/api/a", "--status", "2000"], "status 必须在 100–599 之间"],
     [["set", "--method", "GET", "--path", "/api/a", "--status"], "--status 需要一个整数值"],
     [["set", "--method", "GET", "--path", "/api/a", "--delay", "-1"], "delay 必须是大于等于 0 的整数"],
     [["set", "--method", "GET", "--path", "/api/a", "--delay"], "--delay 需要一个毫秒数"],

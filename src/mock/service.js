@@ -13,7 +13,7 @@ import {
   startMockServer,
 } from "./server.js";
 import { getConfig } from "../config/store.js";
-import { normalizeVariantsStrict } from "./variant-match.js";
+import { isValidHttpStatus, normalizeVariantsStrict } from "./variant-match.js";
 import { recordMockRequest } from "./history.js";
 import { handleRecordedEntry } from "./recorder.js";
 import { generateSwaggerSpecs } from "./generate-spec.js";
@@ -220,12 +220,22 @@ export function normalizeRulesForSave(rules = []) {
     if (!normalized.path) {
       throw new Error(`第 ${index + 1} 条规则缺少 path`);
     }
+    // 缺 method / "*" 的规则 server 永远不会命中（只在主进程 console.warn），
+    // 保存时就挡住，免得「规则启用了却从不生效」。导入场景 / 应用场景也走这里。
+    if (!normalized.method || normalized.method === "*") {
+      throw new Error(
+        `第 ${index + 1} 条规则（${normalized.path}）缺少具体 method，请改成 GET / POST 等`,
+      );
+    }
     const status =
       normalized.status !== undefined && normalized.status !== ""
         ? Number(normalized.status)
         : undefined;
     if (status !== undefined && !Number.isInteger(status)) {
       throw new Error(`第 ${index + 1} 条规则的 status 必须是整数`);
+    }
+    if (status !== undefined && !isValidHttpStatus(status)) {
+      throw new Error(`第 ${index + 1} 条规则的 status 必须在 100–599 之间：${status}`);
     }
     const delay =
       normalized.delay !== undefined && normalized.delay !== ""

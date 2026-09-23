@@ -17,9 +17,11 @@ import useResource from "../../hooks/use-resource";
 const statusText = z.string().refine(
   (v) => {
     const trimmed = v.trim();
-    return trimmed === "" || Number.isInteger(Number(trimmed));
+    if (trimmed === "") return true;
+    const status = Number(trimmed);
+    return Number.isInteger(status) && status >= 100 && status <= 599;
   },
-  { message: "HTTP status 必须是整数" },
+  { message: "HTTP status 必须是 100–599 的整数" },
 );
 
 const delayText = z.string().refine(

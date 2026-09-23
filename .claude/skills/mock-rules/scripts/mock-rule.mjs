@@ -135,6 +135,7 @@ function normalizeRule(rule) {
     if (typeof rule.status === "boolean") fail("--status 需要一个整数值，如 --status 200");
     const status = Number(rule.status);
     if (!Number.isInteger(status)) fail(`status 必须是整数：${rule.status}`);
+    if (status < 100 || status > 599) fail(`status 必须在 100–599 之间：${rule.status}`);
     out.status = status;
   }
   if (rule.delay !== undefined && rule.delay !== "") {
@@ -482,6 +483,7 @@ switch (command) {
       if (typeof statusInput === "boolean") fail("--status 需要一个整数值，如 --status 200");
       const status = Number(statusInput);
       if (!Number.isInteger(status)) fail(`status 必须是整数：${statusInput}`);
+      if (status < 100 || status > 599) fail(`status 必须在 100–599 之间：${statusInput}`);
       next.status = status;
     }
     const delayInput = flags.delay !== undefined ? flags.delay : existing?.delay;

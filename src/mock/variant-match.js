@@ -22,6 +22,12 @@ import isEqual from "lodash-es/isEqual.js";
 
 const VARIANT_NAME_MAX = 60;
 
+// 合法 HTTP 状态码：范围外的值 res.writeHead 会抛 ERR_HTTP_INVALID_STATUS_CODE，
+// 请求变成 500。保存路径（规则顶层 + 变体）都用它把关。
+export function isValidHttpStatus(status) {
+  return Number.isInteger(status) && status >= 100 && status <= 599;
+}
+
 // ─── 归一化 ──────────────────────────────────────────────────────────────────
 
 function isPlainObject(value) {
@@ -113,6 +119,9 @@ export function normalizeVariantStrict(variant, label) {
   if (variant.status !== undefined && variant.status !== "") {
     const status = Number(variant.status);
     if (!Number.isInteger(status)) throw new Error(`${label}的 status 必须是整数`);
+    if (!isValidHttpStatus(status)) {
+      throw new Error(`${label}的 status 必须在 100–599 之间：${status}`);
+    }
     out.status = status;
   }
   if (variant.delay !== undefined && variant.delay !== "") {
