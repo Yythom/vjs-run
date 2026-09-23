@@ -159,7 +159,14 @@ export function readSceneRules(scenesDir, name) {
   }
 }
 
+// 所有「从外部写场景文件」的入口（保存 / 覆盖 / 存入 / 编辑场景）都走这里，
+// 录制中的场景一律拒写：录制把规则攥在内存里，下一条请求到来就整份重写文件，
+// 外部写进去的内容会被悄悄冲掉。录制自身写盘走 writeRulesFileSync，不受影响。
 export function writeSceneRules(scenesDir, name, rules) {
+  const sceneName = sanitizeSceneName(name);
+  if (session && session.sceneName === sceneName) {
+    throw new Error(`场景「${sceneName}」正在录制中，请先停止录制再写入`);
+  }
   fs.mkdirSync(scenesDir, { recursive: true });
   writeRulesFileSync(sceneFilePath(scenesDir, name), rules);
   return sanitizeSceneName(name);
