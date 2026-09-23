@@ -1,29 +1,28 @@
-import { Suspense } from "react";
+import { Suspense, lazy } from "react";
 import { createPortal } from "react-dom";
 import { Route, Routes, useLocation } from "react-router";
 import { Toaster } from "sonner";
 import TitleBar from "./components/title-bar";
 import Sidebar from "./pages/sidebar";
+import ProjectDashboard from "./pages/project-dashboard";
 
 // ─── 按需 chunk ────────────────────────────────────────────────────────────────
-// Welcome / TitleBar / Sidebar 走主 chunk（首屏必需）。
-// 其它 page / modal 全部走 lazy：xterm（~70KB gzip）随 DetailPanel 进副 chunk，
-// mock-config + react-virtual 单独成 chunk，5 个 modal 各自一个 chunk。
-// 实测首屏 JS 砍掉 ~60%。
-import ProjectConsole from "./pages/project-console";
-import ProjectDashboard from "./pages/project-dashboard";
-import MockServiceDetail from "./pages/mock-service-detail";
-import MockConfigPage from "./pages/mock-config/mock-config-page";
-import MockHistoryPage from "./pages/mock-history";
-import SwaggerConvertPage from "./pages/swagger-convert-page";
-import SettingsPage from "./pages/settings-page";
-import EnvCheckPage from "./pages/env-check-page";
-import PortCheckerPage from "./pages/port-checker-page";
-import CleanupPage from "./pages/cleanup-page";
-import CodecPage from "./pages/codec-page";
-import WeappDeployPage from "./pages/weapp-deploy-page";
-import RepoEditorModal from "./modals/repo-editor-modal";
-import CleanModal from "./modals/clean-modal";
+// TitleBar / Sidebar / ProjectDashboard（默认首页）走主 chunk（首屏必需）。
+// 其它 page / modal 全部走 lazy：xterm 随日志控制台进副 chunk，
+// CodeMirror / react-virtual 随 mock 配置页进副 chunk，各 modal 各自一个 chunk。
+const ProjectConsole = lazy(() => import("./pages/project-console"));
+const MockServiceDetail = lazy(() => import("./pages/mock-service-detail"));
+const MockConfigPage = lazy(() => import("./pages/mock-config/mock-config-page"));
+const MockHistoryPage = lazy(() => import("./pages/mock-history"));
+const SwaggerConvertPage = lazy(() => import("./pages/swagger-convert-page"));
+const SettingsPage = lazy(() => import("./pages/settings-page"));
+const EnvCheckPage = lazy(() => import("./pages/env-check-page"));
+const PortCheckerPage = lazy(() => import("./pages/port-checker-page"));
+const CleanupPage = lazy(() => import("./pages/cleanup-page"));
+const CodecPage = lazy(() => import("./pages/codec-page"));
+const WeappDeployPage = lazy(() => import("./pages/weapp-deploy-page"));
+const RepoEditorModal = lazy(() => import("./modals/repo-editor-modal"));
+const CleanModal = lazy(() => import("./modals/clean-modal"));
 
 /**
  * 主区域路由（layout 之下的右侧面板）。
