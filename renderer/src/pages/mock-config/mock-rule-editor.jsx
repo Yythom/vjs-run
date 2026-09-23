@@ -921,9 +921,10 @@ export default function MockRuleEditor({
         enabled: shouldEnable ? true : values.enabled,
       };
 
-      await onSubmit(valuesToRule(finalValues));
+      // 用户在覆盖确认里取消 / 保存失败时，表单保持原样
+      const saved = await onSubmit(valuesToRule(finalValues));
 
-      if (shouldEnable) {
+      if (saved !== false && shouldEnable) {
         setValue("enabled", true, { shouldDirty: false });
       }
     } catch (e) {

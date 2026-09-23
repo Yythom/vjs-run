@@ -455,9 +455,9 @@ export default function MockConfigPage() {
       showToast(`已应用场景「${sceneName}」`, "success");
     });
 
-  // 与 server 的 findMockRule 保持一致：按 method 精确匹配，并按 mock-rules.json 的
-  // 数组顺序取第一条。顺序很重要——同一 path 有多条规则时，若按别的优先级去找，
-  // 编辑器里打开的会是没生效的那条。
+  // 按 method + path 字面精确查找（列表项与规则一一对应）。同一 method+path 有多条
+  // 规则时，server 的 findMockRule 具体度相同、按 mock-rules.json 数组顺序取第一条，
+  // 这里也取第一条——否则编辑器里打开的会是没生效的那条。
   // 按 path 分组只是为了保持 O(1) 查找，组内顺序仍是文件顺序。
   const rulesByPath = new Map();
   for (const rule of rules) {
@@ -519,24 +519,49 @@ export default function MockConfigPage() {
   const hasSavedRule =
     Boolean(editingKey) && rules.some((rule) => ruleKey(rule) === editingKey);
 
+  // 返回是否真的落盘，编辑器据此决定要不要同步表单里的「启用」状态
   const saveRule = async (nextRule) => {
     const newKey = ruleKey(nextRule);
-    const nextRules = [
-      ...rules.filter((rule) => {
-        const k = ruleKey(rule);
-        return k !== newKey && k !== editingKey;
-      }),
-      nextRule,
-    ];
+    // 改了 method/path 撞上「另一条」已有规则时，下面的 filter 会把它整条替换掉
+    // （连同变体），先让用户确认。同 key 覆盖（正常编辑 / 历史草稿）不拦。
+    const clashed =
+      newKey !== editingKey && rules.find((rule) => ruleKey(rule) === newKey);
+    if (clashed) {
+      const variantCount = Array.isArray(clashed.variants) ? clashed.variants.length : 0;
+      const ok = await confirm({
+        title: "覆盖已有规则？",
+        message:
+          `${newKey} 已经有一条规则${variantCount ? `（含 ${variantCount} 个变体）` : ""}。\n\n` +
+          `继续保存会用当前内容整条替换它，原规则不可恢复。`,
+        confirmText: "覆盖",
+        danger: true,
+      });
+      if (!ok) return false;
+    }
+    // 原地替换，不挪到末尾：server 在具体程度相同的规则间按数组顺序取第一条，
+    // 编辑一次就挪到最后会悄悄改变「谁先命中」，文件 diff 也会一团乱。
+    // 位置取被编辑规则原来的位置；新建 / 草稿则取被覆盖的同 key 规则的位置；都没有才追加。
+    const editingIndex = rules.findIndex((rule) => ruleKey(rule) === editingKey);
+    const slot =
+      editingIndex >= 0
+        ? editingIndex
+        : rules.findIndex((rule) => ruleKey(rule) === newKey);
+    const nextRules = rules.flatMap((rule, index) => {
+      if (index === slot) return [nextRule];
+      const k = ruleKey(rule);
+      return k === newKey || k === editingKey ? [] : [rule];
+    });
+    if (slot < 0) nextRules.push(nextRule);
 
     const saved = await saveRules(nextRules);
-    if (!saved) return;
+    if (!saved) return false;
     editorDirtyRef.current = false;
     setSelectedKey(newKey);
     showToast(
       editingScene ? `规则已保存到场景「${editingScene}」` : "Mock 规则已保存",
       "success",
     );
+    return true;
   };
 
   // 列表内联开关：即时落盘，语义与编辑器一致（不再走「待保存」批量）。
