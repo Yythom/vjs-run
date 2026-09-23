@@ -171,6 +171,22 @@ test("PROXY：swagger 有定义但无 mock 理由时转发到后端，并带上 
   });
 });
 
+test("PROXY：后端一次写多个 Set-Cookie，转发后一条都不能丢", async () => {
+  // setHeader 是覆盖写，逐条透传 set-cookie 只会剩最后一条（登录接口丢 token）
+  const { specPath } = fixture();
+  const cookies = ["VJTOKEN=abc; Path=/", "TOKEN=xyz; Path=/; Expires=Wed, 21 Oct 2037 07:28:00 GMT"];
+  await withBackend(
+    () => ({ headers: { "content-type": "application/json", "set-cookie": cookies } }),
+    async ({ url }) => {
+      await withServer({ specPath, backendBaseUrl: url }, async ({ get }) => {
+        const res = await get("/api/users");
+        assert.equal(res.headers.get("x-mock-proxy"), "true");
+        assert.deepEqual(res.headers.getSetCookie(), cookies);
+      });
+    },
+  );
+});
+
 test("404 MISS：swagger 外的路径 + 无规则 + 无后端", async () => {
   const { specPath } = fixture();
   await withServer({ specPath }, async ({ get }) => {

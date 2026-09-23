@@ -1192,15 +1192,20 @@ async function proxyRequest(
       redirect: "manual",
     });
 
+    // set-cookie 单独处理：forEach 会把多条 set-cookie 逐条回调，而 setHeader
+    // 是覆盖写，逐条设只会剩最后一条（登录接口一次写多个 cookie 时丢 token）。
+    // getSetCookie() 拿到全部，传数组给 setHeader 才会输出成多行 Set-Cookie。
     response.headers.forEach((value, key) => {
       if (
-        !["content-encoding", "content-length", "transfer-encoding"].includes(
+        !["content-encoding", "content-length", "transfer-encoding", "set-cookie"].includes(
           key.toLowerCase(),
         )
       ) {
         res.setHeader(key, value);
       }
     });
+    const setCookies = response.headers.getSetCookie();
+    if (setCookies.length) res.setHeader("set-cookie", setCookies);
     res.setHeader("x-mock-proxy", "true");
     // 与 mock 分支统一：消费方只看 x-mock-source 就能判断这次是回源还是 mock
     res.setHeader("x-mock-source", "proxy");
