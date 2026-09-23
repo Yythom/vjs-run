@@ -7,6 +7,10 @@ import { exec } from "node:child_process";
 // 重启 mock（改配置触发）时若不排除本进程 PID，会把 App 自己 kill 掉 → 闪退。
 // 所以通过 awk 过滤掉 process.pid，只清理上一轮残留的「别的」进程。
 //
+// 必须带 -sTCP:LISTEN：裸 `-i :port` 会把「连着这个端口的客户端」也列出来
+// （如 keep-alive 连到 mock 的 vite 代理、浏览器），不加就会把它们一起杀掉。
+// -t 只输出去重后的 PID，省掉跳标题行。
+//
 // 本应用目前是 macOS-only，故不再保留 Windows 分支（原 kill-port 分支也没做
 // self-pid 排除，在 Windows 上反而会自杀）。
 export async function killPort(port) {
@@ -18,7 +22,7 @@ export async function killPort(port) {
 
   return new Promise((resolve) => {
     exec(
-      `/usr/sbin/lsof -nP -i :${numericPort} | awk 'NR>1 && $2 != ${selfPid} {print $2}' | xargs kill 2>/dev/null || true`,
+      `/usr/sbin/lsof -nP -t -iTCP:${numericPort} -sTCP:LISTEN | awk '$1 != ${selfPid}' | xargs kill 2>/dev/null || true`,
       { shell: "/bin/zsh" },
       () => resolve(),
     );
