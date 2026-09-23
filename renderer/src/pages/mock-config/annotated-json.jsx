@@ -86,9 +86,14 @@ export function buildAnnotatedLines(
 export function CopyJsonButton({ text }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    // 写入成功才提示，失败时保持原样，避免误报「已复制」
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
   };
   return (
     <button

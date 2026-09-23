@@ -385,6 +385,33 @@ test("响应示例：套信封时字段描述整体加 data. 前缀", () => {
   assert.equal(totalField?.description, "总数");
 });
 
+test("响应示例：只有非 2xx 响应时不套信封，保留 swagger 定义的结构", () => {
+  const route = routeFrom({
+    responses: {
+      400: {
+        description: "参数错误",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: { field: { type: "string", description: "出错字段" } },
+            },
+          },
+        },
+      },
+    },
+  });
+  const response = getResponseSchema(route, {
+    wrapSample: (sample) => ({ rc: 40000, code: "MOCK_400", message: "参数错误", data: sample }),
+  });
+
+  assert.equal(response.status, "400");
+  assert.equal(typeof response.sample.field, "string");
+  assert.equal(response.sample.rc, undefined);
+  assert.equal(response.descriptions.field, "出错字段");
+  assert.equal(response.descriptions["data.field"], undefined);
+});
+
 test("响应示例：没有 responses / 没有 schema 都返回 null，不抛错", () => {
   assert.equal(getResponseSchema(routeFrom({ responses: {} })), null);
   assert.equal(

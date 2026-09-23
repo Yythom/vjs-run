@@ -186,7 +186,9 @@ export function getResponseSchema(route, { wrapSample } = {}) {
     let descriptions = extractBodyDescriptions(schema, route.spec);
     let sample = raw;
 
-    if (typeof wrapSample === "function") {
+    // 只给 2xx 套信封：非 2xx 套上后会被换成固定的错误信封，swagger 定义的结构
+    // 整个丢失，而这里要展示的恰恰是接口定义本身
+    if (/^2\d\d$/.test(responseKey) && typeof wrapSample === "function") {
       const wrapped = wrapSample(raw, definition, responseKey);
       // 采样被原样塞进 data（引用相等即可判定）时才加前缀；schema 本身就是
       // 信封结构的接口，套信封只补外层字段，路径不变。
