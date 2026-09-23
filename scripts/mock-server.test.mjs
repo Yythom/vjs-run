@@ -804,6 +804,53 @@ test("代理失败：后端连不上时返回 502 PROXY_ERR，并记录 proxy-er
   });
 });
 
+// ─── 多条规则同时命中：具体路径优先 ──────────────────────────────────────────
+
+test("多条规则命中同一请求：字面路径优先于 {param}，与文件顺序无关", async () => {
+  // {id} 故意排在前面：按文件顺序 first-match 时 /me 会被它截胡
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      { method: "GET", path: "/api/users/{id}", response: { who: "generic" } },
+      { method: "GET", path: "/api/users/me", response: { who: "me" } },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const me = await get("/api/users/me");
+    assert.deepEqual(await me.json(), { who: "me" });
+    assert.equal(me.headers.get("x-mock-rule"), encodeURIComponent("/api/users/me"));
+    assert.deepEqual(await (await get("/api/users/7")).json(), { who: "generic" });
+  });
+});
+
+test("swagger 外的自定义路径同样具体优先", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      { method: "GET", path: "/api/legacy/{x}", response: { who: "generic" } },
+      { method: "GET", path: "/api/legacy/special", response: { who: "special" } },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    assert.deepEqual(await (await get("/api/legacy/special")).json(), { who: "special" });
+    assert.deepEqual(await (await get("/api/legacy/other")).json(), { who: "generic" });
+  });
+});
+
+test("具体度相同时按文件顺序；停用的具体规则不挡通用规则", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      // 两条打分相同（各一个 {param}），都能命中 /api/t/y/z
+      { method: "GET", path: "/api/t/{a}/z", response: { who: "first" } },
+      { method: "GET", path: "/api/t/y/{b}", response: { who: "second" } },
+      { method: "GET", path: "/api/users/me", enabled: false, response: { who: "me" } },
+      { method: "GET", path: "/api/users/{id}", response: { who: "generic" } },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    assert.deepEqual(await (await get("/api/t/y/z")).json(), { who: "first" });
+    assert.deepEqual(await (await get("/api/users/me")).json(), { who: "generic" });
+  });
+});
+
 // ─── 变体全不命中时的代理回退 ────────────────────────────────────────────────
 
 test("只有变体、全不命中、无顶层 response → 转发后端，且已消费的 body 必须补传", async () => {

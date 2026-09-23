@@ -1111,15 +1111,27 @@ function getRuleRegex(rule) {
   return regex;
 }
 
+// 多条启用的规则都能命中时，路径最具体的赢（与 swagger 路由的 compareRoutes 同一套
+// 打分：字面段 10 分、{param} 段 1 分），/api/users/me 不会被 /api/users/{id} 截胡；
+// 分数相同时按文件顺序取第一条。正则锚定且 {param} 只吃一段，能命中同一 pathname
+// 的规则段数必然相同，分数可直接比。
 function findMockRule(mockRulesFile, method, pathname) {
   const normalizedMethod = method.toUpperCase();
-  return loadMockRules(mockRulesFile).find((rule) => {
+  let best;
+  let bestScore = -1;
+  for (const rule of loadMockRules(mockRulesFile)) {
     // method 为空的（缺省 / "*" / 字符串简写）在 normalizeMockRule 里已经警告过，
     // 这里让它匹配不上任何请求即可
-    if (!rule.enabled || !rule.path || !rule.method) return false;
-    if (rule.method !== normalizedMethod) return false;
-    return getRuleRegex(rule).test(pathname);
-  });
+    if (!rule.enabled || !rule.path || !rule.method) continue;
+    if (rule.method !== normalizedMethod) continue;
+    if (!getRuleRegex(rule).test(pathname)) continue;
+    const score = routeSpecificity(rule.path);
+    if (score > bestScore) {
+      best = rule;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 function loadMockOverride(route, mockDataDir) {

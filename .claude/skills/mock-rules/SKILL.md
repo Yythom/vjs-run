@@ -109,8 +109,9 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
   操作本来就绑定在某个 method 上，规则没理由更宽松。
 - `method` 写成 `"*"` 或干脆没写的规则**一条都不会命中**，mock 服务加载规则时会打
   警告点名是哪条。CLI 也拒收 `--method '*'`，从源头堵住。
-- 匹配是 **first-match**：按数组顺序逐条试，第一条命中即生效。`/api/user/{id}` 与
-  `/api/user/123` 并存时排前面的赢——「改了规则却没生效」先 `list` 看顺序有没有被截胡。
+- 多条启用的规则都能命中时，**路径最具体的赢**：字面段优先于 `{param}` 段（与 swagger
+  路由匹配同一套打分），`/api/user/123` 与 `/api/user/{id}` 并存时，请求 `/api/user/123`
+  命中前者，与数组顺序无关。只有具体程度相同（如 `/a/{x}/c` 与 `/a/b/{y}`）才按数组顺序取第一条。
 - 只带 `status`/`delay`、**不带 `response` 的规则，仅对 swagger spec 里已有的路径生效**
   （强制改状态码/加延迟）；spec 之外的路径必须带 `response` 才会被拦截，否则规则静默不生效。
   所以「让 /api/xxx 返回 500」这类需求，spec 外的路径要连 body 一起给。
@@ -291,7 +292,7 @@ curl -fsS "$BASE/__mock/search?q=user"
 |---|---|
 | curl 全部连不上 | `/__mock/health`；不通就是 server 没跑，让用户启动，别改文件 |
 | `/__mock/rules` 里没有你写的规则 | 写进场景了但没「应用」（最常见）；或 `--file`/`--scene` 指向了别处 |
-| 规则在 `/__mock/rules` 里但没生效 | 先看 `method` 是不是 `"*"` 或没写——这类规则一条都不会命中（mock 启动日志有警告）；再 `list` 看顺序，是否被前面的规则 first-match 截胡 |
+| 规则在 `/__mock/rules` 里但没生效 | 先看 `method` 是不是 `"*"` 或没写——这类规则一条都不会命中（mock 启动日志有警告）；再看是否有更具体的同 method 规则先命中（字面路径优先于 `{param}`；具体程度相同才看数组顺序） |
 | 返回的 body 比你写的多了一层 `{rc,code,message,data}` | 正常，见「信封化」一节；要原样就自己写成完整信封 |
 | 响应头 `x-mock-source: proxy`（或 `x-mock-proxy: true`） | 走的是真实后端，没命中 mock，回到上面三条 |
 | 分不清命中的是规则、变体、override 还是生成样本 | 看 `x-mock-source` / `x-mock-rule` / `x-mock-variant` 响应头（取值与编码见「处置顺序」第 4-5 条） |
