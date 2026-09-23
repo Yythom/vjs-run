@@ -279,11 +279,20 @@ async function generateJson({ jsonPath, apiUrl, errorUrl, onLog }) {
     await Promise.all(requestTasks.slice(i, i + chunkSize).map((task) => task()));
   }
 
-  await fs.promises.writeFile(
-    jsonPath,
-    JSON.stringify(shadow).replaceAll('"*/*"', '"application/json"'),
-    { flag: "w" },
-  );
+  // 先写临时文件再 rename 覆盖：写到一半失败时旧文件原样保留，
+  // mock server 的 chokidar 也不会读到半个 json。.tmp 后缀不在 spec 加载的
+  // 扩展名白名单里，不会被当成 spec。
+  const tmpPath = `${jsonPath}.tmp`;
+  try {
+    await fs.promises.writeFile(
+      tmpPath,
+      JSON.stringify(shadow).replaceAll('"*/*"', '"application/json"'),
+    );
+    await fs.promises.rename(tmpPath, jsonPath);
+  } catch (err) {
+    await fs.promises.rm(tmpPath, { force: true });
+    throw err;
+  }
 }
 
 // ─── 对外入口 ────────────────────────────────────────────────────────────────
@@ -298,8 +307,11 @@ export function isGeneratedSpecFile(name) {
 
 /**
  * 生成 Swagger Mock OpenAPI JSON 目录。
- * 生成前清理旧产物（只删本工具会写的那几个 json，不动目录里的其他文件——
- * 目录填错时不至于把别的东西删光），再逐个服务写入 {outputDir}/{type}.json。
+ * 逐个服务写入 {outputDir}/{type}.json，成功的原子覆盖旧文件。
+ *
+ * 不预先删除旧产物：swagger 服务器 / converter 不可达（没开 VPN 等）时各服务
+ * 全部失败，先删就会把目录清空，mock 从此起不来。失败的服务保留上一次的文件，
+ * 只动本工具会写的那几个 json，不碰目录里的其他文件。
  * 任一服务生成失败时抛错。
  */
 export async function generateSwaggerSpecs({ serverUrl, outputDir, onLog }) {
@@ -307,13 +319,6 @@ export async function generateSwaggerSpecs({ serverUrl, outputDir, onLog }) {
   if (!server) throw new Error("未配置 swagger 接口服务器地址");
 
   await fs.promises.mkdir(outputDir, { recursive: true });
-  const stale = (await fs.promises.readdir(outputDir)).filter(
-    isGeneratedSpecFile,
-  );
-  for (const name of stale) {
-    await fs.promises.rm(path.resolve(outputDir, name), { force: true });
-  }
-  if (stale.length) onLog?.(`清理旧产物 ${stale.length} 个文件`);
 
   const generated = [];
   const failed = [];
@@ -329,7 +334,7 @@ export async function generateSwaggerSpecs({ serverUrl, outputDir, onLog }) {
         onLog?.(`✔ ${projectType}.json 生成完成`);
       } catch (err) {
         failed.push({ type: projectType, message: err.message });
-        onLog?.(`✗ ${projectType}.json 生成失败: ${err.message}`);
+        onLog?.(`✗ ${projectType}.json 生成失败（保留上一次的文件）: ${err.message}`);
       }
     }),
   );

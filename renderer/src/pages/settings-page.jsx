@@ -85,7 +85,7 @@ export default function SettingsPage() {
       return;
     }
 
-    // 生成会清理目录里的旧产物。目录里若还有别的文件，多半是路径填错了（填成了
+    // 生成会覆盖目录里的各服务 json。目录里若还有别的文件，多半是路径填错了（填成了
     // 某个真实工程目录），先让用户确认一次。
     const dirInfo = await window.electronAPI.inspectSpecDir(nextMockSpecPath);
     if (!dirInfo?.success) {
