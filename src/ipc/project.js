@@ -15,10 +15,13 @@ import {
 } from "../process-manager.js";
 import { MOCK_ID, isMockRunning } from "../mock/service.js";
 import { getLog } from "../log-buffer.js";
+import { flushLogs } from "../ui-channel.js";
 import { createSecondaryWindow } from "../services/window.js";
 
 export function registerProjectIpc() {
   ipcMain.handle("get-project-log", (_, projectId) => {
+    // 攒批中的日志先落进缓冲，拉到的历史才是完整的
+    flushLogs();
     return getLog(projectId);
   });
 

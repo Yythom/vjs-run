@@ -29,16 +29,43 @@ export function sendToAllWindows(channel, payload) {
 
 import { appendLog, clearLog } from "./log-buffer.js";
 
+// dev server 输出密集时 stdout 每秒能来上百个小 chunk，逐个 IPC 会让主进程和渲染层
+// 都忙于收发。这里按 projectId 攒一小段时间再合并成一条发出去，肉眼察觉不到延迟。
+const LOG_FLUSH_INTERVAL_MS = 30;
+const pendingLogs = new Map(); // projectId -> string[]
+let flushTimer = null;
+
+export function flushLogs() {
+  if (flushTimer) {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  for (const [projectId, chunks] of pendingLogs) {
+    const data = chunks.join("");
+    appendLog(projectId, data);
+    sendToAllWindows("process-log", { projectId, data });
+  }
+  pendingLogs.clear();
+}
+
 export function sendLog(projectId, data) {
   if (data === null) {
+    // 清空必须排在之前攒下的日志后面，否则清空后又冒出旧日志
+    flushLogs();
     clearLog(projectId);
-  } else {
-    appendLog(projectId, data);
+    sendToAllWindows("process-log", { projectId, data });
+    return;
   }
-  sendToAllWindows("process-log", { projectId, data });
+  if (!data) return;
+  const chunks = pendingLogs.get(projectId);
+  if (chunks) chunks.push(data);
+  else pendingLogs.set(projectId, [data]);
+  flushTimer ??= setTimeout(flushLogs, LOG_FLUSH_INTERVAL_MS);
 }
 
 export function sendStatus(projectId, status) {
+  // 状态变化前先把日志推完，保证「■ Process exited」这类收尾日志先于状态到达
+  flushLogs();
   sendToAllWindows("process-status", { projectId, status });
 }
 

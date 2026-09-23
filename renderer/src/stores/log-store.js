@@ -7,7 +7,7 @@
  *
  * 订阅者签名：(chunk: string | null, full: string) => void
  *   - chunk = string → 增量追加
- *   - chunk = null   → 整段被清空 / 截断，订阅者应当 reset 后重写 full
+ *   - chunk = null   → 整段被清空，订阅者应当 reset 后重写 full
  */
 
 const MAX = 500_000; // 单个 buffer 上限
@@ -32,17 +32,11 @@ function notify(id, chunk, full) {
 
 export function append(id, chunk) {
   if (!chunk) return;
-  const prev = buffers.get(id) || "";
-  const merged = prev + chunk;
-  const capped = capBuffer(merged);
+  const capped = capBuffer((buffers.get(id) || "") + chunk);
   buffers.set(id, capped);
-
-  // 如果发生了截断，订阅者需要 reset 后重写整段（chunk = null）
-  if (capped.length !== merged.length) {
-    notify(id, null, capped);
-  } else {
-    notify(id, chunk, capped);
-  }
+  // 截断只是限制内存里 buffer 的大小，照样按增量通知：已打开的终端有自己的
+  // scrollback 上限，没必要 reset 后重写几百 KB（那会造成周期性卡顿并丢失滚动位置）
+  notify(id, chunk, capped);
 }
 
 export function clear(id) {
