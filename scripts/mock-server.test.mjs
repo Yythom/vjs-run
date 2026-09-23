@@ -804,6 +804,16 @@ test("代理失败：后端连不上时返回 502 PROXY_ERR，并记录 proxy-er
   });
 });
 
+test("路径参数含非法 % 编码：按原值当参数，不再 500", async () => {
+  // decodeURIComponent("%E0") 抛 URIError，以前会冒泡成 500
+  const { specPath } = fixture();
+  await withServer({ specPath, mockAll: true }, async ({ get }) => {
+    const res = await get("/api/users/%E0");
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("x-mock-source"), "openapi-sample");
+  });
+});
+
 // ─── 多条规则同时命中：具体路径优先 ──────────────────────────────────────────
 
 test("多条规则命中同一请求：字面路径优先于 {param}，与文件顺序无关", async () => {

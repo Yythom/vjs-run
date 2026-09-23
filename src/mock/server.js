@@ -609,7 +609,7 @@ function buildRoutes(spec, sourcePath = "", serviceAddress = "") {
               return Object.fromEntries(
                 paramNames.map((name, index) => [
                   name,
-                  decodeURIComponent(match[index + 1]),
+                  safeDecodeURIComponent(match[index + 1]),
                 ]),
               );
             },
@@ -1561,6 +1561,16 @@ function renderMockUi() {
   </script>
 </body>
 </html>`;
+}
+
+// 路径参数解码：非法 % 编码（如 /api/users/%E0）decodeURIComponent 会抛 URIError，
+// 冒泡到顶层就成了 500。解不了就按原样当参数值，请求照常走 mock / 透传。
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function escapeRegex(value) {
