@@ -73,6 +73,7 @@ export function stopAllProcesses() {
  */
 export async function startProject(project, repo) {
   const { id, command } = project;
+  const env = await buildSpawnEnv();
 
   const existing = runningProcesses.get(id);
   if (existing) {
@@ -92,7 +93,7 @@ export async function startProject(project, repo) {
 
   const proc = spawn(command, [], {
     cwd: repo.path,
-    env: buildSpawnEnv(),
+    env,
     shell: "/bin/zsh",
     detached: true,
   });
@@ -149,12 +150,13 @@ export async function startProject(project, repo) {
  * 在给定 cwd 下执行命令，stdout/stderr 实时流到指定日志面板。
  * env 为附加环境变量，会覆盖 buildSpawnEnv() 的同名项（不传则完全沿用基础环境）。
  */
-export function runStreaming(projectId, cmd, { cwd, env, onChild } = {}) {
+export async function runStreaming(projectId, cmd, { cwd, env, onChild } = {}) {
+  const spawnEnv = await buildSpawnEnv(env);
   return new Promise((resolve, reject) => {
     sendLog(projectId, `\x1b[2m$ ${cmd}\x1b[0m\n`);
     const proc = spawn(cmd, [], {
       cwd,
-      env: buildSpawnEnv(env),
+      env: spawnEnv,
       shell: "/bin/zsh",
       detached: false,
     });

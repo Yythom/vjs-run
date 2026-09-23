@@ -58,9 +58,10 @@ const ENV_TOOLS = [
   },
 ];
 
-function checkOneEnvTool({ id, label, cmd, install }) {
+async function checkOneEnvTool({ id, label, cmd, install }) {
+  const env = await buildSpawnEnv();
   return new Promise((resolve) => {
-    exec(cmd, { env: buildSpawnEnv() }, (err, stdout) => {
+    exec(cmd, { env }, (err, stdout) => {
       if (err || !stdout.trim()) {
         resolve({ id, label, cmd, install, version: null, status: "missing" });
         return;
@@ -80,12 +81,13 @@ function checkOneEnvTool({ id, label, cmd, install }) {
 
 // ─── 端口占用查看（check-ports）────────────────────────────────────────────────
 
-function inspectOnePort(port) {
+async function inspectOnePort(port) {
+  const env = await buildSpawnEnv();
   return new Promise((resolve) => {
     // lsof -P 不解析端口名，-n 不解析主机名，速度更快
     exec(
       `/usr/sbin/lsof -iTCP:${port} -sTCP:LISTEN -P -n`,
-      { env: buildSpawnEnv() },
+      { env },
       (err, stdout) => {
         if (err || !stdout.trim()) {
           resolve({ port, inUse: false, pid: null, name: null });

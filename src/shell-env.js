@@ -5,9 +5,10 @@
 
 import path from "node:path";
 import os from "node:os";
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 
-let cachedShellEnv = null;
+// 缓存的是 Promise 而不是结果：预热和首次启动项目几乎同时发生时共用同一次 zsh 调用
+let shellEnvPromise = null;
 
 function mergePathSegments(...segmentsList) {
   const uniq = [];
@@ -21,40 +22,51 @@ function mergePathSegments(...segmentsList) {
   return uniq.join(path.delimiter);
 }
 
-function getHydratedShellEnv() {
-  if (cachedShellEnv) return cachedShellEnv;
-
+function parseEnvOutput(buffer) {
   const env = {};
-  try {
-    // `command env` 规避用户把 env 设成别名/函数；`-0` 用 NUL 分隔（值里可能含换行/空格）。
-    const shellOut = execSync("/bin/zsh -ilc 'command env -0'", {
-      encoding: "buffer",
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 1024 * 1024 * 4,
-      // 抑制 oh-my-zsh 自动更新提示 / tmux 插件自启，避免阻塞这次取值
-      env: {
-        ...process.env,
-        DISABLE_AUTO_UPDATE: "true",
-        ZSH_TMUX_AUTOSTART: "false",
-      },
-    });
-    // 注意是 NUL 分隔，不是空格——否则多条 env 会被拼进一个值，触发 Node「值含 \0」校验
-    for (const entry of shellOut.toString("utf8").split("\0")) {
-      if (!entry) continue;
-      const eqIndex = entry.indexOf("=");
-      if (eqIndex <= 0) continue;
-      env[entry.slice(0, eqIndex)] = entry.slice(eqIndex + 1);
-    }
-  } catch (_) {
-    // 读不到 shell env 不致命，退化为空对象继续走 PATH 兜底
+  // 注意是 NUL 分隔，不是空格——否则多条 env 会被拼进一个值，触发 Node「值含 \0」校验
+  for (const entry of buffer.toString("utf8").split("\0")) {
+    if (!entry) continue;
+    const eqIndex = entry.indexOf("=");
+    if (eqIndex <= 0) continue;
+    env[entry.slice(0, eqIndex)] = entry.slice(eqIndex + 1);
   }
-
-  cachedShellEnv = env;
-  return cachedShellEnv;
+  return env;
 }
 
-export function buildSpawnEnv(extra = {}) {
-  const shellEnv = getHydratedShellEnv();
+// 异步执行：重 zshrc（nvm/oh-my-zsh/p10k 等）要 1-3 秒，用 execSync 会把整个主进程
+// 事件循环卡住，期间渲染层的所有 IPC（拉 config、项目列表）都得排队。
+function getHydratedShellEnv() {
+  if (shellEnvPromise) return shellEnvPromise;
+  shellEnvPromise = new Promise((resolve) => {
+    // `command env` 规避用户把 env 设成别名/函数；`-0` 用 NUL 分隔（值里可能含换行/空格）。
+    const child = execFile(
+      "/bin/zsh",
+      ["-ilc", "command env -0"],
+      {
+        encoding: "buffer",
+        maxBuffer: 1024 * 1024 * 4,
+        // 抑制 oh-my-zsh 自动更新提示 / tmux 插件自启，避免阻塞这次取值
+        env: {
+          ...process.env,
+          DISABLE_AUTO_UPDATE: "true",
+          ZSH_TMUX_AUTOSTART: "false",
+        },
+      },
+      (err, stdout) => {
+        // 读不到 shell env 不致命，退化为空对象继续走 PATH 兜底
+        resolve(err ? {} : parseEnvOutput(stdout));
+      },
+    );
+    // execFile 的 stdin 默认是 pipe：立即关掉，等同原来的 stdio "ignore"，
+    // 防止 zshrc 里有读 stdin 的东西把这次调用挂住
+    child.stdin?.end();
+  });
+  return shellEnvPromise;
+}
+
+export async function buildSpawnEnv(extra = {}) {
+  const shellEnv = await getHydratedShellEnv();
   const basePath = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
   const shellPath = (shellEnv.PATH || "").split(path.delimiter).filter(Boolean);
   const guessed = [

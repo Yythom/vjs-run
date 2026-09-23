@@ -93,14 +93,8 @@ app
 
     // d) 预热 shell-env：buildSpawnEnv 第一次调用要跑 `zsh -ilc 'env -0'`，
     //    重 zshrc（nvm/oh-my-zsh/p10k 等）能耗时 1-3 秒，会让用户「第一次点 ▶ 启动」明显卡顿。
-    //    setImmediate 让出当前 tick，先把窗口画出来再去执行 execSync。
-    setImmediate(() => {
-      try {
-        buildSpawnEnv();
-      } catch (err) {
-        console.error("[shell-env prewarm]", err);
-      }
-    });
+    //    异步执行不阻塞主进程；结果按 Promise 缓存，之后的调用直接复用。
+    buildSpawnEnv().catch((err) => console.error("[shell-env prewarm]", err));
   })
   .catch((err) => {
     dialog.showErrorBox("启动失败", err?.message || String(err));

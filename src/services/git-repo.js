@@ -17,7 +17,7 @@ async function git(repoPath, args) {
   try {
     const { stdout } = await execFileAsync("git", args, {
       cwd: repoPath,
-      env: buildSpawnEnv(),
+      env: await buildSpawnEnv(),
       maxBuffer: 1024 * 1024 * 4,
     });
     return stdout;
