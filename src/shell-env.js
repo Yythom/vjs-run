@@ -5,10 +5,19 @@
 
 import path from "node:path";
 import os from "node:os";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 
 // 缓存的是 Promise 而不是结果：预热和首次启动项目几乎同时发生时共用同一次 zsh 调用
 let shellEnvPromise = null;
+// 解析完成后的结果，给同步调用方（buildSpawnEnvSync）直接取
+let shellEnvResolved = null;
+
+const ZSH_ARGS = ["-ilc", "command env -0"];
+
+function zshEnv() {
+  // 抑制 oh-my-zsh 自动更新提示 / tmux 插件自启，避免阻塞这次取值
+  return { ...process.env, DISABLE_AUTO_UPDATE: "true", ZSH_TMUX_AUTOSTART: "false" };
+}
 
 function mergePathSegments(...segmentsList) {
   const uniq = [];
@@ -42,20 +51,12 @@ function getHydratedShellEnv() {
     // `command env` 规避用户把 env 设成别名/函数；`-0` 用 NUL 分隔（值里可能含换行/空格）。
     const child = execFile(
       "/bin/zsh",
-      ["-ilc", "command env -0"],
-      {
-        encoding: "buffer",
-        maxBuffer: 1024 * 1024 * 4,
-        // 抑制 oh-my-zsh 自动更新提示 / tmux 插件自启，避免阻塞这次取值
-        env: {
-          ...process.env,
-          DISABLE_AUTO_UPDATE: "true",
-          ZSH_TMUX_AUTOSTART: "false",
-        },
-      },
+      ZSH_ARGS,
+      { encoding: "buffer", maxBuffer: 1024 * 1024 * 4, env: zshEnv() },
       (err, stdout) => {
         // 读不到 shell env 不致命，退化为空对象继续走 PATH 兜底
-        resolve(err ? {} : parseEnvOutput(stdout));
+        if (!shellEnvResolved) shellEnvResolved = err ? {} : parseEnvOutput(stdout);
+        resolve(shellEnvResolved);
       },
     );
     // execFile 的 stdin 默认是 pipe：立即关掉，等同原来的 stdio "ignore"，
@@ -65,8 +66,33 @@ function getHydratedShellEnv() {
   return shellEnvPromise;
 }
 
+// 同步版：main 启动时已预热，正常情况下直接命中缓存；预热还没回来时才阻塞跑一次 zsh 兜底。
+// 仅给没法改成 async 的调用方用（同步返回进程句柄 / 同步判断），其余一律用 buildSpawnEnv。
+function getHydratedShellEnvSync() {
+  if (shellEnvResolved) return shellEnvResolved;
+  try {
+    shellEnvResolved = parseEnvOutput(
+      execFileSync("/bin/zsh", ZSH_ARGS, {
+        maxBuffer: 1024 * 1024 * 4,
+        env: zshEnv(),
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+  } catch (_) {
+    shellEnvResolved = {};
+  }
+  return shellEnvResolved;
+}
+
 export async function buildSpawnEnv(extra = {}) {
-  const shellEnv = await getHydratedShellEnv();
+  return composeSpawnEnv(await getHydratedShellEnv(), extra);
+}
+
+export function buildSpawnEnvSync(extra = {}) {
+  return composeSpawnEnv(getHydratedShellEnvSync(), extra);
+}
+
+function composeSpawnEnv(shellEnv, extra) {
   const basePath = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
   const shellPath = (shellEnv.PATH || "").split(path.delimiter).filter(Boolean);
   const guessed = [

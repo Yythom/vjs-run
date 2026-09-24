@@ -31,7 +31,7 @@ import electron from "electron";
 const app = electron?.app || (typeof electron === "object" ? electron.default?.app : null);
 import PQueue from "p-queue";
 import { SRC_DIR } from "../paths.js";
-import { buildSpawnEnv } from "../shell-env.js";
+import { buildSpawnEnvSync } from "../shell-env.js";
 import { sendToAllWindows } from "../ui-channel.js";
 import { buildPrompt } from "./prompt.js";
 import { appendThread, getTask, updateTask } from "./task-store.js";
@@ -290,7 +290,7 @@ export function getRunStatus() {
  */
 function resolveBinPath(bin) {
   try {
-    const env = buildSpawnEnv();
+    const env = buildSpawnEnvSync();
     for (const dir of String(env.PATH || "").split(path.delimiter)) {
       if (!dir) continue;
       const full = path.join(dir, bin);
@@ -439,7 +439,7 @@ function settleUnreportedTasks(job) {
 function claudeSessionExists(sessionId, cwd) {
   if (!sessionId || !cwd) return false;
   const configDir =
-    buildSpawnEnv().CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
+    buildSpawnEnvSync().CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
   const dirs = new Set([cwd]);
   try {
     dirs.add(fs.realpathSync(cwd));
@@ -894,7 +894,7 @@ function runJobProcess(job, tasks) {
     try {
       proc = spawnImpl(bin, args, {
         cwd: job.workdir,
-        env: buildSpawnEnv(),
+        env: buildSpawnEnvSync(),
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
         // claude / codex / agy 都会再拉起自己的一串子进程（CLI 核心、ripgrep、

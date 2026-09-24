@@ -10,7 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { buildSpawnEnv } from "../shell-env.js";
+import { buildSpawnEnvSync } from "../shell-env.js";
 import { killProcessTree } from "../kill-tree.js";
 
 // SIGTERM 之后等这么久还没退，就对进程组补 SIGKILL
@@ -29,7 +29,7 @@ export function runCommand(bin, args, { timeout = 20000 } = {}) {
       // detached 让它自成进程组：超时强杀时才能整组端掉，
       // 不然被杀的只是直接子进程，它拉起来的东西会留在后台
       proc = spawn(bin, args, {
-        env: buildSpawnEnv(),
+        env: buildSpawnEnvSync(),
         shell: false,
         detached: true,
       });
@@ -162,7 +162,7 @@ export function describeLarkError(error) {
  * 起的子进程一起收掉，不然会留下常驻孤儿继续占着事件订阅。
  */
 export function spawnLark(args) {
-  return spawn(BIN, args, { env: buildSpawnEnv(), shell: false, detached: true });
+  return spawn(BIN, args, { env: buildSpawnEnvSync(), shell: false, detached: true });
 }
 
 export const CLI_PACKAGES = {

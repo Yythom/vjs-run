@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { REQ_BIN } from "../paths.js";
-import { buildSpawnEnv } from "../shell-env.js";
+import { buildSpawnEnvSync } from "../shell-env.js";
 import { buildWorkpackTask, findWorkpackTask } from "./workpack.js";
 import { COMMANDS, renderHelp } from "./commands.js";
 import {
@@ -672,7 +672,7 @@ function runPrepare({ target, repoRoot }) {
       proc = prepareSpawnImpl(process.execPath, args, {
         cwd: root,
         // req prepare 自己还要起 lark-cli 拉文档，PATH 必须是登录 shell 那一份
-        env: { ...buildSpawnEnv(), ELECTRON_RUN_AS_NODE: "1" },
+        env: { ...buildSpawnEnvSync(), ELECTRON_RUN_AS_NODE: "1" },
         stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (err) {
