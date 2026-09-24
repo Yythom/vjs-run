@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { buildSpawnEnv } from "../src/shell-env.js";
+import { buildSpawnEnvSync } from "../src/shell-env.js";
 import { addWindow } from "../src/ui-channel.js";
 import {
   LARK_SETUP_CMD,
@@ -157,7 +157,7 @@ function spawnCount() {
 
 function resetFake() {
   assert.equal(
-    buildSpawnEnv()
+    buildSpawnEnvSync()
       .PATH.split(path.delimiter)
       .map((dir) => path.join(dir, "lark-cli"))
       .find((file) => fs.existsSync(file)),
