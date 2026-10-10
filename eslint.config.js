@@ -25,6 +25,7 @@ export default [
         AbortSignal: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
+        AbortController: "readonly",
         setImmediate: "readonly",
         __dirname: "readonly",
         __filename: "readonly",

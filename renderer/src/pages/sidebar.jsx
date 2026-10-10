@@ -261,6 +261,12 @@ export default function Sidebar() {
           activePath={activePath}
         />
         <NavigationMenuItem
+          icon="⚡"
+          label="节点测速"
+          path="/proxy-speedtest"
+          activePath={activePath}
+        />
+        <NavigationMenuItem
           icon="🚀"
           label="小程序发布"
           path="/weapp-deploy"

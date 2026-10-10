@@ -1,5 +1,5 @@
 // 所有 IPC 注册的统一入口。main.js 启动期只调一次 registerAllIpc()。
-// 拆按业务域：config / project / mock / clean / diagnostics / weapp / docking。
+// 拆按业务域：config / project / mock / clean / diagnostics / weapp / docking / proxy。
 
 import { registerConfigIpc } from "./config.js";
 import { registerProjectIpc } from "./project.js";
@@ -10,6 +10,7 @@ import { registerCleanupIpc } from "./cleanup.js";
 import { registerUpdaterIpc } from "./updater.js";
 import { registerWeappIpc } from "./weapp.js";
 import { registerDockingIpc } from "./docking.js";
+import { registerProxyIpc } from "../proxy/ipc.js";
 
 export function registerAllIpc() {
   registerConfigIpc();
@@ -21,4 +22,5 @@ export function registerAllIpc() {
   registerUpdaterIpc();
   registerWeappIpc();
   registerDockingIpc();
+  registerProxyIpc();
 }
