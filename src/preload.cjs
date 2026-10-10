@@ -165,6 +165,33 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 单端口 kill：用于端口查看器中逐行操作
   killSinglePort: (port) => ipcRenderer.invoke("kill-single-port", { port }),
 
+  // ── 节点测速（Shadowrocket ss:// 节点）──────────────────────────────────────
+
+  listProxyNodes: () => ipcRenderer.invoke("proxy-nodes:list"),
+  // 批量导入粘贴的 ss:// 文本，返回 { added, duplicated, invalid, nodes }
+  importProxyNodes: (text) => ipcRenderer.invoke("proxy-nodes:import", { text }),
+  setProxyNodesChecked: (ids, checked) =>
+    ipcRenderer.invoke("proxy-nodes:set-checked", { ids, checked }),
+  removeProxyNodes: (ids) => ipcRenderer.invoke("proxy-nodes:remove", { ids }),
+  // 测单个节点（TCP + 经代理的 URL 延迟），结果会落盘，返回 { node }
+  testProxyNode: (id, options) => ipcRenderer.invoke("proxy-nodes:test", { id, ...options }),
+  // 下载测速（单节点）。options: { url, maxDuration 毫秒, maxBytes 字节 }，上限谁先到谁停；
+  // 结果落盘到 node.download，返回 { node, aborted? }
+  testProxyDownload: (id, options) =>
+    ipcRenderer.invoke("proxy-nodes:download-test", { id, ...options }),
+  // 导出勾选节点到文件（弹保存框），返回 { filePath } 或 { canceled: true }
+  exportProxyNodesFile: (content, defaultName) =>
+    ipcRenderer.invoke("proxy-nodes:export-file", { content, defaultName }),
+  // 掐断进行中的下载测速
+  abortProxyTests: () => ipcRenderer.invoke("proxy-nodes:abort"),
+  getProxyDefaults: () => ipcRenderer.invoke("proxy-nodes:defaults"),
+  // 下载测速进度：{ id, bytes, ms, speed }
+  onProxyDownloadProgress: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("proxy-nodes:download-progress", handler);
+    return () => ipcRenderer.removeListener("proxy-nodes:download-progress", handler);
+  },
+
   // 在指定项目目录执行一条调试命令（用于打包后排查问题）
   runProjectCommand: (projectId, command) =>
     ipcRenderer.invoke("run-project-command", { projectId, command }),

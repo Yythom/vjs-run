@@ -11,6 +11,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
+      '@noble/ciphers':
+        specifier: ^2.4.0
+        version: 2.4.0
       '@uiw/codemirror-theme-github':
         specifier: ^4.25.10
         version: 4.25.10(@codemirror/language@6.12.3)(@codemirror/state@6.6.0)(@codemirror/view@6.43.0)
@@ -60,6 +63,9 @@ importers:
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
+      conf:
+        specifier: ^10.2.0
+        version: 10.2.0
       electron:
         specifier: 40.6.1
         version: 40.6.1
@@ -108,6 +114,9 @@ importers:
       lodash-es:
         specifier: ^4.18.1
         version: 4.18.1
+      p-queue:
+        specifier: ^9.3.3
+        version: 9.3.3
       parse-curl:
         specifier: ^0.2.6
         version: 0.2.6
@@ -611,6 +620,10 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@noble/ciphers@2.4.0':
+    resolution: {integrity: sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==}
+    engines: {node: '>= 20.19.0'}
 
   '@nodable/entities@2.1.0':
     resolution: {integrity: sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==}
@@ -3779,6 +3792,8 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
+
+  '@noble/ciphers@2.4.0': {}
 
   '@nodable/entities@2.1.0': {}
 

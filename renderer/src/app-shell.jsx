@@ -21,6 +21,7 @@ const EnvCheckPage = lazy(() => import("./pages/env-check-page"));
 const PortCheckerPage = lazy(() => import("./pages/port-checker-page"));
 const CleanupPage = lazy(() => import("./pages/cleanup-page"));
 const CodecPage = lazy(() => import("./pages/codec-page"));
+const ProxySpeedtestPage = lazy(() => import("./pages/proxy-speedtest-page"));
 const WeappDeployPage = lazy(() => import("./pages/weapp-deploy-page"));
 const DockingPage = lazy(() => import("./pages/docking-page"));
 const RepoEditorModal = lazy(() => import("./modals/repo-editor-modal"));
@@ -52,6 +53,7 @@ function MainRoutes() {
       <Route path="/port-checker" element={<PortCheckerPage />} />
       <Route path="/cleanup" element={<CleanupPage />} />
       <Route path="/codec" element={<CodecPage />} />
+      <Route path="/proxy-speedtest" element={<ProxySpeedtestPage />} />
 
       {/* 直接刷新到 modal route 时主区域 fallback 到 ProjectDashboard */}
       <Route path="*" element={<ProjectDashboard />} />

@@ -23,6 +23,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "concurrently": "^9.2.1",
+    "conf": "^10.2.0",
     "electron": "40.6.1",
     "electron-builder": "26.8.2",
     "eslint": "^10.4.0",
@@ -30,6 +31,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "@noble/ciphers": "^2.4.0",
     "@uiw/codemirror-theme-github": "^4.25.10",
     "chokidar": "^5.0.0",
     "cookie": "^1.1.1",

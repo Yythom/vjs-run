@@ -21,6 +21,7 @@
     "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
     "lodash-es": "^4.18.1",
+    "p-queue": "^9.3.3",
     "parse-curl": "^0.2.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
