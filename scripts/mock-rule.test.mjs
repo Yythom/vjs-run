@@ -428,6 +428,44 @@ test("apply-scene：软件应用场景写的标记（src/mock/applied-scene.js�
   assert.match(r.out, /正是当前应用的场景/);
 });
 
+// ─── config ─────────────────────────────────────────────────────────────────
+
+test("config：只改两个地址字段，其余配置原样保留；后端地址补尾部斜杠", () => {
+  const ud = freshUserData();
+  const cfgFile = path.join(ud, "config.json");
+  fs.writeFileSync(cfgFile, JSON.stringify({ mockPort: 4000, frontendProjectGroups: [{ key: "a" }] }));
+  const r = run(ud, ["config", "--swagger-server", "http://swagger.local/t2", "--backend", "https://api.local/t2"]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(cfgFile), {
+    mockPort: 4000,
+    frontendProjectGroups: [{ key: "a" }],
+    mockSwaggerServer: "http://swagger.local/t2",
+    mockBackendBaseUrl: "https://api.local/t2/",
+  });
+  assert.match(run(ud, ["config"]).out, /后端代理地址：\s+https:\/\/api\.local\/t2\//);
+});
+
+test("config：只传一个字段时另一个不动；传空串清空", () => {
+  const ud = freshUserData();
+  const cfgFile = path.join(ud, "config.json");
+  run(ud, ["config", "--swagger-server", "http://s/", "--backend", "http://b/"]);
+  run(ud, ["config", "--backend", ""]);
+  assert.equal(readJson(cfgFile).mockSwaggerServer, "http://s/");
+  assert.equal(readJson(cfgFile).mockBackendBaseUrl, "");
+});
+
+test("config：非法地址 / 缺值 / config.json 损坏均报错且不写盘", () => {
+  const ud = freshUserData();
+  const cfgFile = path.join(ud, "config.json");
+  assert.equal(run(ud, ["config", "--backend", "not a url"]).code, 1);
+  assert.equal(run(ud, ["config", "--backend", "ftp://x"]).code, 1);
+  assert.equal(run(ud, ["config", "--backend"]).code, 1);
+  assert.equal(fs.existsSync(cfgFile), false);
+  fs.writeFileSync(cfgFile, "{ 坏的");
+  assert.equal(run(ud, ["config", "--backend", "http://b"]).code, 1);
+  assert.equal(fs.readFileSync(cfgFile, "utf8"), "{ 坏的");
+});
+
 test("--file / MOCK_RULES_FILE 覆盖活动规则文件路径", () => {
   const ud = freshUserData();
   const custom = path.join(ud, "custom-rules.json");

@@ -1,6 +1,6 @@
 ---
 name: mock-rules
-description: 定制或排查 vjtools 的接口 mock 数据时使用。覆盖 mock 规则与「场景」（scenes/<名>.json）的增删改查、变体（按 query/header/body 返回不同响应）、状态码与延迟模拟、以及 mock 不生效时的排障。定制类触发："改某个接口返回什么"、"让 /api/xxx 返回 …"、"造一份假数据联调"、"建一个联调场景"、"关掉某条 mock"、"模拟接口超时/500"、"分页第二页返回别的数据"。排障类同样触发："mock 怎么没生效"、"规则明明改了但没用"、"返回怎么多了一层 rc/code/data"、"变体不命中"、"接口返回 502 或 404 No mock route matched"、"这条走的是 mock 还是真后端"。只要涉及 vjtools mock server 的行为就用本 skill，哪怕用户没说"mock 规则"这几个字。
+description: 定制或排查 vjtools 的接口 mock 数据时使用。覆盖 mock 规则与「场景」（scenes/<名>.json）的增删改查、变体（按 query/header/body 返回不同响应）、状态码与延迟模拟、以及 mock 不生效时的排障。定制类触发："改某个接口返回什么"、"让 /api/xxx 返回 …"、"造一份假数据联调"、"建一个联调场景"、"关掉某条 mock"、"模拟接口超时/500"、"分页第二页返回别的数据"。排障类同样触发："mock 怎么没生效"、"规则明明改了但没用"、"返回怎么多了一层 rc/code/data"、"变体不命中"、"接口返回 502 或 404 No mock route matched"、"这条走的是 mock 还是真后端"。改地址类同样触发："把后端代理地址换成 …"、"换个 swagger 源服务器"、"mock 回源到测试环境"。只要涉及 vjtools mock server 的行为就用本 skill，哪怕用户没说"mock 规则"这几个字。
 ---
 
 # 定制 vjtools 的 mock 接口数据
@@ -15,7 +15,10 @@ vjtools 的 mock 服务按「规则」拦截请求并返回自定义 JSON。规�
 
 被触发时**默认走场景流程**，按顺序做：
 
-1. **先问用户场景名**（必做，别跳过）：「这次联调放到哪个场景？给个场景名（如 `登录联调`）」。
+1. **先问用户场景名**（必做，别跳过）。问之前先跑一次 `scenes`：
+   - 有标着「← 当前应用中」的场景 → 把它当默认选项问：「要直接改正在用的「X」，还是新建一个场景？」
+     用户多半是想在正在用的场景上接着改，这样第 5 步能自动应用，改完立刻生效。
+   - 没有 → 问：「这次联调放到哪个场景？给个场景名（如 `登录联调`）」。
    - 场景名规则：非空、≤60 字符，不能含 `/ \ : * ? " < > |`。
 2. **建场景**：`node scripts/mock-rule.mjs new-scene --scene <名>`。
    - 若报「场景已存在」→ 停下来告诉用户，请其换个名字（或确认要往已有场景里加接口，那就跳过这步直接第 3 步）。
@@ -45,6 +48,7 @@ vjtools 的 mock 服务按「规则」拦截请求并返回自定义 JSON。规�
 
 「当前应用的场景」怎么判定：软件里点「应用」或 CLI `apply-scene` 时，会把场景名写进标记，判断时只看这个名字。
 所以应用之后哪怕活动规则被手动改过，那个场景仍算「在用」，再次自动应用会把手改的部分覆盖掉。
+如果这次对话里你（或用户提到他们）直接改过活动规则，跑第 5 步之前先跟用户说一声，这些改动会被场景内容替换掉。
 
 ## 文件位置
 
@@ -54,6 +58,8 @@ vjtools 的 mock 服务按「规则」拦截请求并返回自定义 JSON。规�
 - 场景文件：`<mock-assets>/scenes/<场景名>.json`，结构与活动规则**完全一致**。
 - 当前应用的场景标记：`<mock-assets>/applied-scene.json`（由应用动作写入，别手改）。
 - override 数据文件：`<mock-assets>/mock-data/`（见「override 文件」一节，优先级低于规则）。
+- 软件配置：`~/Library/Application Support/vjtools/config.json`（mock host/port、后端代理地址等）。
+  只通过 `config` 命令改其中的两个地址字段，别直接编辑。
 
 路径 app 内不可配置（config.json 的 `mockRulesFile` 会被 normalize 重置）。CLI 自动定位，通常无需关心。
 （e2e/隔离环境用 `VJTOOLS_USER_DATA_DIR` 覆盖 userData 目录；也可用 `--file` / `MOCK_RULES_FILE` 显式指定活动规则文件。）
@@ -135,6 +141,26 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 - 定位是**字面 path 字符串**：占位符规则 `/api/user/{id}` 必须原样传 `--path '/api/user/{id}'`，
   传具体的 `/api/user/123` 定位不到那条、反而会新增一条。
 - 校验失败以非 0 退出并打印原因（path 没以 `/` 开头、status 非整数、stdin 不是合法 JSON 等）。
+
+## 修改 Swagger 源服务器 / 后端代理地址
+
+这两个地址存在 `config.json`（不在 mock-assets 里），用 `config` 命令查看和修改，**不用走场景流程**：
+
+```bash
+# 查看当前值
+node scripts/mock-rule.mjs config
+
+# 修改（可只传其中一个；传 "" 表示清空）
+node scripts/mock-rule.mjs config --backend https://api.example.com/t2
+node scripts/mock-rule.mjs config --swagger-server http://swagger.example.com/t2
+```
+
+- **后端代理地址**（`mockBackendBaseUrl`）：没命中 mock 的请求回源到这里。软件监听 config.json，
+  改完会自动重新加载；mock 正在运行时会**自动重启 mock**，几秒后生效，可用 `/__mock/health` 确认已恢复。
+- **Swagger 源服务器地址**（`mockSwaggerServer`）：只在「生成 OpenAPI JSON」时使用。改完不会自动重新生成，
+  需要请用户在「服务设置」里点「⚡ 生成 OpenAPI JSON」。
+- 地址必须是 http/https；后端地址会自动补尾部 `/`。只改这两个字段，config.json 其他配置原样保留。
+- 用户说清楚要改成什么地址时直接改；只说「换个地址」没给值时，先问清楚。
 
 ## 变体：同一路径按条件返回不同响应
 

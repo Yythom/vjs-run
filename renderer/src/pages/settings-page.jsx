@@ -3,7 +3,11 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import PageShell from "../components/page-shell";
-import { updateAppConfig, useAppConfigStore } from "../stores/app-config-store";
+import {
+  updateAppConfig,
+  useAppConfig,
+  useAppConfigStore,
+} from "../stores/app-config-store";
 import { generateMockSpec, useGeneratingMockSpec } from "../stores/runner-store";
 import useConfirm from "../hooks/use-confirm";
 import useModalNav from "../hooks/use-modal-nav";
@@ -54,7 +58,10 @@ export default function SettingsPage() {
     getValues,
     reset,
     resetField,
-    formState: { errors, isSubmitting, isDirty },
+    getFieldState,
+    // 订阅 dirtyFields，getFieldState(...).isDirty 才是准的
+    // eslint-disable-next-line no-unused-vars
+    formState: { errors, isSubmitting, isDirty, dirtyFields },
   } = useForm({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
@@ -68,6 +75,26 @@ export default function SettingsPage() {
     },
   });
   const generating = useGeneratingMockSpec();
+
+  // 配置被外部改写（如 AI 走 CLI 改了地址）时，把用户没动过的字段同步成新值；
+  // 用户正在改的字段保持原样，免得把输入冲掉。
+  const liveConfig = useAppConfig();
+  useEffect(() => {
+    const synced = {
+      mockSpecPath: liveConfig.mockSpecPath || "",
+      mockSwaggerServer: liveConfig.mockSwaggerServer || "",
+      mockHost: liveConfig.mockHost || "127.0.0.1",
+      mockPort: String(liveConfig.mockPort || 3002),
+      mockServiceAddress: liveConfig.mockServiceAddress || "",
+      mockBackendBaseUrl: liveConfig.mockBackendBaseUrl || "",
+      mockAll: Boolean(liveConfig.mockAll),
+    };
+    for (const [field, value] of Object.entries(synced)) {
+      if (!getFieldState(field).isDirty && getValues(field) !== value) {
+        resetField(field, { defaultValue: value });
+      }
+    }
+  }, [liveConfig, getFieldState, getValues, resetField]);
 
   // 独立操作：先把表单里的目录 + 源服务器地址落盘（生成逻辑读的是已保存配置），再触发生成
   const handleGenerate = async () => {

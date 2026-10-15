@@ -3,8 +3,12 @@
 
 import { app, ipcMain } from "electron";
 import { ipcSafe } from "./safe.js";
-import { getConfig, saveConfig } from "../config/store.js";
-import { sendLog } from "../ui-channel.js";
+import {
+  getConfig,
+  onExternalConfigChange,
+  saveConfig,
+} from "../config/store.js";
+import { sendLog, sendToAllWindows } from "../ui-channel.js";
 import { stopAllProcesses } from "../process-manager.js";
 
 import {
@@ -23,7 +27,27 @@ const MOCK_FIELDS_REQUIRING_RESTART = [
   "mockAll",
 ];
 
+// 改了需要重启的 mock 字段且 mock 在跑时，自动重启 mock service
+async function restartMockIfNeeded(prev, next, reason) {
+  const mockChanged = MOCK_FIELDS_REQUIRING_RESTART.some(
+    (key) => prev[key] !== next[key],
+  );
+  if (!isMockRunning() || !mockChanged) return;
+  sendLog(MOCK_ID, `\x1b[36m⚙ ${reason}，自动重启 Swagger Mock\x1b[0m\n`);
+  try {
+    await startSwaggerMock(MOCK_ID);
+  } catch (_) {
+    // startSwaggerMock 内部已经写过错误日志，这里不抛出，避免影响调用方
+  }
+}
+
 export function registerConfigIpc() {
+  // config.json 被外部（如 AI 用 mock-rule.mjs config 命令）改写：推给渲染层刷新，必要时重启 mock
+  onExternalConfigChange((prev, next) => {
+    sendToAllWindows("config-changed", { ...next, _appVersion: app.getVersion() });
+    restartMockIfNeeded(prev, next, "检测到配置文件被外部修改");
+  });
+
   ipcMain.handle("get-config", () => ({
     ...getConfig(),
     _appVersion: app.getVersion(),
@@ -39,20 +63,7 @@ export function registerConfigIpc() {
 
 
 
-    const mockChanged = MOCK_FIELDS_REQUIRING_RESTART.some(
-      (key) => prev[key] !== next[key],
-    );
-    if (isMockRunning() && mockChanged) {
-      sendLog(
-        MOCK_ID,
-        `\x1b[36m⚙ 检测到 mock 配置改动，自动重启 Swagger Mock\x1b[0m\n`,
-      );
-      try {
-        await startSwaggerMock(MOCK_ID);
-      } catch (_) {
-        // startSwaggerMock 内部已经写过错误日志，这里不抛出，避免影响 set-config 的成功状态
-      }
-    }
+    await restartMockIfNeeded(prev, next, "检测到 mock 配置改动");
 
     // 渲染进程拿到返回值后会整体替换 config state，这里必须把 _appVersion 一起带上，
     // 否则侧边栏的版本号会在保存配置后丢失、回落到兜底值。

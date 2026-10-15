@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 更新用户配置，传入需要修改的字段（partial update），保存后热生效
   setConfig: (partial) => ipcRenderer.invoke("set-config", partial),
+  // 监听 config.json 被外部改写后的最新配置，返回取消监听函数
+  onConfigChanged: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("config-changed", handler);
+    return () => ipcRenderer.removeListener("config-changed", handler);
+  },
 
   // ── 前端项目 ────────────────────────────────────────────────────────────────
 

@@ -34,6 +34,10 @@ export const useAppConfigStore = create((set) => ({
   init: async () => {
     const cfg = await loadConfig();
     set({ appConfig: cfg || DEFAULT_APP_CONFIG, loaded: true });
+    // config.json 被外部（如 AI 走 CLI）改写后，主进程推送最新配置
+    window.electronAPI?.onConfigChanged?.((next) => {
+      if (next) set({ appConfig: next });
+    });
   },
 
   /** patch 进去 + 立即落盘，返回服务端规整后的 config。 */

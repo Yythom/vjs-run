@@ -37,6 +37,11 @@
 // 才会覆盖活动规则，否则退出码 2 拒绝；--force 跳过守卫（仅限用户明确要求时）。
 // 「当前应用的场景」靠 <mock-assets>/applied-scene.json 标记判断，逻辑与
 // src/mock/applied-scene.js 一致。
+//   node scripts/mock-rule.mjs config                          # 查看 Swagger 源服务器 / 后端代理地址
+//   node scripts/mock-rule.mjs config --swagger-server <url> --backend <url>   # 修改（传 "" 清空）
+//
+// config 只改 config.json 里的 mockSwaggerServer / mockBackendBaseUrl 两个字段，其余原样保留；
+// 软件监听 config.json，会自动重新加载，改了后端代理地址且 mock 在跑时自动重启 mock。
 //
 // set 按 method+path 幂等定位：命中则覆盖，未命中则追加，绝不动其它规则。
 // set-variant 按 (规则, --name) 幂等定位；变体必须挂在已有规则上，规则顶层
@@ -82,6 +87,28 @@ function resolveBaseUrl() {
   const host = config.mockHost || "127.0.0.1";
   const port = Number(config.mockPort) || 3002;
   return { url: `http://${host}:${port}`, configFile, fromConfig: Boolean(config.mockHost) };
+}
+
+function configFile() {
+  return path.join(process.env.VJTOOLS_USER_DATA_DIR || defaultUserData(), "config.json");
+}
+
+// 地址校验：空串表示清空；否则必须是 http(s) URL
+function normalizeUrlFlag(flagName) {
+  const raw = flags[flagName];
+  if (raw === true) fail(`--${flagName} 需要一个地址（传 "" 表示清空）`);
+  const value = String(raw).trim();
+  if (!value) return "";
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    fail(`--${flagName} 不是合法 URL：${value}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    fail(`--${flagName} 只支持 http/https：${value}`);
+  }
+  return value;
 }
 
 // 场景名清洗，等价 recorder.js 的 sanitizeSceneName：去非法字符、trim、非空、≤60。
@@ -613,6 +640,55 @@ switch (command) {
     break;
   }
 
+  case "config": {
+    const target = configFile();
+    let config = {};
+    if (fs.existsSync(target)) {
+      try {
+        config = JSON.parse(fs.readFileSync(target, "utf8"));
+      } catch (err) {
+        fail(`config.json 不是合法 JSON：${target}\n  ${err.message}`);
+      }
+      if (!config || typeof config !== "object" || Array.isArray(config)) {
+        fail(`config.json 顶层必须是对象：${target}`);
+      }
+    }
+
+    const updates = {};
+    if (flags["swagger-server"] !== undefined) {
+      updates.mockSwaggerServer = normalizeUrlFlag("swagger-server");
+    }
+    if (flags.backend !== undefined) {
+      const value = normalizeUrlFlag("backend");
+      // 与 src/url-utils.js 的 normalizeBackendBaseUrl 一致：非空时补尾部斜杠
+      updates.mockBackendBaseUrl = value && !value.endsWith("/") ? `${value}/` : value;
+    }
+
+    const show = (cfg) => {
+      console.log(`  Swagger 源服务器地址：${cfg.mockSwaggerServer || "(未设置)"}`);
+      console.log(`  后端代理地址：        ${cfg.mockBackendBaseUrl || "(未设置)"}`);
+    };
+
+    if (!Object.keys(updates).length) {
+      console.log(`# ${target}`);
+      show(config);
+      break;
+    }
+
+    const next = { ...config, ...updates };
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const tmp = `${target}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, "\t")}\n`);
+    fs.renameSync(tmp, target);
+    console.log(`✔ 已更新 ${target}`);
+    show(next);
+    console.log("  软件会自动重新加载；改了后端代理地址且 mock 在运行时会自动重启 mock。");
+    if (updates.mockSwaggerServer !== undefined) {
+      console.log("  Swagger 源服务器地址只在生成 OpenAPI JSON 时使用，需要用户在「服务设置」里点「生成」。");
+    }
+    break;
+  }
+
   // 自检用：打印 mock server 地址，供后续 curl $BASE/__mock/... 使用。
   // --quiet 只输出地址本身，便于 BASE=$(... base --quiet) 直接取值。
   case "base": {
@@ -633,30 +709,31 @@ switch (command) {
         "mock-rule — 安全增删改运行时 mock 规则 / 场景",
         "",
         "  list    [--scene <名>]              列出规则（带 --scene 列场景内规则）",
-        "  get     --path <p> [--method <m>] [--scene <名>]   查看单条规则",
-        "  set     --path <p> [--method GET] [--status 200] [--delay 500] [--disabled] [--scene <名>]  < response.json",
+        "  get     --path <p> --method <m> [--scene <名>]   查看单条规则",
+        "  set     --path <p> --method <m> [--status 200] [--delay 500] [--disabled] [--scene <名>]  < response.json",
         "                                      新增/覆盖规则；response 从 stdin 读 JSON",
-        "  enable  --path <p> [--method <m>] [--scene <名>]   启用规则",
-        "  disable --path <p> [--method <m>] [--scene <名>]   禁用规则",
-        "  rm      --path <p> [--method <m>] [--scene <名>]   删除规则",
+        "  enable  --path <p> --method <m> [--scene <名>]   启用规则",
+        "  disable --path <p> --method <m> [--scene <名>]   禁用规则",
+        "  rm      --path <p> --method <m> [--scene <名>]   删除规则",
         "",
         "  set-variant --path <p> --name <名> --when-query k=v [--when-header k=v] [--when-body a.b=v]",
-        "              [--method <m>] [--status 200] [--delay 300] [--disabled] [--scene <名>]  < response.json",
+        "              --method <m> [--status 200] [--delay 300] [--disabled] [--scene <名>]  < response.json",
         "                                      同路径按条件返回不同响应；条件全部相等才命中（AND），",
         "                                      变体按顺序 first-match，都不命中时回退规则顶层 response",
-        "  rm-variant  --path <p> --name <名> [--method <m>] [--scene <名>]   删除单个变体",
+        "  rm-variant  --path <p> --name <名> --method <m> [--scene <名>]   删除单个变体",
         "",
         "  scenes                              列出所有场景",
         "  new-scene --scene <名>              新建空场景（同名报错）",
         "  rm-scene  --scene <名>              删除整个场景文件（不影响活动规则）",
         "  rename-scene --scene <旧名> --to <新名>   重命名场景（同名冲突报错）",
+        "  config [--swagger-server <url>] [--backend <url>]   查看/修改 Swagger 源服务器与后端代理地址（\"\" 清空）",
         "  apply-scene --scene <名> [--force]  应用场景（覆盖活动规则）；仅当活动规则为空或该场景",
         "              正是当前应用的场景时执行，否则退出码 2 拒绝；--force 跳过该检查",
         "",
         "  base [--quiet]                      打印 mock server 地址（自检用）",
         "",
         "  --scene <名> 时所有命令改为操作 scenes/<名>.json（不碰活动规则）",
-        "  --method 缺省为 *（匹配所有方法）；--file 可覆盖活动规则文件路径",
+        "  --method 必填且须是具体方法（GET/POST…），不接受 *；--file 可覆盖活动规则文件路径",
         `  当前活动规则文件：${resolveRulesFile(flags.file)}`,
         `  场景目录：${scenesDir()}`,
       ].join("\n"),

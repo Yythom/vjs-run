@@ -96,6 +96,16 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 
 规则文件默认在 `~/Library/Application Support/vjtools/mock-assets/mock-rules.json`,写盘后 mock server 的 watcher 会自动热载,无需重启。
 
+### Swagger 源服务器 / 后端代理地址
+
+```bash
+# 查看
+node scripts/mock-rule.mjs config
+
+# 修改(可只传一个;传 "" 清空)。软件会自动重新加载,改后端代理地址时如果 mock 在运行会自动重启
+node scripts/mock-rule.mjs config --backend https://api.example.com/t2 --swagger-server http://swagger.example.com/t2
+```
+
 ### 场景(scenes)
 
 把一次联调要 mock 的一组接口收敛成一个命名「场景」(`scenes/<名>.json`,结构与活动规则一致),之后在软件 mock 配置页里「应用」即可一键切换。加 `--scene <名>` 时所有命令改为操作场景文件,**不碰活动规则**:
