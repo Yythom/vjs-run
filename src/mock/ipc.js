@@ -46,6 +46,7 @@ import {
   stopRecording,
   writeSceneRules,
 } from "./recorder.js";
+import { recordAppliedScene, renameAppliedScene } from "./applied-scene.js";
 
 // 场景文件与 mock-rules.json 同目录，放 scenes/ 子目录下
 function getScenesDir() {
@@ -379,12 +380,12 @@ export function registerMockIpc() {
     return { name, added, overwritten, total: rules.length };
   });
 
-  // 应用场景：用场景内容覆盖活动规则文件
+  // 应用场景：用场景内容覆盖活动规则文件，并记下「当前应用的场景」（见 applied-scene.js）
   ipcSafe("apply-mock-scene", (_, payload = {}) => {
-    const rules = normalizeRulesForSave(
-      readSceneRules(getScenesDir(), payload.name),
-    );
+    const name = sanitizeSceneName(payload.name);
+    const rules = normalizeRulesForSave(readSceneRules(getScenesDir(), name));
     writeActiveRules(rules);
+    recordAppliedScene(getConfig().mockRulesFile, name);
     return { rules };
   });
 
@@ -395,6 +396,11 @@ export function registerMockIpc() {
   // 重命名场景（改文件名）；同名冲突 / 录制中会抛错
   ipcSafe("rename-mock-scene", (_, payload = {}) => {
     const name = renameScene(getScenesDir(), payload.oldName, payload.newName);
+    renameAppliedScene(
+      getConfig().mockRulesFile,
+      sanitizeSceneName(payload.oldName),
+      name,
+    );
     return { name };
   });
 

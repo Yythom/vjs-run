@@ -340,6 +340,94 @@ test("场景名清洗：非法字符剔除、空名/超长报错（对齐 record
 
 // ─── 文件定位 ─────────────────────────────────────────────────────────────────
 
+// ─── apply-scene ─────────────────────────────────────────────────────────────
+
+function markerFile(userData) {
+  return path.join(userData, "mock-assets", "applied-scene.json");
+}
+
+test("apply-scene：活动规则为空时直接应用，写入当前应用标记", () => {
+  const ud = freshUserData();
+  run(ud, ["new-scene", "--scene", "登录联调"]);
+  run(ud, ["set", "--scene", "登录联调", "--method", "POST", "--path", "/api/login"], '{"rc":0}');
+  const r = run(ud, ["apply-scene", "--scene", "登录联调"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /活动规则为空/);
+  assert.deepEqual(readJson(rulesFile(ud)), readJson(sceneFile(ud, "登录联调")));
+  assert.equal(readJson(markerFile(ud)).name, "登录联调");
+  assert.match(run(ud, ["scenes"]).out, /登录联调\s+1 条 {2}← 当前应用中/);
+});
+
+test("apply-scene：改的是当前应用中的场景时可再次应用", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["apply-scene", "--scene", "A"]);
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":2}');
+  const r = run(ud, ["apply-scene", "--scene", "A"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /正是当前应用的场景/);
+  assert.deepEqual(readJson(rulesFile(ud))[0].response, { v: 2 });
+});
+
+test("apply-scene：活动规则非空且不属于该场景时退出码 2、不改活动规则；--force 才覆盖", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["set", "--scene", "B", "--method", "GET", "--path", "/api/b"], '{"v":2}');
+  run(ud, ["apply-scene", "--scene", "A"]);
+
+  const refused = run(ud, ["apply-scene", "--scene", "B"]);
+  assert.equal(refused.code, 2);
+  assert.match(refused.err, /当前应用的是场景「A」/);
+  assert.equal(readJson(rulesFile(ud))[0].path, "/api/a");
+
+  const forced = run(ud, ["apply-scene", "--scene", "B", "--force"]);
+  assert.equal(forced.code, 0, forced.err);
+  assert.equal(readJson(rulesFile(ud))[0].path, "/api/b");
+  assert.equal(readJson(markerFile(ud)).name, "B");
+});
+
+test("apply-scene：只按场景名判断在用，应用后活动规则被手动改过也照样可再次应用", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["apply-scene", "--scene", "A"]);
+  run(ud, ["set", "--method", "GET", "--path", "/api/manual"], '{"v":0}');
+  const r = run(ud, ["apply-scene", "--scene", "A"]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(readJson(rulesFile(ud)).map((x) => x.path), ["/api/a"]);
+});
+
+test("apply-scene：活动规则非空且没有在用标记时拒绝", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--method", "GET", "--path", "/api/manual"], '{"v":0}');
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  const r = run(ud, ["apply-scene", "--scene", "A"]);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /当前没有记录在用的场景/);
+});
+
+test("apply-scene：rename-scene 后标记跟着改名；场景不存在报错", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["apply-scene", "--scene", "A"]);
+  run(ud, ["rename-scene", "--scene", "A", "--to", "A2"]);
+  run(ud, ["set", "--scene", "A2", "--method", "GET", "--path", "/api/a"], '{"v":3}');
+  assert.equal(run(ud, ["apply-scene", "--scene", "A2"]).code, 0);
+  assert.equal(run(ud, ["apply-scene", "--scene", "不存在"]).code, 1);
+});
+
+test("apply-scene：软件应用场景写的标记（src/mock/applied-scene.js）CLI 能认出", async () => {
+  const { recordAppliedScene } = await import("../src/mock/applied-scene.js");
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  // 模拟软件 apply-mock-scene：写活动规则 + 标记
+  fs.writeFileSync(rulesFile(ud), fs.readFileSync(sceneFile(ud, "A")));
+  recordAppliedScene(rulesFile(ud), "A");
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":2}');
+  const r = run(ud, ["apply-scene", "--scene", "A"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /正是当前应用的场景/);
+});
+
 test("--file / MOCK_RULES_FILE 覆盖活动规则文件路径", () => {
   const ud = freshUserData();
   const custom = path.join(ud, "custom-rules.json");

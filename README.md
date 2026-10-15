@@ -113,9 +113,12 @@ echo '{"rc":0,"code":"SUCCESS","data":{"token":"abc"}}' \
 
 # 查看场景内容
 node scripts/mock-rule.mjs list --scene 登录联调
+
+# 应用场景(覆盖活动规则):仅当活动规则为空、或该场景正是当前应用的场景时执行,否则退出码 2;--force 跳过检查
+node scripts/mock-rule.mjs apply-scene --scene 登录联调
 ```
 
-场景文件落在 `~/Library/Application Support/vjtools/mock-assets/scenes/` 下。注意:场景**只是快照**,需要在软件里「应用」后才覆盖活动规则生效。
+场景文件落在 `~/Library/Application Support/vjtools/mock-assets/scenes/` 下。注意:场景**只是快照**,需要「应用」后才覆盖活动规则生效。软件里点「应用」或用上面的 `apply-scene` 都行。AI 建完场景后会自动尝试不带 `--force` 的 `apply-scene`:活动规则为空、或改的正是当前应用的场景时直接生效;其他情况仍交给你在软件里应用,除非你明确让 AI 去应用。
 
 ## License
 

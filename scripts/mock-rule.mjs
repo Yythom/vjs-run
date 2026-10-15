@@ -31,6 +31,12 @@
 //   node scripts/mock-rule.mjs rename-scene --scene 登录联调 --to 登录联调v2   # 重命名场景
 //   echo '{...}' | node scripts/mock-rule.mjs set --scene 登录联调 --method POST --path /api/login  # 往场景里加接口
 //   node scripts/mock-rule.mjs list --scene 登录联调            # 查看场景内容
+//   node scripts/mock-rule.mjs apply-scene --scene 登录联调 [--force]  # 把场景应用为活动规则
+//
+// apply-scene 默认带守卫：只有「活动规则为空」或「该场景正是当前应用的场景」时
+// 才会覆盖活动规则，否则退出码 2 拒绝；--force 跳过守卫（仅限用户明确要求时）。
+// 「当前应用的场景」靠 <mock-assets>/applied-scene.json 标记判断，逻辑与
+// src/mock/applied-scene.js 一致。
 //
 // set 按 method+path 幂等定位：命中则覆盖，未命中则追加，绝不动其它规则。
 // set-variant 按 (规则, --name) 幂等定位；变体必须挂在已有规则上，规则顶层
@@ -96,6 +102,31 @@ function resolveTargetFile() {
   return flags.scene !== undefined
     ? sceneFilePath(flags.scene)
     : resolveRulesFile(flags.file);
+}
+
+// ─── 当前应用的场景（等价 src/mock/applied-scene.js）────────────────────────────
+
+function appliedSceneFile() {
+  return path.join(path.dirname(resolveRulesFile(flags.file)), "applied-scene.json");
+}
+
+function readAppliedMarker() {
+  try {
+    const marker = JSON.parse(fs.readFileSync(appliedSceneFile(), "utf8"));
+    return marker && typeof marker.name === "string" ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeAppliedMarker(marker) {
+  fs.mkdirSync(path.dirname(appliedSceneFile()), { recursive: true });
+  fs.writeFileSync(appliedSceneFile(), `${JSON.stringify(marker, null, 2)}\n`);
+}
+
+// 当前正在使用的场景名（只看标记），没有则 null
+function currentAppliedScene() {
+  return readAppliedMarker()?.name ?? null;
 }
 
 // ─── 读写 ────────────────────────────────────────────────────────────────────
@@ -322,6 +353,7 @@ switch (command) {
       break;
     }
     console.log(`# ${dir}`);
+    const applied = currentAppliedScene();
     for (const f of names) {
       let count = 0;
       try {
@@ -330,7 +362,9 @@ switch (command) {
       } catch {
         // 损坏的场景文件按 0 条展示
       }
-      console.log(`  ${f.replace(/\.json$/, "").padEnd(24)} ${count} 条`);
+      const name = f.replace(/\.json$/, "");
+      const mark = name === applied ? "  ← 当前应用中" : "";
+      console.log(`  ${name.padEnd(24)} ${count} 条${mark}`);
     }
     break;
   }
@@ -364,8 +398,38 @@ switch (command) {
     const toFile = sceneFilePath(to);
     if (fs.existsSync(toFile)) fail(`场景已存在：${to}`);
     fs.renameSync(fromFile, toFile);
+    // 标记跟着改名，否则改名后的场景会被误判为「未在使用」
+    const marker = readAppliedMarker();
+    if (marker && marker.name === from) writeAppliedMarker({ ...marker, name: to });
     console.log(`✔ 已重命名：${from} → ${to}`);
     console.log(`  → ${toFile}`);
+    break;
+  }
+
+  case "apply-scene": {
+    const name = sanitizeSceneName(flags.scene);
+    const sceneFile = sceneFilePath(name);
+    if (!fs.existsSync(sceneFile)) fail(`场景不存在：${name}`);
+    const rules = loadRules(sceneFile).map(normalizeRule);
+
+    const activeFile = resolveRulesFile(flags.file);
+    const active = loadRules(activeFile);
+    const applied = currentAppliedScene();
+    let reason;
+    if (flags.force) reason = "--force";
+    else if (!active.length) reason = "活动规则为空";
+    else if (applied === name) reason = "该场景正是当前应用的场景";
+    else {
+      const current = applied ? `当前应用的是场景「${applied}」` : "当前没有记录在用的场景";
+      console.error(`✗ 未应用：活动规则里已有 ${active.length} 条规则，${current}，应用会把它们整体覆盖。`);
+      console.error("  请让用户在软件里「应用」该场景；用户明确要求由你应用时，再加 --force。");
+      process.exit(2);
+    }
+
+    saveRules(activeFile, rules);
+    writeAppliedMarker({ name, appliedAt: Date.now() });
+    console.log(`✔ 已应用场景「${name}」（${rules.length} 条规则，依据：${reason}）`);
+    console.log(`  → ${activeFile}（mock server 将自动热载）`);
     break;
   }
 
@@ -586,6 +650,8 @@ switch (command) {
         "  new-scene --scene <名>              新建空场景（同名报错）",
         "  rm-scene  --scene <名>              删除整个场景文件（不影响活动规则）",
         "  rename-scene --scene <旧名> --to <新名>   重命名场景（同名冲突报错）",
+        "  apply-scene --scene <名> [--force]  应用场景（覆盖活动规则）；仅当活动规则为空或该场景",
+        "              正是当前应用的场景时执行，否则退出码 2 拒绝；--force 跳过该检查",
         "",
         "  base [--quiet]                      打印 mock server 地址（自检用）",
         "",
