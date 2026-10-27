@@ -19,3 +19,16 @@ export function isRuleEffective(rule) {
   if (!rule || rule.enabled === false) return false;
   return rule.response !== undefined || rule.status !== undefined;
 }
+
+// 场景列表里的「多久前更新」；超过 30 天直接显示日期
+export function formatRelativeTime(ts, now = Date.now()) {
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const diff = Math.max(0, now - ts);
+  if (diff < minute) return "刚刚";
+  if (diff < hour) return `${Math.floor(diff / minute)} 分钟前`;
+  if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
+  if (diff < 30 * day) return `${Math.floor(diff / day)} 天前`;
+  return new Date(ts).toLocaleDateString("zh-CN");
+}

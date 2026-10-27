@@ -11,6 +11,16 @@ export function appliedSceneFile(rulesFile) {
   return path.join(path.dirname(rulesFile), "applied-scene.json");
 }
 
+// 读标记里的场景名；没有标记 / 标记损坏返回空串
+export function readAppliedScene(rulesFile) {
+  try {
+    const marker = JSON.parse(fs.readFileSync(appliedSceneFile(rulesFile), "utf8"));
+    return typeof marker?.name === "string" ? marker.name : "";
+  } catch {
+    return "";
+  }
+}
+
 export function recordAppliedScene(rulesFile, name) {
   const marker = { name, appliedAt: Date.now() };
   fs.writeFileSync(

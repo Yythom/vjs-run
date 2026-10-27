@@ -46,7 +46,11 @@ import {
   stopRecording,
   writeSceneRules,
 } from "./recorder.js";
-import { recordAppliedScene, renameAppliedScene } from "./applied-scene.js";
+import {
+  readAppliedScene,
+  recordAppliedScene,
+  renameAppliedScene,
+} from "./applied-scene.js";
 
 // 场景文件与 mock-rules.json 同目录，放 scenes/ 子目录下
 function getScenesDir() {
@@ -337,9 +341,15 @@ export function registerMockIpc() {
 
   // ── 场景 ────────────────────────────────────────────────────────────────────
 
-  ipcSafe("list-mock-scenes", () => ({ scenes: listScenes(getScenesDir()) }), {
-    scenes: [],
-  });
+  // appliedScene：当前应用的场景名（applied-scene.json 标记），弹框里标「使用中」
+  ipcSafe(
+    "list-mock-scenes",
+    () => ({
+      scenes: listScenes(getScenesDir()),
+      appliedScene: readAppliedScene(getConfig().mockRulesFile),
+    }),
+    { scenes: [], appliedScene: "" },
+  );
 
   // 把当前活动规则存为命名场景（快照）
   ipcSafe("save-mock-scene", (_, payload = {}) => {

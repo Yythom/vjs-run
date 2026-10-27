@@ -18,6 +18,7 @@ import clsx from "../utils/clsx";
  *     用 srOnly 把它视觉藏起来但保留语义。
  *   - srOnly：true 时 title 视觉隐藏，仅给屏幕阅读器
  *   - className：覆盖 Content 容器 className
+ *   - onEscapeKeyDown：透传给 Radix，preventDefault 可阻止 Esc 关闭（如行内编辑时 Esc 只取消编辑）
  *   - children：modal 内容
  */
 export default function Modal({
@@ -27,6 +28,7 @@ export default function Modal({
   srOnly = true,
   className = "",
   headerAction,
+  onEscapeKeyDown,
   children,
 }) {
   return (
@@ -41,6 +43,7 @@ export default function Modal({
         />
         <Dialog.Content
           aria-describedby={undefined}
+          onEscapeKeyDown={onEscapeKeyDown}
           onPointerDownOutside={(e) => {
             const target = e.target;
             if (target && target.closest("[data-sonner-toaster]")) {
