@@ -18,6 +18,7 @@ import { MOCK_ID } from "../constants";
 import { prettyJson } from "./mock-config/utils";
 import { showToast } from "../utils/toast";
 import Modal from "../components/modal";
+import { isEnterKey } from "../utils/keyboard";
 
 const KIND_META = {
   mock: {
@@ -201,7 +202,7 @@ function JsonBlock({ title, value, copyable, searchable }) {
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (isEnterKey(e)) {
                   e.preventDefault();
                   goTo(e.shiftKey ? -1 : 1);
                 }
@@ -366,7 +367,7 @@ function SaveToSceneModal({ entries, onClose, onSaved }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") save();
+                if (isEnterKey(e)) save();
               }}
               placeholder="场景名"
               className="w-full bg-card border border-border rounded-md px-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"
@@ -527,7 +528,7 @@ function RecordingControl() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") start();
+                if (isEnterKey(e)) start();
               }}
               placeholder="场景名"
               className="w-full bg-card border border-border rounded-md px-3 py-1.5 text-xs text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 transition-colors"

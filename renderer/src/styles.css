@@ -77,6 +77,15 @@ body,
   cursor: text;
 }
 
+/* Tailwind v4 的 preflight 把按钮光标改回了 default，这里统一恢复手型；
+   放在 base 层，单个按钮写 cursor-* 工具类仍能覆盖 */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 /* 全局按钮微点击缩放动效 */
 button:active:not(:disabled) {
   transform: scale(0.98);

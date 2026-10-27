@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import clsx from "../utils/clsx";
 import PageShell from "../components/page-shell";
 import { showToast } from "../utils/toast";
+import { isEnterKey } from "../utils/keyboard";
 
 const SOURCES = [
   { key: "url", label: "JSON 地址" },
@@ -159,7 +160,7 @@ export default function SwaggerConvertPage() {
                 reset();
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") convert();
+                if (isEnterKey(e)) convert();
               }}
               spellCheck={false}
               placeholder="http://your-server/your-service/v2/api-docs"

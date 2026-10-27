@@ -4,6 +4,7 @@ import PageShell from "../components/page-shell";
 import JsonEditor from "../components/json-editor";
 import { decodeData, encodeData } from "../utils/crypto-codec";
 import { showToast } from "../utils/toast";
+import { isEnterKey } from "../utils/keyboard";
 
 const MODES = [
   { key: "decode", label: "解密（密文 → JSON）" },
@@ -112,7 +113,7 @@ export default function CodecPage() {
           </span>
           <div
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) run();
+              if (isEnterKey(e) && (e.metaKey || e.ctrlKey)) run();
             }}
           >
             {mode === "encode" ? (

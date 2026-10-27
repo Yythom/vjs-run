@@ -33,6 +33,15 @@ export function registerProjectIpc() {
     createSecondaryWindow(route);
   });
 
+  // 用系统浏览器打开链接（日志里 dev server 打印的地址等）；只放行 http(s)
+  ipcSafe("open-external", async (_, url) => {
+    const { protocol } = new URL(url);
+    if (protocol !== "http:" && protocol !== "https:") {
+      throw new Error(`不支持的链接：${url}`);
+    }
+    await shell.openExternal(url);
+  });
+
   ipcMain.handle("close-window", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win) {

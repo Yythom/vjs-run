@@ -903,13 +903,16 @@ export default function MockRuleEditor({
   };
   const submit = handleSubmit(async (values) => {
     try {
-      const choice = await confirm({
-        title: "保存 Mock 规则",
-        message: `请选择您想如何保存对该接口的 Mock 修改？\n\n${(values.method || "").toUpperCase()} ${values.path || ""}`,
-        confirmText: "保存并启用",
-        altText: "仅保存",
-        cancelText: "取消",
-      });
+      // 已启用的规则直接保存；未启用时才问要不要顺便启用
+      const choice = values.enabled
+        ? "alt"
+        : await confirm({
+            title: "保存 Mock 规则",
+            message: `这条规则当前未启用，保存时要一并启用吗？\n\n${(values.method || "").toUpperCase()} ${values.path || ""}`,
+            confirmText: "保存并启用",
+            altText: "仅保存",
+            cancelText: "取消",
+          });
 
       if (choice === false) {
         return; // 取消保存
@@ -932,11 +935,31 @@ export default function MockRuleEditor({
     }
   });
 
+  // Cmd/Ctrl+S 保存。保存中（含等确认框）不重复触发；编辑器自己就在弹框里，
+  // 只有最上层弹框是编辑器所在的那个时才响应，叠在上面的其它弹框开着时不抢快捷键
+  const formRef = useRef(null);
+  const saveShortcutRef = useRef(null);
+  useEffect(() => {
+    saveShortcutRef.current = isSubmitting ? null : submit;
+  });
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      const topDialog = dialogs[dialogs.length - 1];
+      if (topDialog && !topDialog.contains(formRef.current)) return;
+      saveShortcutRef.current?.();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
 
 
   return (
     <>
       <form
+        ref={formRef}
         onSubmit={submit}
         className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden"
       >
@@ -1037,6 +1060,7 @@ export default function MockRuleEditor({
             <button
               type="submit"
               disabled={isSubmitting}
+              title="保存（⌘S）"
               className="px-4 py-1.5 rounded-lg text-xs font-bold bg-violet-600 text-white border-violet-600 hover:bg-violet-700 hover:border-violet-700 shadow-sm shadow-violet-500/20 transition-all duration-150 disabled:opacity-50 cursor-pointer"
             >
               {isSubmitting ? "保存中…" : "保存"}

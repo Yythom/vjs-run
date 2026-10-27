@@ -1,6 +1,7 @@
 import LogTerminal from "../components/log-terminal";
 import * as logStore from "../stores/log-store";
 import { showToast } from "../utils/toast";
+import { isEnterKey } from "../utils/keyboard";
 
 /**
  * 通用的「右侧详情面板」外壳：顶部 meta + 终端 + 可选 debug 输入。
@@ -96,7 +97,7 @@ export default function DetailPanel({
               value={debugInput.value}
               onChange={(e) => debugInput.onChange(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (isEnterKey(e)) {
                   debugInput.onRun();
                   e.target.value = "";
                 }

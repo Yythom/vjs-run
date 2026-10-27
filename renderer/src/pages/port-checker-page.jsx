@@ -5,6 +5,7 @@ import { DEFAULT_WATCHED_PORTS } from "../constants";
 import useResource from "../hooks/use-resource";
 import { showToast } from "../utils/toast";
 import { useAppConfig, updateAppConfig } from "../stores/app-config-store";
+import { isEnterKey } from "../utils/keyboard";
 
 export default function PortCheckerPage() {
   const config = useAppConfig();
@@ -167,7 +168,7 @@ export default function PortCheckerPage() {
             value={customPort}
             onChange={(e) => setCustomPort(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") addCustomPort();
+              if (isEnterKey(e)) addCustomPort();
             }}
             type="number"
             min="1"

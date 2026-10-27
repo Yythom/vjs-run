@@ -41,6 +41,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openDirectory: (dirPath, options) =>
     ipcRenderer.invoke("open-directory", dirPath, options),
 
+  // 用系统浏览器打开 http(s) 链接
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
+
   // ── Swagger Mock ────────────────────────────────────────────────────────────
 
   // 启动/停止 Swagger Mock 服务：读取配置中的 OpenAPI JSON/YAML 文件或目录

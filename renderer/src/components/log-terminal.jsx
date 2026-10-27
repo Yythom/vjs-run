@@ -2,8 +2,10 @@ import { useState, useLayoutEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import * as logStore from "../stores/log-store";
+import { isEnterKey } from "../utils/keyboard";
 
 /**
  * 终端组件 —— 包含日志检索。
@@ -11,6 +13,7 @@ import * as logStore from "../stores/log-store";
  *   - paneKey 变化时清屏 + 重写 store 里对应 buffer
  *   - 日志增量来自 logStore.subscribe，React 不参与每次更新
  *   - 支持基于 @xterm/addon-search 的日志全文检索与高亮
+ *   - 日志里的 http(s) 链接可点击，用系统浏览器打开（@xterm/addon-web-links）
  *   - 自动保持默认系统终端的滚动行为：正常输出时滚动，用户往上翻阅时不打扰
  */
 export default function LogTerminal({ paneKey, className, style, logTitle }) {
@@ -60,6 +63,14 @@ export default function LogTerminal({ paneKey, className, style, logTitle }) {
 
     const searchAddon = new SearchAddon();
     term.loadAddon(searchAddon);
+
+    // 默认处理是 window.open，在 Electron 里会开出一个新应用窗口，改走系统浏览器
+    term.loadAddon(
+      new WebLinksAddon((_event, uri) => {
+        if (window.electronAPI?.openExternal) window.electronAPI.openExternal(uri);
+        else window.open(uri, "_blank", "noopener");
+      }),
+    );
 
     termRef.current = term;
     searchAddonRef.current = searchAddon;
@@ -165,7 +176,7 @@ export default function LogTerminal({ paneKey, className, style, logTitle }) {
                   handleSearch(e.target.value, true);
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") {
+                  if (isEnterKey(e)) {
                     handleSearch(searchText, !e.shiftKey);
                   }
                 }}
