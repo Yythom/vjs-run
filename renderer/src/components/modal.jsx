@@ -17,7 +17,8 @@ import clsx from "../utils/clsx";
  *   - title：a11y 必填的标题（Dialog.Title 要求）。如果视觉上不需要展示，
  *     用 srOnly 把它视觉藏起来但保留语义。
  *   - srOnly：true 时 title 视觉隐藏，仅给屏幕阅读器
- *   - className：覆盖 Content 容器 className
+ *   - className：覆盖 Content 容器 className（不要写 translate / transform：
+ *     居中靠 modal-content-animate 动画的终态 translate(-50%,-50%) 维持）
  *   - onEscapeKeyDown：透传给 Radix，preventDefault 可阻止 Esc 关闭（如行内编辑时 Esc 只取消编辑）
  *   - children：modal 内容
  */
@@ -35,10 +36,11 @@ export default function Modal({
     <Dialog.Root open={open} onOpenChange={(next) => !next && onClose?.()}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className="fixed inset-0 z-50"
+          className="fixed inset-0 z-50 modal-backdrop-animate"
           style={{
-            background: "rgba(0, 0, 0, 0.55)",
-            backdropFilter: "blur(2px)",
+            background: "rgba(15, 23, 42, 0.45)",
+            backdropFilter: "blur(4px)",
+            WebkitBackdropFilter: "blur(4px)",
           }}
         />
         <Dialog.Content
@@ -57,7 +59,7 @@ export default function Modal({
             }
           }}
           className={clsx(
-            "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 bg-panel border border-border rounded-xl shadow-2xl flex flex-col overflow-hidden focus:outline-none",
+            "fixed top-1/2 left-1/2 z-50 bg-panel border border-border/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden focus:outline-none modal-content-animate",
             className,
           )}
           onClick={(e) => e.stopPropagation()}
@@ -74,10 +76,12 @@ export default function Modal({
                   <button
                     type="button"
                     onClick={onClose}
-                    className="text-slate-400 hover:text-slate-700 transition-colors text-base leading-none cursor-pointer w-6 h-6 rounded-full hover:bg-slate-200/60 flex items-center justify-center"
+                    className="text-slate-400 hover:text-slate-700 transition-colors cursor-pointer w-6 h-6 rounded-full hover:bg-slate-200/60 flex items-center justify-center"
                     aria-label="关闭弹窗"
                   >
-                    ✕
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                    </svg>
                   </button>
                 )}
               </div>

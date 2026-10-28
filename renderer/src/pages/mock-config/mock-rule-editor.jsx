@@ -334,9 +334,12 @@ function PathActions({ control, onRecommend, onCurl }) {
         onClick={onRecommend}
         disabled={disabled}
         title="根据 swagger schema 生成一份推荐 mock JSON"
-        className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-violet-500/5 text-violet-600 border-violet-200/50 hover:bg-violet-500/10 cursor-pointer transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed"
+        className="px-3 py-1.5 rounded-lg border text-xs font-semibold bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100 cursor-pointer transition-colors duration-150 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-2xs"
       >
-        推荐数据 ✨
+        <svg className="w-3.5 h-3.5 text-violet-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+        </svg>
+        <span>推荐数据</span>
       </button>
       <button
         type="button"
@@ -671,17 +674,23 @@ function VariantCard({ control, register, errors, index, onRemove, onVariantCurl
                 type="button"
                 onClick={() => onVariantCurl(index, "local")}
                 title="使用该变体的匹配条件，请求本地 mock 服务进行验证"
-                className="shrink-0 px-2 py-0.5 rounded-md border border-sky-200 bg-sky-500/5 text-[10px] text-sky-600 hover:bg-sky-500/10 hover:text-sky-700 font-semibold cursor-pointer transition-colors duration-150"
+                className="shrink-0 px-2 py-0.5 rounded-md border border-sky-200 bg-sky-50 text-[10px] text-sky-700 hover:bg-sky-100 font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1 shadow-2xs"
               >
-                ⚡ 本地验证
+                <svg className="w-2.5 h-2.5 text-sky-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+                </svg>
+                <span>本地验证</span>
               </button>
               <button
                 type="button"
                 onClick={() => onVariantCurl(index, "backend")}
                 title="使用该变体的匹配条件，请求代理的真实后端服务进行调试"
-                className="shrink-0 px-2 py-0.5 rounded-md border border-emerald-200 bg-emerald-500/5 text-[10px] text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 font-semibold cursor-pointer transition-colors duration-150"
+                className="shrink-0 px-2 py-0.5 rounded-md border border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700 hover:bg-emerald-100 font-semibold cursor-pointer transition-colors duration-150 flex items-center gap-1 shadow-2xs"
               >
-                ⚡ 后端调试
+                <svg className="w-2.5 h-2.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+                </svg>
+                <span>后端调试</span>
               </button>
             </>
           )}

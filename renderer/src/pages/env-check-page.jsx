@@ -5,18 +5,41 @@ import useResource from "../hooks/use-resource";
 import { showToast } from "../utils/toast";
 
 const ENV_ICONS = {
-  node: "⬡",
-  pnpm: "📦",
-  git: "🌿",
-  brew: "🍺",
-  pm2: "⚙️",
+  node: (
+    <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+    </svg>
+  ),
+  pnpm: (
+    <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
+    </svg>
+  ),
+  git: (
+    <svg className="w-4 h-4 text-orange-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6 3v12m12-6a9 9 0 0 1-9 9" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+    </svg>
+  ),
+  brew: (
+    <svg className="w-4 h-4 text-amber-700" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 0 1-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 0 1 4.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.943A4.5 4.5 0 0 1 15.938 17H8.062a4.5 4.5 0 0 1-2.292-.757L4.2 15.3m15.6 0-1.8-1.08A2.25 2.25 0 0 0 16.8 14H7.2a2.25 2.25 0 0 0-1.2.32L4.2 15.3" />
+    </svg>
+  ),
+  "mock-skill": (
+    <svg className="w-4 h-4 text-violet-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+    </svg>
+  ),
 };
 
 /** copied 提示只影响按钮自身，state 收在叶子里，点复制不重画整页卡片列表 */
-function CopyInstallButton({ item }) {
+function CopyInstallButton({ item, className = "" }) {
   const [copied, setCopied] = useState(false);
 
-  const copy = async () => {
+  const copy = async (e) => {
+    e.stopPropagation();
     try {
       await navigator.clipboard.writeText(item.install);
       setCopied(true);
@@ -31,9 +54,29 @@ function CopyInstallButton({ item }) {
     <button
       type="button"
       onClick={copy}
-      className="w-full text-center py-1.5 rounded border text-[10px] font-semibold bg-white text-slate-600 border-border hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer"
+      className={clsx(
+        "text-center text-[10.5px] py-1 px-2.5 rounded-md font-medium cursor-pointer transition-all flex items-center justify-center gap-1.5 select-none shadow-2xs shrink-0",
+        copied
+          ? "bg-emerald-50 text-emerald-700 border border-emerald-300"
+          : "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 hover:text-slate-900",
+        className,
+      )}
     >
-      {copied ? "✓ 已复制" : "📋 复制安装命令"}
+      {copied ? (
+        <>
+          <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+          </svg>
+          <span>已复制</span>
+        </>
+      ) : (
+        <>
+          <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" />
+          </svg>
+          <span>复制安装命令</span>
+        </>
+      )}
     </button>
   );
 }
@@ -55,12 +98,12 @@ export default function EnvCheckPage() {
   const results = data ?? [];
 
   const missingCount = results.filter((item) => item.status === "missing").length;
-  
+
   const subtitleText = loading
-    ? "正在体检本地开发工具链，请稍候..."
+    ? "正在体检本地开发工具链与 AI Agent 技能，请稍候..."
     : missingCount === 0
-      ? `所有环境项配置正常 (共检测 ${results.length} 项)`
-      : `环境存在部分缺失项 (共有 ${missingCount} 项未检测到有效版本，请对照下方指引配置)`;
+      ? `所有开发工具与 Mock Skill 配置正常 (共检测 ${results.length} 项)`
+      : `环境存在部分缺失项 (共有 ${missingCount} 项未检测到有效版本，请对照下方命令安装)`;
 
   return (
     <PageShell
@@ -71,64 +114,105 @@ export default function EnvCheckPage() {
           type="button"
           onClick={runEnvCheck}
           disabled={loading}
-          className="px-3 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-white text-slate-600 border-border hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50"
+          className="px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 shadow-2xs flex items-center gap-1.5"
         >
-          🔄 重新检测
+          <svg
+            className={clsx("w-3.5 h-3.5 text-slate-500", loading && "animate-spin")}
+            fill="none"
+            viewBox="0 0 24 24"
+            strokeWidth={1.5}
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+            />
+          </svg>
+          <span>重新检测</span>
         </button>
       }
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 items-stretch">
         {loading ? (
-          <div className="col-span-full text-center py-10 text-slate-400 text-xs">
-            正在扫描本地工具链，请稍候…
+          <div className="col-span-full text-center py-8 text-slate-400 text-xs">
+            正在体检本地工具链与技能环境...
           </div>
         ) : (
           results.map((item) => {
             const ok = item.status === "ok";
+            const isMockSkill = item.id === "mock-skill";
+            const showInstall = (!ok && item.install) || isMockSkill;
             return (
               <div
                 key={item.id}
                 className={clsx(
-                  "flex flex-col gap-1.5 rounded-lg border px-4 py-3",
-                  ok ? "bg-slate-50 border-border" : "bg-red-500/5 border-red-500/20",
+                  "flex flex-col justify-between gap-2.5 rounded-xl border p-3.5 transition-all shadow-2xs",
+                  isMockSkill && "sm:col-span-2 lg:col-span-2",
+                  ok
+                    ? "bg-slate-50/50 border-slate-200/80 hover:border-slate-300 hover:bg-slate-50/80"
+                    : "bg-red-500/5 border-red-500/25",
                 )}
               >
-                <div className="flex items-center justify-between">
-                  <span
-                    className={clsx(
-                      "text-sm font-semibold",
-                      ok ? "text-slate-900" : "text-red-700",
-                    )}
-                  >
-                    {ENV_ICONS[item.id] || "🔧"} {item.label}
-                  </span>
-                  <span
-                    className={clsx("status-dot", ok ? "running" : "error")}
-                    style={{ flexShrink: 0 }}
-                  />
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={clsx(
+                        "text-xs font-bold flex items-center gap-1.5",
+                        ok ? "text-slate-800" : "text-red-700",
+                      )}
+                    >
+                      {ENV_ICONS[item.id] || null}
+                      {item.label}
+                    </span>
+                    <span
+                      className={clsx("status-dot", ok ? "ok" : "error")}
+                      style={{ flexShrink: 0 }}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-0.5">
+                    <span
+                      className={clsx(
+                        "text-[11.5px] font-mono",
+                        ok ? "text-slate-700 font-semibold" : "text-red-600 font-semibold",
+                      )}
+                    >
+                      {ok ? item.version : "未安装或未检测到"}
+                    </span>
+                    <span className="text-[10px] text-slate-400 truncate font-mono">
+                      {item.cmd}
+                    </span>
+                  </div>
                 </div>
 
-                <span
-                  className={clsx(
-                    "text-[11px]",
-                    ok ? "text-slate-800" : "text-red-600",
-                  )}
-                >
-                  {ok ? item.version : "未安装"}
-                </span>
-                <span className="text-[10px] text-slate-400 truncate">
-                  {item.cmd}
-                </span>
-
-                {!ok && item.install && (
-                  <div className="mt-1 flex flex-col gap-1.5 rounded-md border border-red-500/20 bg-red-500/5 p-2">
+                {showInstall && item.install && (
+                  <div
+                    className={clsx(
+                      "mt-1 rounded-lg border p-2 flex gap-2",
+                      isMockSkill
+                        ? "flex-col sm:flex-row sm:items-center justify-between"
+                        : "flex-col",
+                      !ok
+                        ? "border-red-500/20 bg-red-500/5"
+                        : "border-slate-200/80 bg-slate-100/60",
+                    )}
+                  >
                     <code
-                      className="text-[10px] text-red-700 break-all select-all font-mono"
+                      className={clsx(
+                        "text-[10px] select-all font-mono leading-relaxed min-w-0 flex-1",
+                        // 只有 Mock Skill 是横排（命令 + 按钮同一行），截断；窄卡片里换行，保证命令能看全
+                        isMockSkill ? "truncate" : "break-all",
+                        !ok ? "text-red-700" : "text-slate-600",
+                      )}
                       title={item.install}
                     >
                       {item.install}
                     </code>
-                    <CopyInstallButton item={item} />
+                    <CopyInstallButton
+                      item={item}
+                      className={isMockSkill ? "w-full sm:w-auto" : "w-full"}
+                    />
                   </div>
                 )}
               </div>

@@ -168,6 +168,9 @@ export default function LogTerminal({ paneKey, className, style, logTitle }) {
           {/* 右侧搜索输入框 */}
           <div className="flex items-center gap-1.5 max-w-[240px] flex-1">
             <div className="relative flex-1">
+              <svg className="w-3 h-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
               <input
                 type="text"
                 value={searchText}
@@ -180,8 +183,8 @@ export default function LogTerminal({ paneKey, className, style, logTitle }) {
                     handleSearch(searchText, !e.shiftKey);
                   }
                 }}
-                placeholder="🔍 搜索日志..."
-                className="w-full bg-card border border-border rounded px-2.5 py-0.5 pr-12 text-[10.5px] text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 focus:bg-card transition-all"
+                placeholder="搜索日志..."
+                className="w-full bg-card border border-border rounded pl-6 pr-12 py-0.5 text-[10.5px] text-slate-900 placeholder-slate-400 outline-none focus:border-slate-500 focus:bg-card transition-all"
               />
               {searchText && (
                 <span className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">

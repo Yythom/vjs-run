@@ -152,11 +152,18 @@ export default function CleanupPage() {
               : "bg-violet-500/10 text-violet-700 border-violet-500/30 hover:bg-violet-500/20"
           }`}
         >
-          {running
-            ? "清理中…"
-            : hasDanger
-              ? "⚠️ 确认清理"
-              : "开始清理"}
+          {running ? (
+            "清理中…"
+          ) : hasDanger ? (
+            <span className="flex items-center gap-1.5">
+              <svg className="w-3.5 h-3.5 text-red-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <span>确认清理</span>
+            </span>
+          ) : (
+            "开始清理"
+          )}
         </button>
       }
     >
@@ -180,11 +187,15 @@ export default function CleanupPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span
-                      className={`text-[13px] font-semibold ${
+                      className={`text-[13px] font-semibold flex items-center gap-1 ${
                         o.danger ? "text-red-700" : "text-slate-800"
                       }`}
                     >
-                      {o.danger ? "⚠️ " : ""}
+                      {o.danger && (
+                        <svg className="w-3.5 h-3.5 text-red-600 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                        </svg>
+                      )}
                       {o.label}
                     </span>
                     {size && (
@@ -203,9 +214,12 @@ export default function CleanupPage() {
         {/* 提示信息栏 */}
         <div className="p-3 bg-slate-50 border border-border rounded-lg text-xs leading-relaxed">
           {hasDanger ? (
-            <span className="text-red-700 font-semibold">
-              ⚠️ 警告：你选择的项目中含有破坏性清除（如配置或规则重置），执行后对应数据将不可恢复！
-            </span>
+            <div className="flex items-start gap-2 text-red-700 font-semibold">
+              <svg className="w-4 h-4 text-red-600 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <span>警告：你选择的项目中含有破坏性清除（如配置或规则重置），执行后对应数据将不可恢复！</span>
+            </div>
           ) : (
             <span className="text-slate-500">
               提示：缓存和日志清理是非常安全的，不会影响你的配置文件和项目列表，缓存会在下次加载时自动重建。

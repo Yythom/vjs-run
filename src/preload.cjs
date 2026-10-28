@@ -159,7 +159,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 终止进行中的小程序发布
   stopWeappDeploy: () => ipcRenderer.invoke("stop-weapp-deploy"),
 
-  // 开发环境体检：并发检测 node / pnpm / git / brew / pm2 版本，返回结果数组
+  // 开发环境体检：并发检测 node / pnpm / git / brew / mock-skill 等环境版本，返回结果数组
   checkEnv: () => ipcRenderer.invoke("check-env"),
 
   // 端口占用查看：传入端口数组，返回每个端口的占用状态、进程名、PID

@@ -39,6 +39,30 @@ const KIND_META = {
   },
 };
 
+const METHOD_COLORS = {
+  GET: "text-emerald-700 bg-emerald-50 border-emerald-200/80",
+  POST: "text-blue-700 bg-blue-50 border-blue-200/80",
+  PUT: "text-amber-700 bg-amber-50 border-amber-200/80",
+  DELETE: "text-rose-700 bg-rose-50 border-rose-200/80",
+  PATCH: "text-teal-700 bg-teal-50 border-teal-200/80",
+};
+
+function MethodBadge({ method }) {
+  const color =
+    METHOD_COLORS[method?.toUpperCase()] ||
+    "text-slate-600 bg-slate-100 border-slate-200";
+  return (
+    <span
+      className={clsx(
+        "text-[9px] font-mono font-bold px-1.5 py-px rounded border tracking-wide uppercase shrink-0 shadow-2xs",
+        color,
+      )}
+    >
+      {method}
+    </span>
+  );
+}
+
 const FILTERS = [
   { key: "all", label: "全部" },
   { key: "mock", label: "MOCK" },
@@ -96,10 +120,8 @@ function HistoryListItem({ entry, selected, checked, onSelect, onToggleCheck }) 
           className="accent-sky-500 shrink-0"
         />
         <KindBadge kind={entry.kind} />
-        <span className="text-[10px] font-semibold text-slate-500 shrink-0 w-11">
-          {entry.method}
-        </span>
-        <span className="text-xs text-slate-900 font-medium truncate">
+        <MethodBadge method={entry.method} />
+        <span className="text-xs text-slate-900 font-medium truncate font-mono">
           {entry.path}
         </span>
       </div>
@@ -240,11 +262,25 @@ function JsonBlock({ title, value, copyable, searchable }) {
             type="button"
             onClick={copy}
             className={clsx(
-              "px-2 py-0.5 rounded border text-[10.5px] font-medium bg-card text-slate-600 border-border hover:bg-hover",
+              "px-2 py-0.5 rounded border text-[10.5px] font-medium bg-card text-slate-600 border-border hover:bg-hover transition-colors",
               searchable ? "" : "ml-auto",
             )}
           >
-            {copied ? "✓ 已复制" : "📋 复制"}
+            {copied ? (
+              <span className="flex items-center gap-1 text-emerald-600">
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                </svg>
+                已复制
+              </span>
+            ) : (
+              <span className="flex items-center gap-1">
+                <svg className="w-3 h-3 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" />
+                </svg>
+                复制
+              </span>
+            )}
           </button>
         )}
       </div>
@@ -490,9 +526,10 @@ function RecordingControl() {
         type="button"
         onClick={stop}
         title={`正在录制到场景「${recording.sceneName}」，点击停止`}
-        className="px-3 py-1 rounded-md border text-xs font-medium bg-red-400/15 text-red-700 border-red-400/40 hover:bg-red-400/25 animate-pulse"
+        className="px-2.5 py-1 rounded-md border text-xs font-medium bg-red-50 text-red-700 border-red-200 hover:bg-red-100 flex items-center gap-1.5 shadow-xs transition-colors"
       >
-        ⏹ 停止录制 · {recording.count || 0} 条
+        <span className="w-2 h-2 rounded-xs bg-red-600 animate-pulse" />
+        停止录制 · {recording.count || 0} 条
       </button>
     );
   }
@@ -508,9 +545,10 @@ function RecordingControl() {
             ? "把请求响应录制成 mock 场景（默认含命中的 mock，可配置排除；在 Mock 配置页可应用）"
             : "需要 mock 运行中才能录制"
         }
-        className="px-3 py-1 rounded-md border text-xs font-medium bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
+        className="px-2.5 py-1 rounded-md border text-xs font-medium bg-white text-slate-700 border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-xs transition-colors"
       >
-        ⏺ 录制
+        <span className="w-2 h-2 rounded-full bg-red-500" />
+        录制
       </button>
 
       <Modal
@@ -563,9 +601,10 @@ function RecordingControl() {
             type="button"
             onClick={start}
             disabled={!name.trim()}
-            className="px-3 py-1.5 rounded-md border text-xs font-semibold bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="px-3 py-1.5 rounded-md text-xs font-semibold bg-red-600 text-white hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-xs flex items-center gap-1.5"
           >
-            ⏺ 开始录制
+            <span className="w-2 h-2 rounded-full bg-white" />
+            开始录制
           </button>
         </div>
       </Modal>
@@ -626,12 +665,15 @@ function HistoryDetail({ entry }) {
               : "响应体过大未记录，无法生成规则"
           }
           className={clsx(
-            "ml-auto shrink-0 px-3 py-1.5 rounded-md border text-xs font-medium",
-            "bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20",
+            "ml-auto shrink-0 px-3 py-1.5 rounded-md border text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-all",
+            "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
             "disabled:opacity-40 disabled:cursor-not-allowed",
           )}
         >
-          ⚡ 生成 mock 规则
+          <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+          </svg>
+          <span>生成 mock 规则</span>
         </button>
       </div>
 
@@ -825,9 +867,12 @@ export default function MockHistoryPage() {
                 onClick={() => setSavingScene(true)}
                 disabled={checkedEntries.length === 0}
                 title="把选中的接口存成新场景，或写入已有场景（只替换同名接口）"
-                className="ml-auto px-2.5 py-1 rounded-md border text-[11px] font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="ml-auto px-2.5 py-1 rounded-md border text-[11px] font-medium bg-white text-slate-700 border-slate-200 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-xs transition-colors"
               >
-                📥 存入场景
+                <svg className="w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                </svg>
+                存入场景
               </button>
             </div>
           )}

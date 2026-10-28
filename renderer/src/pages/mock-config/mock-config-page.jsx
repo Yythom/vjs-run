@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useLocation } from "react-router";
+import clsx from "../../utils/clsx";
 import useMockData from "./use-mock-data";
 import MockRuleList from "./mock-rule-list";
 import MockRuleEditor from "./mock-rule-editor";
@@ -257,9 +258,12 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
         type="button"
         onClick={toggle}
         title="规则场景：保存 / 应用 / 编辑整套规则快照"
-        className="px-3 py-1 rounded-md border text-xs font-medium whitespace-nowrap bg-violet-400/10 text-violet-700 border-violet-400/35 hover:bg-violet-400/20"
+        className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 shadow-2xs flex items-center gap-1.5 shrink-0"
       >
-        场景
+        <svg className="w-3.5 h-3.5 text-violet-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6.429 9.75 2.25 12l4.179 2.25m0-4.5 5.571 3 5.571-3m-11.142 0L2.25 7.5 12 2.25l9.75 5.25-4.179 2.25m0 0L21.75 12l-4.179 2.25m0 0 4.179 2.25L12 21.75 2.25 16.5l4.179-2.25m11.142 0-5.571 3-5.571-3" />
+        </svg>
+        <span>场景</span>
       </button>
 
       <Modal
@@ -940,15 +944,6 @@ export default function MockConfigPage() {
   const createCustomRule = () =>
     guardSwitch(() => setSelectedKey(CUSTOM_NEW_KEY));
 
-  const openRulesFile = async () => {
-    const result = await window.electronAPI.openMockRulesFile(
-      editingScene || undefined,
-    );
-    if (!result?.success) {
-      showToast(`打开失败: ${result?.error || "未知错误"}`, "error");
-    }
-  };
-
   const openRulesFolder = async () => {
     const result = await window.electronAPI.openMockRulesFolder(
       editingScene || undefined,
@@ -988,17 +983,28 @@ export default function MockConfigPage() {
         </div>
         {/* whitespace-nowrap 会被按钮继承，header 变挤时按钮文字不竖排 */}
         <div className="ml-auto shrink-0 flex items-center gap-2 whitespace-nowrap">
-          <span className="text-[11px] text-slate-500">
-            {routes.length} APIs · {rules.length} rules
-          </span>
+          {/* 统计指标胶囊 */}
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100/80 border border-slate-200/70 text-[11px] font-mono text-slate-600 shadow-2xs select-none">
+            <span className="font-bold text-slate-800">{routes.length}</span>
+            <span className="text-slate-400">APIs</span>
+            <span className="text-slate-300">·</span>
+            <span className="font-bold text-slate-800">{rules.length}</span>
+            <span className="text-slate-400">rules</span>
+          </div>
+
+          <div className="h-4 w-px bg-slate-200 mx-0.5" />
+
           {editingScene && (
             <button
               type="button"
               onClick={finishSceneEdit}
               title="结束场景编辑，回到活动规则（规则改动已逐条落盘）"
-              className="px-3 py-1 rounded-md border text-xs font-medium whitespace-nowrap bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20"
+              className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold whitespace-nowrap bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 shadow-2xs flex items-center gap-1.5 cursor-pointer"
             >
-              结束编辑
+              <svg className="w-3.5 h-3.5 text-amber-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+              <span>结束编辑</span>
             </button>
           )}
           <ScenesMenu
@@ -1010,26 +1016,36 @@ export default function MockConfigPage() {
           />
           <button
             type="button"
-            onClick={openRulesFile}
-            title="用系统默认应用打开 mock-rules.json"
-            className="px-3 py-1 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900"
-          >
-            打开 JSON
-          </button>
-          <button
-            type="button"
             onClick={load}
             disabled={loading}
-            className="px-3 py-1 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 disabled:opacity-50"
+            className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 shadow-2xs flex items-center gap-1.5"
+            title="刷新规则与路由列表"
           >
-            刷新
+            <svg
+              className={clsx("w-3.5 h-3.5 text-slate-400", loading && "animate-spin")}
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"
+              />
+            </svg>
+            <span>刷新</span>
           </button>
           <button
             type="button"
             onClick={createCustomRule}
-            className="px-3 py-1 rounded-md border text-xs font-medium bg-emerald-400/10 text-emerald-700 border-emerald-400/35 hover:bg-emerald-400/20"
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all bg-sky-600 text-white hover:bg-sky-700 shadow-2xs flex items-center gap-1.5"
+            title="添加一条新的 Mock 规则"
           >
-            新增
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            <span>新增</span>
           </button>
         </div>
       </header>

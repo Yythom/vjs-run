@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Route, Routes, useLocation } from "react-router";
 import { Toaster } from "sonner";
@@ -10,7 +10,10 @@ import ProjectDashboard from "./pages/project-dashboard";
 // TitleBar / Sidebar / ProjectDashboard（默认首页）走主 chunk（首屏必需）。
 // 其它 page / modal 全部走 lazy：xterm 随日志控制台进副 chunk，
 // CodeMirror / react-virtual 随 mock 配置页进副 chunk，各 modal 各自一个 chunk。
-const ProjectConsole = lazy(() => import("./pages/project-console"));
+const loadProjectConsole = () => import("./pages/project-console");
+const loadRepoEditorModal = () => import("./modals/repo-editor-modal");
+const loadCleanModal = () => import("./modals/clean-modal");
+const ProjectConsole = lazy(loadProjectConsole);
 const MockServiceDetail = lazy(() => import("./pages/mock-service-detail"));
 const MockConfigPage = lazy(() => import("./pages/mock-config/mock-config-page"));
 const MockHistoryPage = lazy(() => import("./pages/mock-history"));
@@ -21,8 +24,8 @@ const PortCheckerPage = lazy(() => import("./pages/port-checker-page"));
 const CleanupPage = lazy(() => import("./pages/cleanup-page"));
 const CodecPage = lazy(() => import("./pages/codec-page"));
 const WeappDeployPage = lazy(() => import("./pages/weapp-deploy-page"));
-const RepoEditorModal = lazy(() => import("./modals/repo-editor-modal"));
-const CleanModal = lazy(() => import("./modals/clean-modal"));
+const RepoEditorModal = lazy(loadRepoEditorModal);
+const CleanModal = lazy(loadCleanModal);
 
 /**
  * 主区域路由（layout 之下的右侧面板）。
@@ -76,6 +79,18 @@ function ModalRoutes() {
 export default function AppShell() {
   const location = useLocation();
   const isSubWindow = location.search.includes("window=sub");
+
+  // 首屏之后趁空闲预取看板上最常点的几个 modal chunk：首次打开时不用再等加载 + 解析，
+  // 否则这段耗时会吃掉进场动画的开头几帧。首屏仍然只加载主 chunk
+  useEffect(() => {
+    if (isSubWindow) return;
+    const id = window.requestIdleCallback(() => {
+      loadRepoEditorModal();
+      loadCleanModal();
+      loadProjectConsole();
+    });
+    return () => window.cancelIdleCallback(id);
+  }, [isSubWindow]);
 
   return (
     <div className="bg-base text-slate-900 text-sm overflow-hidden h-screen flex flex-col">

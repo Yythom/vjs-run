@@ -133,12 +133,18 @@ const RuleListItem = memo(function RuleListItem({
           </div>
           <div className="absolute right-0 top-1/2 -translate-y-1/2 opacity-0 scale-95 transition-all duration-200 group-hover:opacity-100 group-hover:scale-100 flex items-center">
             {hasRule ? (
-              <span className="text-[10px] font-bold text-violet-600 bg-violet-50 border border-violet-200/50 px-2 py-0.5 rounded-md shadow-sm whitespace-nowrap">
-                ✏️ 编辑
+              <span className="text-[10px] font-bold text-violet-600 bg-violet-50 border border-violet-200/50 px-2 py-0.5 rounded-md shadow-2xs whitespace-nowrap flex items-center gap-1">
+                <svg className="w-2.5 h-2.5 text-violet-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L6.832 19.82a4.5 4.5 0 0 1-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 0 1 1.13-1.897L16.863 4.487Zm0 0L19.5 7.125" />
+                </svg>
+                <span>编辑</span>
               </span>
             ) : (
-              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/50 px-2 py-0.5 rounded-md shadow-sm whitespace-nowrap">
-                ＋ 快速配置
+              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/50 px-2 py-0.5 rounded-md shadow-2xs whitespace-nowrap flex items-center gap-1">
+                <svg className="w-2.5 h-2.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                <span>快速配置</span>
               </span>
             )}
           </div>
@@ -437,7 +443,7 @@ export default function MockRuleList({
             >
               <span>{label}</span>
               <span className={clsx(
-                "text-[9.5px] px-1.5 py-0.2 rounded-full font-bold transition-all",
+                "text-[9.5px] px-1.5 py-px rounded-full font-bold transition-all",
                 ruleFilter === id
                   ? "bg-slate-100 text-slate-700"
                   : "bg-slate-200/60 text-slate-500"

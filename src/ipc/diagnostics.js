@@ -6,6 +6,8 @@
 import { exec } from "node:child_process";
 import { ipcMain, dialog } from "electron";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { ipcSafe } from "./safe.js";
 import { buildSpawnEnv } from "../shell-env.js";
 import { killPort } from "../port-utils.js";
@@ -19,6 +21,24 @@ function stripAnsi(text) {
 }
 
 // ─── 体检（check-env）────────────────────────────────────────────────────────
+
+// mock-rules skill 的全局安装位置：`npx skills add -g` 落在 ~/.agents/skills 并软链进 ~/.claude/skills，
+// agy 读 ~/.gemini/config/skills。只认用户目录——仓库自带的 .claude/skills 只对 vjs-run 自己生效，
+// 算进来会让开发模式下永远显示「已就绪」
+const MOCK_SKILL_DIRS = [
+  [".claude", "skills"],
+  [".agents", "skills"],
+  [".gemini", "config", "skills"],
+  [".config", "skills"],
+];
+
+function detectMockSkill() {
+  const home = os.homedir();
+  // 认 SKILL.md 而不是目录：软链断了或只剩空目录都算没装
+  return MOCK_SKILL_DIRS.some((dir) =>
+    fs.existsSync(path.join(home, ...dir, "mock-rules", "SKILL.md")),
+  );
+}
 
 // install: 缺失时显示的安装命令（macOS-only 应用，优先 brew，brew 自身用官方一行脚本）
 const ENV_TOOLS = [
@@ -51,14 +71,29 @@ const ENV_TOOLS = [
       '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
   },
   {
-    id: "pm2",
-    label: "pm2",
-    cmd: "pm2 --version",
-    install: "npm install -g pm2",
+    id: "mock-skill",
+    label: "Mock Skill",
+    // 不是命令行工具，没有版本号可查：cmd 只给卡片展示检测位置，实际由 detect 判断
+    cmd: "~/.claude/skills/mock-rules 等目录",
+    install:
+      "npx skills add https://github.com/Yythom/vjs-run/tree/main/.claude/skills/mock-rules -g -y",
+    detect: detectMockSkill,
   },
 ];
 
-async function checkOneEnvTool({ id, label, cmd, install }) {
+async function checkOneEnvTool({ id, label, cmd, install, detect }) {
+  if (detect) {
+    const ok = detect();
+    return {
+      id,
+      label,
+      cmd,
+      install,
+      version: ok ? "已就绪 (mock-rules)" : null,
+      status: ok ? "ok" : "missing",
+    };
+  }
+
   const env = await buildSpawnEnv();
   return new Promise((resolve) => {
     exec(cmd, { env }, (err, stdout) => {

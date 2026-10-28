@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import PageShell from "../components/page-shell";
 import LogTerminal from "../components/log-terminal";
+import clsx from "../utils/clsx";
 import useResource from "../hooks/use-resource";
 import {
   useAppConfig,
@@ -109,10 +110,13 @@ function BranchField({ register, getValues, setValue, repoPath, disabled }) {
           type="button"
           onClick={reload}
           disabled={disabled || loading}
-          className="ml-auto text-[11px] text-slate-400 hover:text-slate-700 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          className="ml-auto text-[11px] text-slate-400 hover:text-slate-700 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
           title="重新读取分支列表"
         >
-          {loading ? "读取中…" : "🔄 刷新"}
+          <svg className={clsx("w-3 h-3 text-slate-400", loading && "animate-spin")} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          <span>{loading ? "读取中…" : "刷新"}</span>
         </button>
       </div>
       <select
@@ -179,7 +183,7 @@ function DeployConsole() {
     state === "starting"
       ? "starting"
       : state === "stopped"
-        ? "running"
+        ? "ok"
         : state === "error"
           ? "error"
           : "stopped";
@@ -210,7 +214,7 @@ function DeployConsole() {
 
   return (
     <PageShell
-      title="📱 小程序发布"
+      title="小程序发布"
       subtitle="在选定仓库执行 pnpm deploy:weapp：构建 Taro 产物并上传微信 CI（测试服）"
       noCard
       actions={
@@ -221,7 +225,7 @@ function DeployConsole() {
             <button
               type="button"
               onClick={handleStop}
-              className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-red-400/10 text-red-700 border-red-400/30 hover:bg-red-400/20"
+              className="px-4 py-1.5 rounded-md border text-xs font-semibold cursor-pointer transition-all bg-red-50 text-red-700 border-red-200 hover:bg-red-100 shadow-2xs"
             >
               终止发布
             </button>
@@ -229,9 +233,12 @@ function DeployConsole() {
             <button
               type="button"
               onClick={handleRun}
-              className="px-4 py-1.5 rounded-md border text-xs font-medium cursor-pointer transition-all bg-blue-500/20 text-blue-700 border-blue-500/40 hover:bg-blue-500/30"
+              className="px-4 py-1.5 rounded-md border text-xs font-semibold cursor-pointer transition-all bg-sky-600 text-white border-sky-600 hover:bg-sky-700 shadow-2xs flex items-center gap-1.5"
             >
-              🚀 开始发布
+              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" />
+              </svg>
+              <span>开始发布</span>
             </button>
           )}
         </div>
@@ -257,9 +264,12 @@ function DeployConsole() {
                 type="button"
                 onClick={handleSelectDirectory}
                 disabled={running}
-                className="px-3 py-2 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors flex items-center gap-1 cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="px-3 py-2 rounded-md border text-xs font-medium bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed shadow-2xs"
               >
-                📂 选择文件夹
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-19.5 0A2.25 2.25 0 0 0 2.25 15v3.75A2.25 2.25 0 0 0 4.5 21h15a2.25 2.25 0 0 0 2.25-2.25V15a2.25 2.25 0 0 0-2.25-2.25m-19.5 0h19.5M2.25 9.75V7.125A2.25 2.25 0 0 1 4.5 5h3.75a3 3 0 0 1 2.25 1L12 8.25h6.75A2.25 2.25 0 0 1 21 10.5V12" />
+                </svg>
+                <span>选择文件夹</span>
               </button>
             </div>
             <FieldError message={errors.repoPath?.message} />
@@ -334,7 +344,7 @@ export default function WeappDeployPage() {
   if (!loaded) {
     return (
       <PageShell
-        title="📱 小程序发布"
+        title="小程序发布"
         subtitle="在选定仓库执行 pnpm deploy:weapp：构建 Taro 产物并上传微信 CI（测试服）"
         noCard
       >

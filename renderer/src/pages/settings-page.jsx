@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import PageShell from "../components/page-shell";
+import clsx from "../utils/clsx";
 import {
   updateAppConfig,
   useAppConfig,
@@ -239,9 +240,12 @@ export default function SettingsPage() {
     >
       <div className="flex flex-col gap-4">
         {/* 卡片 1：数据源配置与生成 */}
-        <div className="p-4 border border-border rounded-xl bg-card flex flex-col gap-4">
-          <h3 className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 pb-2 border-b border-border">
-            <span>📦</span> 数据源配置与生成
+        <div className="p-5 border border-slate-200/90 rounded-xl bg-white shadow-2xs flex flex-col gap-4">
+          <h3 className="text-xs font-bold text-slate-800 flex items-center gap-2 pb-2.5 border-b border-border">
+            <svg className="w-4 h-4 text-violet-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
+            </svg>
+            <span>数据源配置与生成</span>
           </h3>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-slate-600">
@@ -258,17 +262,23 @@ export default function SettingsPage() {
               <button
                 type="button"
                 onClick={handleSelectDirectory}
-                className="px-3 py-2 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                className="px-3 py-2 rounded-md border text-xs font-medium bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-2xs"
               >
-                📂 选择文件夹
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-19.5 0A2.25 2.25 0 0 0 2.25 15v3.75A2.25 2.25 0 0 0 4.5 21h15a2.25 2.25 0 0 0 2.25-2.25V15a2.25 2.25 0 0 0-2.25-2.25m-19.5 0h19.5M2.25 9.75V7.125A2.25 2.25 0 0 1 4.5 5h3.75a3 3 0 0 1 2.25 1L12 8.25h6.75A2.25 2.25 0 0 1 21 10.5V12" />
+                </svg>
+                <span>选择文件夹</span>
               </button>
               <button
                 type="button"
                 onClick={handleOpenDirectory}
-                className="px-3 py-2 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                className="px-3 py-2 rounded-md border text-xs font-medium bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-2xs"
                 title="在访达中打开该目录"
               >
-                🔍 打开目录
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
+                <span>打开目录</span>
               </button>
             </div>
             <FieldError message={errors.mockSpecPath?.message} />
@@ -293,18 +303,24 @@ export default function SettingsPage() {
                 type="button"
                 onClick={handleGenerate}
                 disabled={generating}
-                className="px-3 py-2 rounded-md border text-xs font-medium bg-purple-500/[0.06] text-purple-700 border-purple-500/25 hover:bg-purple-500/15 transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-default"
+                className="px-3.5 py-2 rounded-md border text-xs font-semibold bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100 transition-colors cursor-pointer shrink-0 disabled:opacity-50 disabled:cursor-default flex items-center gap-1.5 shadow-2xs"
                 title="从该服务器拉取各服务 swagger 文档，生成 OpenAPI JSON 写入上面的目录（进度见 Mock 运行日志）"
               >
-                {generating ? "⏳ 生成中…" : "⚡ 生成 OpenAPI JSON"}
+                <svg className={clsx("w-3.5 h-3.5 text-violet-600", generating && "animate-spin")} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+                </svg>
+                <span>{generating ? "生成中…" : "生成 OpenAPI JSON"}</span>
               </button>
               <button
                 type="button"
                 onClick={() => openModal("/mock-service")}
-                className="px-3 py-2 rounded-md border text-xs font-medium bg-card text-slate-600 border-border hover:bg-hover hover:text-slate-900 transition-colors flex items-center gap-1 cursor-pointer shrink-0"
+                className="px-3 py-2 rounded-md border text-xs font-medium bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-2xs"
                 title="打开 Mock 服务运行日志控制台"
               >
-                📋 查看日志
+                <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+                <span>查看日志</span>
               </button>
             </div>
             <p className="text-[11px] text-slate-400">
@@ -315,9 +331,12 @@ export default function SettingsPage() {
         </div>
 
         {/* 卡片 2：运行与代理配置 */}
-        <div className="p-4 border border-border rounded-xl bg-card flex flex-col gap-4">
-          <h3 className="text-xs font-semibold text-slate-700 flex items-center gap-1.5 pb-2 border-b border-border">
-            <span>⚙️</span> Mock 运行与代理参数
+        <div className="p-5 border border-slate-200/90 rounded-xl bg-white shadow-2xs flex flex-col gap-4">
+          <h3 className="text-xs font-bold text-slate-800 flex items-center gap-2 pb-2.5 border-b border-border">
+            <svg className="w-4 h-4 text-sky-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" />
+            </svg>
+            <span>Mock 运行与代理参数</span>
           </h3>
           <div className="grid grid-cols-[1fr_120px] gap-3">
             <div className="flex flex-col gap-1.5">

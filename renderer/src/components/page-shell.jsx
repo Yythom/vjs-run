@@ -20,20 +20,24 @@ export default function PageShell({
   noCard = false,
 }) {
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
+    <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/60">
       {/* 统一的页面 Header */}
-      <div className="shrink-0 flex items-center justify-between px-6 h-14 border-b border-border bg-white">
+      <div className="shrink-0 flex items-center justify-between px-6 h-13 border-b border-border bg-white">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-slate-800 truncate">{title}</h2>
+          <h2 className="text-sm font-bold text-slate-800 tracking-tight truncate">
+            {title}
+          </h2>
           {subtitle && (
-            <p className="text-[11px] text-slate-400 mt-0.5 truncate">{subtitle}</p>
+            <p className="text-[11.5px] text-slate-400 mt-0.5 truncate">
+              {subtitle}
+            </p>
           )}
         </div>
-        {actions && <div className="flex gap-2 shrink-0">{actions}</div>}
+        {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
       </div>
 
       {/* 页面内容区 */}
-      <div className="flex-1 overflow-y-auto p-2">
+      <div className="flex-1 overflow-y-auto p-4">
         {noCard ? (
           <div className={clsx("h-full flex flex-col", className)}>
             {children}
@@ -41,8 +45,8 @@ export default function PageShell({
         ) : (
           <div
             className={clsx(
-              "max-w-4xl mx-auto bg-white border border-border rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.02)] p-4",
-              className
+              "max-w-4xl mx-auto bg-white border border-slate-200/80 rounded-xl shadow-xs p-5",
+              className,
             )}
           >
             {children}
