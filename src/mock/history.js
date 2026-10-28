@@ -21,6 +21,7 @@ export function recordMockRequest(entry) {
   entries.push(full);
   if (entries.length > MAX_ENTRIES) entries = entries.slice(-MAX_ENTRIES);
   sendMockRequest(full);
+  return full;
 }
 
 export function getMockHistory() {

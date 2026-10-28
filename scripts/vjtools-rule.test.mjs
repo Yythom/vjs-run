@@ -1,4 +1,6 @@
-// mock-rule.mjs 的 CLI 自动化测试：node --test scripts/
+// vjtools mock rule（src/cli/rule.js）的行为测试：node --test scripts/
+// 这批用例原本测的是 scripts/mock-rule.mjs，规则逻辑收敛到 src/mock/rules.js 后原样保留，
+// 作为「重写没有改变命令行为」的契约。
 // 每个用例用 mkdtemp 出来的独立 VJTOOLS_USER_DATA_DIR，绝不触碰真实用户数据。
 
 import { test } from "node:test";
@@ -9,8 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CLI = fileURLToPath(new URL("./mock-rule.mjs", import.meta.url));
-const REPO_ROOT = path.dirname(path.dirname(CLI));
+const CLI = fileURLToPath(new URL("../src/cli/index.js", import.meta.url));
 
 function freshUserData() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "mock-rule-test-"));
@@ -19,7 +20,7 @@ function freshUserData() {
 // 跑一次 CLI。stdin 传 string 即管道输入；不传则模拟无管道（stdin 关闭，非 TTY，
 // readFileSync(0) 返回空 → readStdin() 归一为 null，与终端直跑等价）。
 function run(userData, args, stdin) {
-  const result = spawnSync(process.execPath, [CLI, ...args], {
+  const result = spawnSync(process.execPath, [CLI, "mock", "rule", ...args], {
     input: stdin ?? "",
     encoding: "utf8",
     env: { ...process.env, VJTOOLS_USER_DATA_DIR: userData, MOCK_RULES_FILE: "" },
@@ -48,6 +49,16 @@ test("set 新增规则：stdin response + status + delay 全部落盘，enabled 
   const rules = readJson(rulesFile(ud));
   assert.deepEqual(rules, [
     { enabled: true, method: "POST", path: "/api/login", status: 200, delay: 300, response: { rc: 0 } },
+  ]);
+});
+
+test("set 支持 --key=value 形式传参，与空格分隔形式完全一致", () => {
+  const ud = freshUserData();
+  const r = run(ud, ["set", "--path=/api/equal", "--method=POST", "--status=201", "--delay=150"], '{"rc":0}');
+  assert.equal(r.code, 0, r.err);
+  const rules = readJson(rulesFile(ud));
+  assert.deepEqual(rules, [
+    { enabled: true, method: "POST", path: "/api/equal", status: 201, delay: 150, response: { rc: 0 } },
   ]);
 });
 
@@ -442,7 +453,7 @@ test("config：只改两个地址字段，其余配置原样保留；后端地�
     mockSwaggerServer: "http://swagger.local/t2",
     mockBackendBaseUrl: "https://api.local/t2/",
   });
-  assert.match(run(ud, ["config"]).out, /后端代理地址：\s+https:\/\/api\.local\/t2\//);
+  assert.match(run(ud, ["config"]).out, /后端代理地址\s+--backend\s+https:\/\/api\.local\/t2\//);
 });
 
 test("config：只传一个字段时另一个不动；传空串清空", () => {
@@ -474,7 +485,7 @@ test("--file / MOCK_RULES_FILE 覆盖活动规则文件路径", () => {
   assert.equal(fs.existsSync(rulesFile(ud)), false);
 
   const viaEnv = path.join(ud, "env-rules.json");
-  const r = spawnSync(process.execPath, [CLI, "set", "--method", "GET", "--path", "/api/b"], {
+  const r = spawnSync(process.execPath, [CLI, "mock", "rule", "set", "--method", "GET", "--path", "/api/b"], {
     input: '{"v":2}',
     encoding: "utf8",
     env: { ...process.env, VJTOOLS_USER_DATA_DIR: ud, MOCK_RULES_FILE: viaEnv },
@@ -524,15 +535,4 @@ test("base：config.json 缺失或损坏时回退默认值，不报错", () => {
   const { code, out } = run(broken, ["base", "--quiet"]);
   assert.equal(code, 0);
   assert.equal(out.trim(), "http://127.0.0.1:3002");
-});
-
-// ─── 副本同步（防漂移）───────────────────────────────────────────────────────
-
-test("skill 目录的 mock-rule.mjs 与仓库根字节一致（改了记得 cp 同步）", () => {
-  const skillCopy = path.join(REPO_ROOT, ".claude", "skills", "mock-rules", "scripts", "mock-rule.mjs");
-  assert.equal(
-    fs.readFileSync(skillCopy, "utf8"),
-    fs.readFileSync(CLI, "utf8"),
-    "skill 副本与 scripts/mock-rule.mjs 不一致：cp scripts/mock-rule.mjs .claude/skills/mock-rules/scripts/",
-  );
 });

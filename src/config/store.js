@@ -23,7 +23,7 @@ export function initStore() {
   watchExternalChanges();
 }
 
-// config.json 可能被软件之外的进程改写（如 scripts/mock-rule.mjs config 命令）。
+// config.json 可能被软件之外的进程改写（如 vjtools mock config 命令）。
 // 监听文件，变化后重新加载 live config 并通知订阅方；自己 saveConfig 引起的
 // 变化内容与 live config 相同，会被跳过。
 function watchExternalChanges() {

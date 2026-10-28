@@ -162,6 +162,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // 开发环境体检：并发检测 node / pnpm / git / brew / mock-skill 等环境版本，返回结果数组
   checkEnv: () => ipcRenderer.invoke("check-env"),
 
+  // 把 app 内置的 vjtools 命令装到 PATH：{ success, status: installed|already|external|canceled, linkPath, error }
+  installCli: () => ipcRenderer.invoke("install-cli"),
+
   // 端口占用查看：传入端口数组，返回每个端口的占用状态、进程名、PID
   checkPorts: (ports) => ipcRenderer.invoke("check-ports", { ports }),
 

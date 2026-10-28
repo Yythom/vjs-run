@@ -1025,3 +1025,84 @@ test("端到端：真实 curl 打真实 mock server，状态码与 x-mock-* 能�
     assert.equal(notFound.meta.status, 404);
   });
 });
+
+// ─── 本机专用接口：请求历史 / 事件流 ───────────────────────────────────────────
+
+/** 用 http.request 发请求：fetch 不让随便设 Origin 头 */
+function rawRequest(base, requestPath, { method = "GET", headers = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${base}${requestPath}`, { method, headers }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => (body += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, body }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("请求历史 / 事件流只给本机程序：浏览器页面（带 Origin）拒绝；DELETE 清空历史", async () => {
+  const { specPath } = fixture();
+  let history = [{ id: 1, path: "/api/users" }];
+  await withServer(
+    { specPath, mockAll: true, getHistory: () => history, clearHistory: () => { history = []; }, subscribe: () => () => {} },
+    async ({ base }) => {
+      assert.equal((await rawRequest(base, "/__mock/history")).status, 200);
+      assert.equal((await rawRequest(base, "/__mock/history", { headers: { origin: "https://evil.example" } })).status, 403);
+      assert.equal((await rawRequest(base, "/__mock/events", { headers: { origin: "http://localhost:5173" } })).status, 403);
+      // 其它调试接口不受影响（规则 / 路由里没有敏感数据）
+      assert.equal((await rawRequest(base, "/__mock/health", { headers: { origin: "https://evil.example" } })).status, 200);
+
+      assert.equal((await rawRequest(base, "/__mock/history", { method: "DELETE" })).status, 200);
+      assert.deepEqual(JSON.parse((await rawRequest(base, "/__mock/history")).body), []);
+    },
+  );
+});
+
+test("请求历史：局域网里的其它地址访问被拒绝（mock 常监听 0.0.0.0）", async (t) => {
+  const lanIp = Object.values(os.networkInterfaces())
+    .flat()
+    .find((iface) => iface?.family === "IPv4" && !iface.internal)?.address;
+  if (!lanIp) {
+    t.skip("本机没有局域网 IPv4 地址");
+    return;
+  }
+  const { specPath } = fixture();
+  await withServer({ specPath, host: "0.0.0.0", getHistory: () => [] }, async ({ handle }) => {
+    const lanBase = `http://${lanIp}:${handle.server.address().port}`;
+    assert.equal((await rawRequest(lanBase, "/__mock/history")).status, 403);
+    assert.equal((await rawRequest(lanBase, "/__mock/health")).status, 200);
+  });
+});
+
+test("/__mock/events：订阅后实时收到新请求，断开即取消订阅", async () => {
+  const { specPath } = fixture();
+  const subscribers = new Set();
+  const subscribe = (send) => {
+    subscribers.add(send);
+    return () => subscribers.delete(send);
+  };
+  await withServer(
+    { specPath, mockAll: true, subscribe, onRecord: (entry) => subscribers.forEach((send) => send("request", entry)) },
+    async ({ base }) => {
+      let received = "";
+      const stream = http.get(`${base}/__mock/events`);
+      const res = await new Promise((resolve) => stream.on("response", resolve));
+      assert.equal(res.headers["content-type"], "text/event-stream; charset=utf-8");
+      res.on("data", (chunk) => (received += chunk));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(subscribers.size, 1);
+
+      await fetch(`${base}/api/users`);
+      const deadline = Date.now() + 3000;
+      while (!received.includes("event: request") && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.match(received, /event: request\ndata: \{.*"path":"\/api\/users"/);
+
+      stream.destroy();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.equal(subscribers.size, 0, "断开后要取消订阅");
+    },
+  );
+});

@@ -14,6 +14,9 @@ export const SRC_DIR = path.dirname(__filename);
  *  实际可写副本由 ensureUserMockAssets 复制到 userData。 */
 export const BUILTIN_MOCK_ASSETS_DIR = path.join(SRC_DIR, "mock", "assets");
 
+/** vjtools 命令行入口（app 内置命令用 Electron 的 node 模式跑它，见 services/cli-shim.js） */
+export const CLI_ENTRY = path.join(SRC_DIR, "cli", "index.js");
+
 /** preload 脚本路径（必须 .cjs，Electron 推荐 preload 用 CJS） */
 export const PRELOAD_PATH = path.join(SRC_DIR, "preload.cjs");
 

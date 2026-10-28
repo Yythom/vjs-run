@@ -23,6 +23,7 @@ export default [
         URL: "readonly",
         fetch: "readonly",
         AbortSignal: "readonly",
+        AbortController: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
         setImmediate: "readonly",

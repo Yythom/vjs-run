@@ -47,17 +47,18 @@ src/
   main.js          # 主进程入口:生命周期编排
   config/          # electron-store 配置读写与 normalize
   ipc/             # 主进程 IPC handler
-  mock/            # mock server、规则匹配、请求历史
+  mock/            # mock server、规则校验与读写(rules.js / scenes.js)、请求历史
+  cli/             # vjtools 命令行(不依赖 Electron,与 app 共用 mock 代码和数据)
   services/        # 窗口、自动更新、右键菜单等
 renderer/          # 前端(Vite + React),控制台与 mock 配置页
-scripts/
-  mock-rule.mjs    # CLI:安全增删改运行时 mock 规则
+packages/cli/      # vjtools-cli 的 npm 包(构建时从 src/ 收集 CLI 用到的源码)
+scripts/           # 测试(node --test)
 .claude/skills/    # 配套的 Claude Code / Agent skill
 ```
 
 ## Claude Code Skill
 
-本仓库自带 [`mock-rules`](.claude/skills/mock-rules/SKILL.md) skill,让 Claude Code / Agent 直接帮你安全地增删改 mock 规则(改某个接口返回什么、造假数据联调、关掉某条 mock 等),底层走 `scripts/mock-rule.mjs`,带校验、幂等、原子写盘,并自动被 mock server 热载。
+本仓库自带 [`mock-rules`](.claude/skills/mock-rules/SKILL.md) skill,让 Claude Code / Agent 直接帮你安全地增删改 mock 规则(改某个接口返回什么、造假数据联调、关掉某条 mock 等),底层走 `vjtools` 命令:装了 vjtools app 的在「开发环境体检」页点「安装到命令行」即可(用 app 自带的运行时,不需要 node);没装 app 的 `npm i -g vjtools-cli`(见 [packages/cli](packages/cli/README.md))。带校验、幂等、原子写盘,并自动被 mock server 热载。不装 vjtools app 也能用。
 
 ### 安装
 
@@ -78,20 +79,20 @@ npx skills add https://github.com/Yythom/vjs-run/tree/main/.claude/skills/mock-r
 
 ### 手动直接用 CLI
 
-不装 skill 也可以直接用底层脚本:
+不装 skill 也可以直接用 `vjtools`(启停、查请求历史等完整命令见 [packages/cli/README.md](packages/cli/README.md)):
 
 ```bash
 # 列出现有规则
-node scripts/mock-rule.mjs list
+vjtools mock rule list
 
 # 让 GET /api/user/profile 返回自定义数据(response 从 stdin 读 JSON)
 echo '{"rc":0,"code":"SUCCESS","data":{"name":"张三","vip":true}}' \
-  | node scripts/mock-rule.mjs set --method GET --path /api/user/profile --status 200
+  | vjtools mock rule set --method GET --path /api/user/profile --status 200
 
 # 查看 / 开关 / 删除单条
-node scripts/mock-rule.mjs get     --method GET --path /api/user/profile
-node scripts/mock-rule.mjs disable --method GET --path /api/user/profile
-node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
+vjtools mock rule get     --method GET --path /api/user/profile
+vjtools mock rule disable --method GET --path /api/user/profile
+vjtools mock rule rm      --method GET --path /api/user/profile
 ```
 
 规则文件默认在 `~/Library/Application Support/vjtools/mock-assets/mock-rules.json`,写盘后 mock server 的 watcher 会自动热载,无需重启。
@@ -100,10 +101,10 @@ node scripts/mock-rule.mjs rm      --method GET --path /api/user/profile
 
 ```bash
 # 查看
-node scripts/mock-rule.mjs config
+vjtools mock config
 
 # 修改(可只传一个;传 "" 清空)。软件会自动重新加载,改后端代理地址时如果 mock 在运行会自动重启
-node scripts/mock-rule.mjs config --backend https://api.example.com/t2 --swagger-server http://swagger.example.com/t2
+vjtools mock config --backend https://api.example.com/t2 --swagger-server http://swagger.example.com/t2
 ```
 
 ### 场景(scenes)
@@ -112,23 +113,23 @@ node scripts/mock-rule.mjs config --backend https://api.example.com/t2 --swagger
 
 ```bash
 # 列出所有场景
-node scripts/mock-rule.mjs scenes
+vjtools mock rule scenes
 
 # 新建空场景(同名报错)
-node scripts/mock-rule.mjs new-scene --scene 登录联调
+vjtools mock rule new-scene --scene 登录联调
 
 # 往场景里加/改接口
 echo '{"rc":0,"code":"SUCCESS","data":{"token":"abc"}}' \
-  | node scripts/mock-rule.mjs set --scene 登录联调 --method POST --path /api/login --status 200
+  | vjtools mock rule set --scene 登录联调 --method POST --path /api/login --status 200
 
 # 查看场景内容
-node scripts/mock-rule.mjs list --scene 登录联调
+vjtools mock rule list --scene 登录联调
 
 # 应用场景(覆盖活动规则):仅当活动规则为空、或该场景正是当前应用的场景时执行,否则退出码 2;--force 跳过检查
-node scripts/mock-rule.mjs apply-scene --scene 登录联调
+vjtools mock rule apply-scene --scene 登录联调
 ```
 
-场景文件落在 `~/Library/Application Support/vjtools/mock-assets/scenes/` 下。注意:场景**只是快照**,需要「应用」后才覆盖活动规则生效。软件里点「应用」或用上面的 `apply-scene` 都行。AI 建完场景后会自动尝试不带 `--force` 的 `apply-scene`:活动规则为空、或改的正是当前应用的场景时直接生效;其他情况仍交给你在软件里应用,除非你明确让 AI 去应用。
+场景文件落在 `~/Library/Application Support/vjtools/mock-assets/scenes/` 下,app 和 CLI 共用,先用 CLI 建的场景之后装了 app 也能直接看到。注意:场景**只是快照**,需要「应用」后才覆盖活动规则生效。软件里点「应用」或用上面的 `apply-scene` 都行。AI 建完场景后会自动尝试不带 `--force` 的 `apply-scene`:活动规则为空、或改的正是当前应用的场景时直接生效;其他情况会先问你,你明确同意后才覆盖。
 
 ## License
 

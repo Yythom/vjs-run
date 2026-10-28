@@ -1,11 +1,13 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { clearInterval, setInterval } from "node:timers";
 import cors from "cors";
 import chokidar from "chokidar";
 import { parse as parseCookie } from "cookie";
 import { mockFromSchema, tunePayloadForRequest } from "./data.js";
-import { normalizeVariantLoose, selectVariant } from "./variant-match.js";
+import { selectVariant } from "./variant-match.js";
+import { normalizeMockRule } from "./rules.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
 
 const HTTP_METHODS = new Set([
@@ -75,6 +77,9 @@ async function startMockServer({
   forcedStatus,
   onLog,
   onRecord,
+  getHistory,
+  clearHistory,
+  subscribe,
 }) {
   const state = await loadMockState(specPath, serviceAddress);
   const { routes, sources } = state;
@@ -98,16 +103,25 @@ async function startMockServer({
       mockAll,
       onLog,
       onRecord,
+      getHistory,
+      clearHistory,
+      subscribe,
     },
   });
 
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, () => {
-      server.off("error", reject);
-      resolve();
+  try {
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, host, () => {
+        server.off("error", reject);
+        resolve();
+      });
     });
-  });
+  } catch (err) {
+    // listen 失败（端口占用等）时 watcher 已经建好了，不关掉会吊住进程不退出
+    await Promise.allSettled(watchers.map((watcher) => watcher.close()));
+    throw err;
+  }
 
   return {
     server,
@@ -135,6 +149,9 @@ function createMockServer({
     mockAll: false,
     onLog: null,
     onRecord: null,
+    getHistory: null,
+    clearHistory: null,
+    subscribe: null,
     ...config,
   };
   // 历史记录是旁路能力，回调抛错不能影响请求处理
@@ -179,9 +196,41 @@ function createMockServer({
         return;
       }
 
+      // 请求历史 / 事件流里有完整的请求体、响应体（可能带登录 token），只给本机程序用
+      if (PRIVATE_PATHS.has(requestUrl.pathname) && !isPrivateRequest(req)) {
+        sendJsonPretty(res, 403, {
+          error: "只允许本机程序访问（vjtools app / vjtools 命令 / curl），浏览器页面和其它机器不能读取",
+        });
+        return;
+      }
+
+      // 请求历史由宿主（后台进程）持有，server 只负责暴露出来，
+      // 让 app 的历史面板、vjtools mock history、AI 排障都能查到每条请求走了哪条路。
+      if (requestUrl.pathname === "/__mock/history") {
+        if (req.method === "DELETE") {
+          runtimeConfig.clearHistory?.();
+          sendJsonPretty(res, 200, { ok: true });
+          return;
+        }
+        sendJsonPretty(res, 200, runtimeConfig.getHistory?.() ?? []);
+        return;
+      }
+
+      // SSE：把新请求、日志实时推给订阅方（app 主进程据此更新历史面板、日志、录制）
+      if (requestUrl.pathname === "/__mock/events") {
+        if (!runtimeConfig.subscribe) {
+          sendJsonPretty(res, 404, { error: "当前 mock 不支持事件推送" });
+          return;
+        }
+        openEventStream(req, res, runtimeConfig.subscribe);
+        return;
+      }
+
       if (requestUrl.pathname === "/__mock/health") {
         sendJsonPretty(res, 200, {
           ok: true,
+          // 配合 mock-runtime.json 的 pid 判断「端口上这个 mock 是不是记录里那个实例」
+          pid: process.pid,
           files: currentSources.length,
           routes: currentRoutes.length,
           mockDataDir: runtimeConfig.mockDataDir || null,
@@ -1055,47 +1104,6 @@ function loadMockRules(mockRulesFile) {
   return rules || [];
 }
 
-// 规则必须带具体 method——OpenAPI 里每个操作本来就绑定在某个 method 上，规则没理由
-// 比 spec 更宽松。缺 method 或写 "*" 的规则一律不再命中，但**不能静默跳过**：
-// 「规则明明写了却不生效」是最难查的一类问题。loadMockRules 按 mtime 缓存，
-// 同一份文件只会归一化一次，所以这里喊一次就够，不会每个请求刷屏。
-function warnMissingMethod(rulePath) {
-  console.warn(
-    `[mock] 规则 ${rulePath || "(缺 path)"} 没有具体 method（缺省或 "*"），` +
-      `不会命中任何请求。请改成 GET / POST 等具体方法。`,
-  );
-}
-
-function normalizeMockRule(rule) {
-  // 字符串简写只给得出 path、给不出 method，因此不再是可命中的规则
-  if (typeof rule === "string") {
-    warnMissingMethod(rule);
-    return {
-      method: "",
-      path: rule,
-      enabled: true,
-    };
-  }
-
-  // variants：加载路径宽松清洗（非法变体静默丢弃），手改文件不至于整条规则失效
-  const variants = Array.isArray(rule.variants)
-    ? rule.variants.map(normalizeVariantLoose).filter(Boolean)
-    : [];
-
-  const method = String(rule.method ?? "").trim().toUpperCase();
-  if (!method || method === "*") warnMissingMethod(rule.path);
-
-  return {
-    method,
-    path: rule.path,
-    response: rule.response,
-    status: rule.status,
-    delay: rule.delay,
-    enabled: rule.enabled !== false,
-    ...(variants.length ? { variants } : {}),
-  };
-}
-
 // 规则对象 → 编译后的正则。规则对象本身已按 mtime 缓存（readJsonByMtime），
 // 用 WeakMap 跟随其生命周期：文件不变时同一批对象反复命中缓存，避免每个请求
 // × 每条规则都 new RegExp；文件变了会解析出新对象，旧条目随之被 GC。
@@ -1391,6 +1399,43 @@ function getHeaderValue(headers, name) {
   return match?.[1];
 }
 
+// ─── 本机专用接口 ──────────────────────────────────────────────────────────────
+
+const PRIVATE_PATHS = new Set(["/__mock/history", "/__mock/events"]);
+
+function isLoopbackAddress(address = "") {
+  return address === "::1" || address.startsWith("127.") || address.startsWith("::ffff:127.");
+}
+
+// mock 常监听 0.0.0.0，所以要限制来源是本机；又因为 CORS 对任意 origin 放行，还要拦住
+// 浏览器页面（带 Origin 头）——否则本机打开的任意网页都能 fetch 走请求历史。
+// app 主进程、vjtools 命令、curl 都不带 Origin。
+function isPrivateRequest(req) {
+  return isLoopbackAddress(req.socket.remoteAddress) && !req.headers.origin;
+}
+
+const EVENT_HEARTBEAT_MS = 15_000;
+
+/** subscribe(send) 返回取消订阅函数；send(event, data) 写一条 SSE */
+function openEventStream(req, res, subscribe) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+  });
+  res.write(": connected\n\n");
+  const unsubscribe = subscribe((event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  });
+  // 心跳：让订阅方能分辨「连接还在只是没请求」和「进程已经没了」
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), EVENT_HEARTBEAT_MS);
+  heartbeat.unref?.();
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    unsubscribe?.();
+  });
+}
+
 function logRequest(type, method, statusCode, duration, url, onLog, details = "") {
   const message = `[${type}] [${method}] [${statusCode}] [${duration}ms] ${url}${details}`;
   // onLog 存在时（嵌入 Electron 主进程，渲染层会展示），不再走 console 避免双写
@@ -1596,6 +1641,7 @@ function runMiddleware(req, res, middleware) {
 
 export {
   buildRoutes,
+  isLoopbackAddress,
   loadMockRules,
   loadOpenApiSources,
   normalizeMockRule,

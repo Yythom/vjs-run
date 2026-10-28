@@ -1,5 +1,5 @@
 // 配置读写 IPC：get-config 直接吐 live config，set-config 合并保存。
-// set-config 还兼任：改了 mock 关键字段时自动重启 mock 服务。
+// 改了 mock 关键字段不用这里管：mock 后台进程自己监听 config.json 并重启，app 的订阅会自动重连。
 
 import { app, ipcMain } from "electron";
 import { ipcSafe } from "./safe.js";
@@ -8,44 +8,13 @@ import {
   onExternalConfigChange,
   saveConfig,
 } from "../config/store.js";
-import { sendLog, sendToAllWindows } from "../ui-channel.js";
+import { sendToAllWindows } from "../ui-channel.js";
 import { stopAllProcesses } from "../process-manager.js";
 
-import {
-  MOCK_ID,
-  isMockRunning,
-  startSwaggerMock,
-} from "../mock/service.js";
-
-// 改这些 mock 字段需要重启 mock service 才能生效（它们都是 startMockServer 启动时读入的）
-const MOCK_FIELDS_REQUIRING_RESTART = [
-  "mockSpecPath",
-  "mockHost",
-  "mockPort",
-  "mockServiceAddress",
-  "mockBackendBaseUrl",
-  "mockAll",
-];
-
-// 改了需要重启的 mock 字段且 mock 在跑时，自动重启 mock service
-async function restartMockIfNeeded(prev, next, reason) {
-  const mockChanged = MOCK_FIELDS_REQUIRING_RESTART.some(
-    (key) => prev[key] !== next[key],
-  );
-  if (!isMockRunning() || !mockChanged) return;
-  sendLog(MOCK_ID, `\x1b[36m⚙ ${reason}，自动重启 Swagger Mock\x1b[0m\n`);
-  try {
-    await startSwaggerMock(MOCK_ID);
-  } catch (_) {
-    // startSwaggerMock 内部已经写过错误日志，这里不抛出，避免影响调用方
-  }
-}
-
 export function registerConfigIpc() {
-  // config.json 被外部（如 AI 用 mock-rule.mjs config 命令）改写：推给渲染层刷新，必要时重启 mock
-  onExternalConfigChange((prev, next) => {
+  // config.json 被外部（如 AI 用 vjtools mock config 命令）改写：推给渲染层刷新
+  onExternalConfigChange((_prev, next) => {
     sendToAllWindows("config-changed", { ...next, _appVersion: app.getVersion() });
-    restartMockIfNeeded(prev, next, "检测到配置文件被外部修改");
   });
 
   ipcMain.handle("get-config", () => ({
@@ -58,12 +27,7 @@ export function registerConfigIpc() {
       stopAllProcesses();
     }
 
-    const prev = getConfig();
     const next = saveConfig(partial);
-
-
-
-    await restartMockIfNeeded(prev, next, "检测到 mock 配置改动");
 
     // 渲染进程拿到返回值后会整体替换 config state，这里必须把 _appVersion 一起带上，
     // 否则侧边栏的版本号会在保存配置后丢失、回落到兜底值。

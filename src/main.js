@@ -7,19 +7,22 @@
 //      handler 真正被调用时才会通过 getConfig() 读，那时已 ready）
 //   4. app.whenReady：
 //      a) ensureUserMockAssets：把内置 mock 资源种子复制到 userData 可写目录
+//         + 写 app 内置 vjtools 命令的启动脚本（仅打包版）
 //      b) initStore：electron-store 加载 userData/config.json
 //      c) createWindow：开窗 + ready-to-show 消白屏
 //      d) 后台预热 shell-env（避免首次启动项目卡 1-3s）
-//   5. window-all-closed / before-quit：清子进程
+//      b2) 已有 mock 后台进程在跑就接上（命令行或上次 app 拉起的）
+//   5. window-all-closed / before-quit：清项目子进程；mock 后台进程不停（AI / 终端还在用），只断开订阅
 
 import { BrowserWindow, app, dialog, nativeImage } from "electron";
 import { DEFAULT_CONFIG } from "./config/defaults.js";
-import { APP_ICON_PATH } from "./paths.js";
+import { APP_ICON_PATH, CLI_ENTRY } from "./paths.js";
 import { initStore } from "./config/store.js";
 import { ensureUserMockAssets } from "./mock/user-assets.js";
 import { registerContextMenu } from "./services/context-menu.js";
 import { createWindow } from "./services/window.js";
-import { MOCK_ID, stopMockService } from "./mock/service.js";
+import { cliShimPath, writeCliShim } from "./services/cli-shim.js";
+import { attachIfRunning, detachMock } from "./mock/service.js";
 import { registerAllIpc } from "./ipc/index.js";
 import { buildSpawnEnv } from "./shell-env.js";
 import { stopAllProcesses } from "./process-manager.js";
@@ -50,7 +53,7 @@ registerAllIpc();
 
 app
   .whenReady()
-  .then(() => {
+  .then(async () => {
     // dev 下 dock 图标取自 build/icon.png；打包后由 electron-builder 写入 .app 包，不需要这里设置
     if (process.platform === "darwin" && !app.isPackaged && app.dock) {
       try {
@@ -76,11 +79,32 @@ app
       );
     }
 
+    // a2) app 内置 vjtools 命令：<userData>/bin/vjtools 指向当前 app，app 挪了位置下次启动自动修正。
+    //     只在打包版写：开发模式与打包版共用 userData，dev 写了会把它指向开发用的 Electron
+    if (app.isPackaged || process.env.VJTOOLS_WRITE_CLI_SHIM === "1") {
+      try {
+        writeCliShim({
+          shimPath: cliShimPath(app.getPath("userData")),
+          execPath: process.execPath,
+          cliEntry: CLI_ENTRY,
+        });
+      } catch (err) {
+        console.error("[cli-shim]", err);
+      }
+    }
+
     // b) electron-store 构造必须在 app.whenReady 之后（内部要读 userData 路径）
     try {
       initStore();
     } catch (err) {
       console.error("[initStore]", err);
+    }
+
+    // b2) mock 后台进程已经在跑就先接上，窗口一出来 mock 状态就是对的
+    try {
+      await attachIfRunning();
+    } catch (err) {
+      console.error("[mock attach]", err);
     }
 
     // c) 创建主窗口
@@ -104,8 +128,6 @@ app
 // 所有窗口关闭时：非 macOS 直接退出；macOS 保留进程（Dock 点击可重新打开）
 app.on("window-all-closed", () => {
   stopAllProcesses();
-  // stopMockService 返回 Promise，必须捕获 reject 避免 unhandledRejection 在退出时冒出来
-  stopMockService(MOCK_ID).catch((err) => console.error("[stopMock]", err));
   if (process.platform !== "darwin") app.quit();
 });
 
@@ -117,5 +139,6 @@ app.on("activate", () => {
 // 应用退出前确保所有子进程都被终止，避免孤儿进程
 app.on("before-quit", () => {
   stopAllProcesses();
-  stopMockService(MOCK_ID).catch((err) => console.error("[stopMock]", err));
+  // mock 后台进程不随 app 退出：AI / 终端可能还在用，下次打开 app 会自动接上
+  detachMock();
 });

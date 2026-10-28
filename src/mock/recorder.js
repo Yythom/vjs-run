@@ -9,31 +9,27 @@
 // 场景：即一份命名的规则文件快照，存放在 mock-rules.json 同目录的 scenes/ 下。
 // 应用（覆盖活动规则文件）后 loadMockRules 的 mtime 缓存自动感知，无需重启 mock。
 //
+// 场景文件的读写在 scenes.js（与 vjtools CLI 共用）；这里只加一层「录制中的场景禁止
+// 外部写入 / 删除 / 改名」守卫——录制状态只存在于 app 进程内。
+//
 // 本模块不依赖 electron / config store：scenesDir 由 IPC 层从 config 算好传入，
 // 方便在纯 node 环境下冒烟测试。
 
 import fs from "node:fs";
-import path from "node:path";
 import { sendMockRecording } from "../ui-channel.js";
+import { ruleKey, writeRulesFile } from "./rules.js";
+import * as scenes from "./scenes.js";
+import { readSceneRules, sanitizeSceneName, sceneFilePath } from "./scenes.js";
+
+export {
+  listScenes,
+  mergeSceneRules,
+  readSceneRules,
+  sanitizeSceneName,
+  sceneFilePath,
+} from "./scenes.js";
 
 let session = null; // { sceneName, file, rules: Map<key, rule>, startedAt }
-
-export function sanitizeSceneName(rawName) {
-  const name = String(rawName || "")
-    .replace(/[/\\:*?"<>|]/g, "")
-    .trim();
-  if (!name) throw new Error("场景名不能为空（或仅含非法字符）");
-  if (name.length > 60) throw new Error("场景名过长（最多 60 字符）");
-  return name;
-}
-
-export function sceneFilePath(scenesDir, name) {
-  return path.join(scenesDir, `${sanitizeSceneName(name)}.json`);
-}
-
-function ruleKey(rule) {
-  return `${(rule.method || "").toUpperCase()} ${rule.path}`;
-}
 
 // ─── 录制 ─────────────────────────────────────────────────────────────────────
 
@@ -111,112 +107,42 @@ export function handleRecordedEntry(entry) {
   if (prev?.variants) rule.variants = prev.variants;
   session.rules.set(ruleKey(rule), rule);
   try {
-    writeRulesFileSync(session.file, [...session.rules.values()]);
+    writeRulesFile(session.file, [...session.rules.values()]);
   } catch (err) {
     console.error("[mock-recorder]", err);
   }
   pushStatus();
 }
 
-// ─── 场景 ─────────────────────────────────────────────────────────────────────
-
-function writeRulesFileSync(file, rules) {
-  fs.writeFileSync(file, `${JSON.stringify(rules, null, 2)}\n`, "utf-8");
-}
-
-export function listScenes(scenesDir) {
-  if (!fs.existsSync(scenesDir)) return [];
-  return fs
-    .readdirSync(scenesDir)
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => {
-      const file = path.join(scenesDir, f);
-      let ruleCount = 0;
-      try {
-        const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-        ruleCount = Array.isArray(parsed) ? parsed.length : 0;
-      } catch {
-        // 损坏的场景文件按 0 条展示，应用时会报错
-      }
-      return {
-        name: f.replace(/\.json$/, ""),
-        ruleCount,
-        updatedAt: fs.statSync(file).mtimeMs,
-      };
-    })
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-}
-
-/** 读场景规则；文件不存在 / 损坏返回 []。 */
-export function readSceneRules(scenesDir, name) {
-  const file = sceneFilePath(scenesDir, name);
-  if (!fs.existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
+// ─── 场景（录制守卫）─────────────────────────────────────────────────────────────
 // 所有「从外部写场景文件」的入口（保存 / 覆盖 / 存入 / 编辑场景）都走这里，
 // 录制中的场景一律拒写：录制把规则攥在内存里，下一条请求到来就整份重写文件，
-// 外部写进去的内容会被悄悄冲掉。录制自身写盘走 writeRulesFileSync，不受影响。
-export function writeSceneRules(scenesDir, name, rules) {
-  const sceneName = sanitizeSceneName(name);
-  if (session && session.sceneName === sceneName) {
-    throw new Error(`场景「${sceneName}」正在录制中，请先停止录制再写入`);
-  }
-  fs.mkdirSync(scenesDir, { recursive: true });
-  writeRulesFileSync(sceneFilePath(scenesDir, name), rules);
-  return sanitizeSceneName(name);
+// 外部写进去的内容会被悄悄冲掉。录制自身写盘直接走 writeRulesFile，不受影响。
+
+function isRecording(sceneName) {
+  return Boolean(session && session.sceneName === sceneName);
 }
 
-/**
- * 把 incoming 规则逐条 upsert 进 existing：按 method + path 命中的替换成 incoming
- * 那一条（整个规则对象换掉），没命中的追加到末尾，其余规则原样保留、顺序不变。
- * 纯函数，不碰文件系统。
- */
-export function mergeSceneRules(existing = [], incoming = []) {
-  const merged = [...existing];
-  const indexByKey = new Map(merged.map((rule, index) => [ruleKey(rule), index]));
-  let overwritten = 0;
-
-  for (const rule of incoming) {
-    const key = ruleKey(rule);
-    const at = indexByKey.get(key);
-    if (at === undefined) {
-      indexByKey.set(key, merged.length);
-      merged.push(rule);
-    } else {
-      merged[at] = rule;
-      overwritten += 1;
-    }
+export function writeSceneRules(scenesDir, name, rules) {
+  const sceneName = sanitizeSceneName(name);
+  if (isRecording(sceneName)) {
+    throw new Error(`场景「${sceneName}」正在录制中，请先停止录制再写入`);
   }
-
-  return { rules: merged, overwritten, added: incoming.length - overwritten };
+  return scenes.writeSceneRules(scenesDir, sceneName, rules);
 }
 
 export function deleteScene(scenesDir, name) {
   const sceneName = sanitizeSceneName(name);
-  if (session && session.sceneName === sceneName) {
+  if (isRecording(sceneName)) {
     throw new Error(`场景「${sceneName}」正在录制中，请先停止录制`);
   }
-  fs.rmSync(sceneFilePath(scenesDir, sceneName), { force: true });
+  scenes.deleteScene(scenesDir, sceneName);
 }
 
-// 重命名场景（改文件名）。录制中禁止；源不存在或目标同名（非自身）报错。
 export function renameScene(scenesDir, oldName, newName) {
   const from = sanitizeSceneName(oldName);
-  const to = sanitizeSceneName(newName);
-  if (session && session.sceneName === from) {
+  if (isRecording(from)) {
     throw new Error(`场景「${from}」正在录制中，请先停止录制`);
   }
-  const fromFile = sceneFilePath(scenesDir, from);
-  if (!fs.existsSync(fromFile)) throw new Error(`场景不存在：${from}`);
-  if (to === from) return to;
-  const toFile = sceneFilePath(scenesDir, to);
-  if (fs.existsSync(toFile)) throw new Error(`场景已存在：${to}`);
-  fs.renameSync(fromFile, toFile);
-  return to;
+  return scenes.renameScene(scenesDir, from, newName);
 }

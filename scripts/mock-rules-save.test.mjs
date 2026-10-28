@@ -18,6 +18,13 @@ test("缺 method / method 为 * 的规则拒绝保存（server 永远不会命�
   assert.throws(() => normalizeRulesForSave(["/api/a"]), /缺少具体 method/);
 });
 
+test("path 必须以 / 开头（会编译成锚定正则匹配请求 pathname，不带 / 的永远命中不了）", () => {
+  assert.throws(() => normalizeRulesForSave([ok({ path: "api/a" })]), /第 1 条规则的 path 必须以 \/ 开头：api\/a/);
+  assert.throws(() => normalizeRulesForSave([ok({ path: "  " })]), /第 1 条规则缺少 path/);
+  // 首尾空白去掉后再判断
+  assert.equal(normalizeRulesForSave([ok({ path: " /api/a " })])[0].path, "/api/a");
+});
+
 test("status 必须在 100–599（范围外 writeHead 会抛错，请求变 500）", () => {
   for (const status of [0, 99, 600, 2000, -1]) {
     assert.throws(

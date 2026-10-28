@@ -1,8 +1,7 @@
 // 「当前应用的场景」标记：<mock-assets>/applied-scene.json = { name, appliedAt }。
 //
-// 软件和 scripts/mock-rule.mjs 的 apply-scene 应用场景时都会写这个标记，
+// 软件和 vjtools mock rule apply-scene 应用场景时都会写这个标记（两边都调本模块），
 // 「某场景是否正在使用」只看标记里的场景名。
-// CLI 自包含，同样的逻辑在 mock-rule.mjs 里有一份，改这里要同步改那边。
 
 import fs from "node:fs";
 import path from "node:path";

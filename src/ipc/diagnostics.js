@@ -1,10 +1,11 @@
 // 杂项诊断/调试类 IPC：
 //   - check-env：体检面板，检测 node/pnpm/git 等工具是否就绪
+//   - install-cli：把 app 内置的 vjtools 命令装到 PATH（见 services/cli-shim.js）
 //   - check-ports / kill-single-port：端口占用查看器
 //   - run-project-command：在项目目录里执行调试命令（流式日志）
 
-import { exec } from "node:child_process";
-import { ipcMain, dialog } from "electron";
+import { exec, execFile } from "node:child_process";
+import { app, ipcMain, dialog } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { killPort } from "../port-utils.js";
 import { getProjectById, getProjectRepo } from "../config/lookup.js";
 import { runStreaming } from "../process-manager.js";
 import { sendLog } from "../ui-channel.js";
+import { cliShimPath, getCliStatus, installCliLink } from "../services/cli-shim.js";
 
 function stripAnsi(text) {
   // eslint-disable-next-line no-control-regex
@@ -38,6 +40,34 @@ function detectMockSkill() {
   return MOCK_SKILL_DIRS.some((dir) =>
     fs.existsSync(path.join(home, ...dir, "mock-rules", "SKILL.md")),
   );
+}
+
+// vjtools 命令行：AI（mock-rules skill）用 mock 全靠它。来源有两种——app 内置（体检页点「安装到命令行」）
+// 或单独 npm i -g vjtools-cli；PATH 上有任意一种即可
+async function inspectVjtoolsCli() {
+  const env = await buildSpawnEnv();
+  const shimPath = cliShimPath(app.getPath("userData"));
+  const status = getCliStatus({ shimPath, pathEnv: env.PATH });
+  if (!status.onPath) {
+    return {
+      status: "missing",
+      version: null,
+      cmd: status.shimReady ? `内置命令已就绪，未加入 PATH：${shimPath}` : "终端里还没有 vjtools 命令",
+      // 开发模式不生成内置命令（见 main.js），只能提示 npm 安装
+      canInstall: status.shimReady,
+    };
+  }
+  const version = await new Promise((resolve) => {
+    execFile(status.onPath, ["--version"], { env, timeout: 15_000 }, (err, stdout) =>
+      resolve(err ? null : stdout.trim().split("\n")[0]),
+    );
+  });
+  return {
+    status: version ? "ok" : "missing",
+    version: version && `${version}（${status.source === "app" ? "app 内置" : "单独安装"}）`,
+    cmd: status.onPath,
+    canInstall: false,
+  };
 }
 
 // install: 缺失时显示的安装命令（macOS-only 应用，优先 brew，brew 自身用官方一行脚本）
@@ -79,9 +109,17 @@ const ENV_TOOLS = [
       "npx skills add https://github.com/Yythom/vjs-run/tree/main/.claude/skills/mock-rules -g -y",
     detect: detectMockSkill,
   },
+  {
+    id: "vjtools-cli",
+    label: "vjtools 命令行",
+    // 缺失时卡片优先给「安装到命令行」按钮（app 内置）；这条是不想用内置时的替代方案
+    install: "npm i -g vjtools-cli",
+    inspect: inspectVjtoolsCli,
+  },
 ];
 
-async function checkOneEnvTool({ id, label, cmd, install, detect }) {
+async function checkOneEnvTool({ id, label, cmd, install, detect, inspect }) {
+  if (inspect) return { id, label, install, ...(await inspect()) };
   if (detect) {
     const ok = detect();
     return {
@@ -184,6 +222,12 @@ export function registerDiagnosticsIpc() {
   ipcMain.handle("check-env", () =>
     Promise.all(ENV_TOOLS.map(checkOneEnvTool)),
   );
+
+  // 把 app 内置的 vjtools 命令软链进 PATH；可能弹系统授权框（PATH 上没有可写的常规目录时）
+  ipcSafe("install-cli", async () => {
+    const env = await buildSpawnEnv();
+    return installCliLink({ shimPath: cliShimPath(app.getPath("userData")), pathEnv: env.PATH });
+  });
 
   // 查询指定端口列表的占用情况
   ipcMain.handle("check-ports", async (_, payload = {}) => {

@@ -8,30 +8,20 @@ import { BrowserWindow, dialog, shell } from "electron";
 import { ipcSafe } from "../ipc/safe.js";
 import { getConfig } from "../config/store.js";
 import { sendLog } from "../ui-channel.js";
-import {
-  buildRoutes,
-  loadMockRules,
-  loadOpenApiSources,
-  normalizeMockRule,
-  wrapSampleInEnvelope,
-} from "./server.js";
-import { mockFromSchema } from "./data.js";
+import { loadMockRules, normalizeMockRule, wrapSampleInEnvelope } from "./server.js";
 import { convertSwaggerDoc, isGeneratedSpecFile } from "./generate-spec.js";
-import {
-  getRecommendedQueryParams,
-  getRequestSchema,
-  getResponseSchema,
-} from "./request-schema.js";
+import { getRequestSchema, getResponseSchema } from "./request-schema.js";
 import {
   MOCK_ID,
+  clearMockHistory,
   ensureMockRulesDir,
+  fetchMockHistory,
   generateMockSpecs,
   getMockRouteMetas,
   normalizeRulesForSave,
   startSwaggerMock,
   stopMockService,
 } from "./service.js";
-import { clearMockHistory, getMockHistory } from "./history.js";
 import { CURL_WRITE_OUT, parseCurlMeta } from "./curl-meta.js";
 import {
   deleteScene,
@@ -51,6 +41,8 @@ import {
   recordAppliedScene,
   renameAppliedScene,
 } from "./applied-scene.js";
+import { writeRulesFile } from "./rules.js";
+import { recommendResponse, resolveRoute } from "./route-info.js";
 
 // 场景文件与 mock-rules.json 同目录，放 scenes/ 子目录下
 function getScenesDir() {
@@ -76,30 +68,7 @@ function uniqueSceneName(scenesDir, rawBase) {
 
 // 覆盖写活动规则文件；loadMockRules 的 mtime 缓存会自动感知，运行中的 mock 无需重启
 function writeActiveRules(rules) {
-  ensureMockRulesDir();
-  fs.writeFileSync(
-    getConfig().mockRulesFile,
-    `${JSON.stringify(rules, null, 2)}\n`,
-    "utf-8",
-  );
-}
-
-// 路由匹配优先级：
-//   1. method + fullPath 精确命中
-//   2. method + openapiPath 命中（rule 里写的可能是带 {id} 的原始模板）
-//   3. method 通配（*）情况下放宽到任意 method
-//   4. regex 命中（rule path 是具体值 /foo/123 时回退）
-function findRouteForPreview(routes, method, targetPath) {
-  const lcMethod = method.toLowerCase();
-  const methodMatch = (route) =>
-    method === "*" || route.method === lcMethod;
-
-  return (
-    routes.find((r) => methodMatch(r) && r.fullPath === targetPath) ||
-    routes.find((r) => methodMatch(r) && r.openapiPath === targetPath) ||
-    routes.find((r) => methodMatch(r) && r.regex.test(targetPath)) ||
-    null
-  );
+  writeRulesFile(getConfig().mockRulesFile, rules);
 }
 
 function runCurl(args) {
@@ -138,26 +107,15 @@ function getBackendUrl(baseUrl, requestPath, params = {}) {
 
 // { method, path } → swagger route。path 必须是接入了 service prefix 的完整 path
 // （和列表里展示的一致，例如 /vjg/ads/actions/click）。
-async function resolveRouteFromPayload(payload = {}) {
-  const method = String(payload.method || "*").toUpperCase();
-  const targetPath = String(payload.path || "").trim();
-  if (!targetPath) throw new Error("path 不能为空");
-
+// 按 { method, path } 在当前配置的 swagger 里找接口（实现见 route-info.js，与 vjtools CLI 共用）
+function resolveRouteFromPayload(payload = {}) {
   const config = getConfig();
-  if (!config.mockSpecPath) {
-    throw new Error("Mock spec 路径未配置，请到设置中填写");
-  }
-
-  const sources = await loadOpenApiSources(config.mockSpecPath);
-  const allRoutes = sources.flatMap(({ spec, sourcePath }) =>
-    buildRoutes(spec, sourcePath, config.mockServiceAddress || ""),
-  );
-
-  const route = findRouteForPreview(allRoutes, method, targetPath);
-  if (!route) {
-    throw new Error(`未在 swagger 中找到 ${method} ${targetPath}`);
-  }
-  return route;
+  return resolveRoute({
+    specPath: config.mockSpecPath,
+    serviceAddress: config.mockServiceAddress || "",
+    method: payload.method,
+    path: payload.path,
+  });
 }
 
 export function registerMockIpc() {
@@ -499,55 +457,17 @@ export function registerMockIpc() {
   // 根据 OpenAPI schema 推荐一份 mock JSON（不写盘，仅返回供用户复制）。
   // 入参 { method, path }：path 必须是接入了 service prefix 的完整 path
   // （和列表里展示的一致，例如 /vjg/ads/actions/click）。
-  ipcSafe("preview-mock-response", async (_, payload = {}) => {
-    const route = await resolveRouteFromPayload(payload);
-
-    const responses = route.operation.responses || {};
-    const responseKey =
-      Object.keys(responses).find((key) => /^2\d\d$/.test(key)) ||
-      Object.keys(responses).find((key) => key !== "default") ||
-      "default";
-    const definition = responses[responseKey] || responses.default;
-    if (!definition) {
-      throw new Error("该接口的 swagger 中没有任何 response 定义");
-    }
-
-    const content = definition.content || {};
-    const contentType =
-      Object.keys(content).find((type) => type.includes("json")) ||
-      Object.keys(content)[0];
-    const schema = contentType ? content[contentType]?.schema : null;
-    if (!schema) {
-      throw new Error(
-        `swagger 中 ${responseKey} 响应缺少 schema，无法生成推荐数据`,
-      );
-    }
-
-    const sample = mockFromSchema(schema, route.spec, {});
-    // 推荐数据返回完整响应体（含 code/rc/message/data 信封），用户直接编辑整份 JSON。
-    const json = contentType.includes("json")
-      ? wrapSampleInEnvelope(sample, definition, responseKey)
-      : sample;
-    return {
-      json,
-      queryParams: getRecommendedQueryParams(route),
-      method: route.method.toUpperCase(),
-      path: route.fullPath,
-      status: responseKey,
-      operationId: route.operation.operationId || null,
-      summary: route.operation.summary || route.operation.description || "",
-      source: route.sourceName,
-    };
-  });
+  ipcSafe("preview-mock-response", async (_, payload = {}) =>
+    recommendResponse(await resolveRouteFromPayload(payload)),
+  );
 
   // 请求历史：窗口刷新 / 面板首次打开时全量拉取；增量靠 mock-request 事件推送
-  ipcSafe("get-mock-history", () => ({ entries: getMockHistory() }), {
+  // 请求历史存在 mock 后台进程里（app、vjtools 命令看到的是同一份）
+  ipcSafe("get-mock-history", async () => ({ entries: await fetchMockHistory() }), {
     entries: [],
   });
 
-  ipcSafe("clear-mock-history", () => {
-    clearMockHistory();
-  });
+  ipcSafe("clear-mock-history", () => clearMockHistory());
 
   // 用系统默认应用打开 mock-rules.json（方便直接用编辑器改）；
   // 传 { scene } 时打开对应场景文件

@@ -32,6 +32,11 @@ const ENV_ICONS = {
       <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
     </svg>
   ),
+  "vjtools-cli": (
+    <svg className="w-4 h-4 text-sky-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />
+    </svg>
+  ),
 };
 
 /** copied 提示只影响按钮自身，state 收在叶子里，点复制不重画整页卡片列表 */
@@ -77,6 +82,52 @@ function CopyInstallButton({ item, className = "" }) {
           <span>复制安装命令</span>
         </>
       )}
+    </button>
+  );
+}
+
+/** 把 app 内置的 vjtools 命令装到 PATH；可能弹系统授权框。安装中状态收在叶子里，装完让整页重新体检 */
+function InstallCliButton({ onDone }) {
+  const [installing, setInstalling] = useState(false);
+
+  const install = async () => {
+    setInstalling(true);
+    try {
+      const res = await window.electronAPI.installCli();
+      if (!res?.success) {
+        showToast(`安装失败: ${res?.error || "未知错误"}`, "error");
+        return;
+      }
+      if (res.status === "canceled") {
+        showToast("已取消安装", "info");
+        return;
+      }
+      if (res.status === "external") {
+        showToast(`终端里已有 vjtools（${res.linkPath}），无需重复安装`, "info");
+      } else if (res.onPath === false) {
+        showToast(`已安装到 ${res.linkPath}，但该目录不在 PATH 上，需要自行加入`, "warning");
+      } else {
+        showToast(`已安装到 ${res.linkPath}，终端里可以直接用 vjtools 了`, "success");
+      }
+      onDone?.();
+    } catch (err) {
+      showToast(`安装失败: ${err?.message || "未知错误"}`, "error");
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={install}
+      disabled={installing}
+      className="text-[10.5px] py-1 px-2.5 rounded-md font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1.5 select-none shadow-2xs shrink-0 border bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100 disabled:opacity-50 disabled:cursor-default w-full sm:w-auto"
+    >
+      <svg className="w-3.5 h-3.5 text-violet-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+      </svg>
+      <span>{installing ? "安装中…" : "安装到命令行"}</span>
     </button>
   );
 }
@@ -142,6 +193,9 @@ export default function EnvCheckPage() {
           results.map((item) => {
             const ok = item.status === "ok";
             const isMockSkill = item.id === "mock-skill";
+            const isCli = item.id === "vjtools-cli";
+            // 宽卡片：命令 + 按钮横排
+            const wide = isMockSkill || isCli;
             const showInstall = (!ok && item.install) || isMockSkill;
             return (
               <div
@@ -149,6 +203,7 @@ export default function EnvCheckPage() {
                 className={clsx(
                   "flex flex-col justify-between gap-2.5 rounded-xl border p-3.5 transition-all shadow-2xs",
                   isMockSkill && "sm:col-span-2 lg:col-span-2",
+                  isCli && "sm:col-span-2 lg:col-span-3",
                   ok
                     ? "bg-slate-50/50 border-slate-200/80 hover:border-slate-300 hover:bg-slate-50/80"
                     : "bg-red-500/5 border-red-500/25",
@@ -186,11 +241,20 @@ export default function EnvCheckPage() {
                   </div>
                 </div>
 
+                {isCli && !ok && item.canInstall && (
+                  <div className="mt-1 rounded-lg border p-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-red-500/20 bg-red-500/5">
+                    <span className="text-[10.5px] text-red-700 leading-relaxed min-w-0">
+                      装到命令行后，终端和 AI（Mock Skill）都能直接用 vjtools 启停 mock、改规则，不用另装 npm 包
+                    </span>
+                    <InstallCliButton onDone={runEnvCheck} />
+                  </div>
+                )}
+
                 {showInstall && item.install && (
                   <div
                     className={clsx(
                       "mt-1 rounded-lg border p-2 flex gap-2",
-                      isMockSkill
+                      wide
                         ? "flex-col sm:flex-row sm:items-center justify-between"
                         : "flex-col",
                       !ok
@@ -201,8 +265,8 @@ export default function EnvCheckPage() {
                     <code
                       className={clsx(
                         "text-[10px] select-all font-mono leading-relaxed min-w-0 flex-1",
-                        // 只有 Mock Skill 是横排（命令 + 按钮同一行），截断；窄卡片里换行，保证命令能看全
-                        isMockSkill ? "truncate" : "break-all",
+                        // 宽卡片横排（命令 + 按钮同一行），截断；窄卡片里换行，保证命令能看全
+                        wide ? "truncate" : "break-all",
                         !ok ? "text-red-700" : "text-slate-600",
                       )}
                       title={item.install}
@@ -211,7 +275,7 @@ export default function EnvCheckPage() {
                     </code>
                     <CopyInstallButton
                       item={item}
-                      className={isMockSkill ? "w-full sm:w-auto" : "w-full"}
+                      className={wide ? "w-full sm:w-auto" : "w-full"}
                     />
                   </div>
                 )}

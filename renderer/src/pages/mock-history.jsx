@@ -19,6 +19,8 @@ import { prettyJson } from "./mock-config/utils";
 import { showToast } from "../utils/toast";
 import Modal from "../components/modal";
 import { isEnterKey } from "../utils/keyboard";
+// 与 vjtools CLI 的 rule set --from-history 共用同一份转换逻辑（零依赖纯函数）
+import { historyEntryToRule } from "../../../src/mock/history-rule.js";
 
 const KIND_META = {
   mock: {
@@ -297,21 +299,6 @@ function defaultSceneName() {
   return `录制 ${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
 }
 
-// 把一条历史转成 mock 规则；响应体超限未记录的无法固化，返回 null 由调用方跳过。
-function entryToRule(entry) {
-  if (entry.responseTruncated || entry.responseBody === undefined) return null;
-  return {
-    enabled: true,
-    method: entry.method,
-    // 命中过 swagger 路由的用带 {param} 的模板，规则能覆盖同类请求
-    path: entry.matchedPath || entry.path,
-    ...(entry.status && entry.status !== 200 && entry.kind !== "miss"
-      ? { status: entry.status }
-      : {}),
-    response: entry.responseBody,
-  };
-}
-
 /**
  * 批量「存入场景」弹窗：新建一个场景，或选一个已有场景把选中接口按
  * method + path 覆盖进去（场景里的其它规则保留）。
@@ -330,7 +317,7 @@ function SaveToSceneModal({ entries, onClose, onSaved }) {
     });
   }, []);
 
-  const rules = entries.map(entryToRule).filter(Boolean);
+  const rules = entries.map(historyEntryToRule).filter(Boolean);
   const skipped = entries.length - rules.length;
   const sceneName = mode === "create" ? name.trim() : target;
   const canSave = !!sceneName && rules.length > 0 && !saving;

@@ -1,0 +1,43 @@
+{
+  "name": "vjtools-cli",
+  "version": "0.2.0",
+  "description": "vjtools 接口 mock 服务命令行：不装 app 也能启停 mock、改规则与场景、查请求历史",
+  "type": "module",
+  "bin": {
+    "vjtools": "dist/src/cli/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "node build.mjs"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "commander": "^15.0.0",
+    "cookie": "^1.1.1",
+    "cors": "^2.8.6",
+    "jieba-wasm": "^2.4.0",
+    "js-yaml": "^4.1.0",
+    "lodash-es": "^4.18.1",
+    "openapi-sampler": "^1.7.3"
+  },
+  "keywords": [
+    "mock",
+    "openapi",
+    "swagger",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yythom/vjs-run.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Yythom/vjs-run/tree/main/packages/cli#readme",
+  "author": "xieyuteng",
+  "license": "ISC"
+}
