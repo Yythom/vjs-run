@@ -101,6 +101,19 @@ export async function attachIfRunning() {
   return running;
 }
 
+/**
+ * 重新检查后台进程。app 开着时在终端 vjtools mock start，app 收不到通知，靠这里（界面上的「重新检查」）补上。
+ * 已经连着的不用查：断开、退出都由 watchLoop 自己感知；启动 / 重连中的也不插手，免得重复接上
+ * @returns {Promise<{ status: string, running: object|null }>}
+ */
+export async function refreshMockStatus() {
+  if (watching || status === "starting") return { status, running: current };
+  const running = await attachIfRunning();
+  // 没在跑：顺带把上次启动失败留下的「出错」清掉
+  if (!running) setStatus("stopped");
+  return { status, running: running ? { ...running, ownerLabel: ownerLabel(running) } : null };
+}
+
 /** 只断开订阅，不停后台进程（app 退出时用） */
 export function detachMock() {
   watching?.controller.abort();

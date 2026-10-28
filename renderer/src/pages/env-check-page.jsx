@@ -132,6 +132,54 @@ function InstallCliButton({ onDone }) {
   );
 }
 
+/** 删掉 app 装进 PATH 的 vjtools 软链；可能弹系统授权框。移除中状态收在叶子里，删完让整页重新体检 */
+function UninstallCliButton({ onDone }) {
+  const [removing, setRemoving] = useState(false);
+
+  const uninstall = async () => {
+    setRemoving(true);
+    try {
+      const res = await window.electronAPI.uninstallCli();
+      if (!res?.success) {
+        showToast(`移除失败: ${res?.error || "未知错误"}`, "error");
+        return;
+      }
+      if (res.status === "canceled") {
+        showToast("已取消移除", "info");
+        // 可写目录里的软链可能已经删了一部分，刷新一下
+        if (res.removed?.length) onDone?.();
+        return;
+      }
+      if (res.status === "none") {
+        showToast("没有找到 app 装的 vjtools，可能已经被移除了", "info");
+      } else if (res.remaining) {
+        showToast(`已移除 ${res.removed.join("、")}；终端里仍有别处装的 vjtools（${res.remaining}）`, "info");
+      } else {
+        showToast(`已从命令行移除 vjtools（${res.removed.join("、")}）`, "success");
+      }
+      onDone?.();
+    } catch (err) {
+      showToast(`移除失败: ${err?.message || "未知错误"}`, "error");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={uninstall}
+      disabled={removing}
+      className="text-[10.5px] py-1 px-2.5 rounded-md font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1.5 select-none shadow-2xs shrink-0 border bg-white text-slate-600 border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-50 disabled:cursor-default w-full sm:w-auto"
+    >
+      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+      </svg>
+      <span>{removing ? "移除中…" : "从命令行移除"}</span>
+    </button>
+  );
+}
+
 export default function EnvCheckPage() {
   const {
     data,
@@ -247,6 +295,25 @@ export default function EnvCheckPage() {
                       装到命令行后，终端和 AI（Mock Skill）都能直接用 vjtools 启停 mock、改规则，不用另装 npm 包
                     </span>
                     <InstallCliButton onDone={runEnvCheck} />
+                  </div>
+                )}
+
+                {isCli && item.canUninstall && (
+                  <div
+                    className={clsx(
+                      "mt-1 rounded-lg border p-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2",
+                      ok ? "border-slate-200/80 bg-slate-100/60" : "border-red-500/20 bg-red-500/5",
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        "text-[10.5px] leading-relaxed min-w-0",
+                        ok ? "text-slate-500" : "text-red-700",
+                      )}
+                    >
+                      移除后终端里不能再直接敲 vjtools（npm 装的不受影响）；app 内置命令本身保留，随时可以重新安装
+                    </span>
+                    <UninstallCliButton onDone={runEnvCheck} />
                   </div>
                 )}
 

@@ -23,6 +23,7 @@ import {
   detachMock,
   fetchMockHistory,
   isMockRunning,
+  refreshMockStatus,
   startSwaggerMock,
   stopMockService,
 } from "../src/mock/service.js";
@@ -203,4 +204,30 @@ test("后台进程改配置自动重启后 app 自动重连；被命令行停掉
 
   assert.equal((await cli(ctx, ["mock", "stop"])).status, 0);
   assert.ok(await waitFor(() => !isMockRunning() && statuses().at(-1) === "stopped"), "被外部停掉后显示已停止");
+});
+
+test("app 开着时命令行才启动的 mock：手动刷新（refreshMockStatus）后接上", async (t) => {
+  const ctx = await setup();
+  t.after(() => cleanup(ctx));
+
+  assert.deepEqual(await refreshMockStatus(), { status: "stopped", running: null });
+
+  assert.equal((await cli(ctx, ["mock", "start"])).status, 0);
+  assert.equal(isMockRunning(), false, "没刷新之前 app 不知道");
+
+  const refreshed = await refreshMockStatus();
+  assert.equal(refreshed.status, "running");
+  assert.equal(refreshed.running.pid, readMockRuntime(ctx.mockAssets).pid);
+  assert.match(refreshed.running.ownerLabel, /命令行/);
+  assert.equal(isMockRunning(), true);
+  assert.equal(statuses().at(-1), "running");
+
+  // 接上时会把后台进程的日志补进面板；已经连着时再点刷新不应重复接上、再补一遍
+  const replays = () =>
+    sent.filter((e) => e.channel === "process-log" && /mock 已启动/.test(e.payload.data)).length;
+  assert.ok(await waitFor(() => replays() >= 1), "接上时补日志");
+  const before = replays();
+  assert.equal((await refreshMockStatus()).status, "running");
+  flushLogs();
+  assert.equal(replays(), before);
 });

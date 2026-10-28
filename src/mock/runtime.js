@@ -7,6 +7,7 @@
 // 纯 node 模块，不能 import electron（CLI 也要用）。
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const RUNTIME_FILE = "mock-runtime.json";
@@ -15,10 +16,30 @@ export function mockRuntimeFile(mockAssetsDir) {
   return path.join(mockAssetsDir, RUNTIME_FILE);
 }
 
+/** 0.0.0.0 / :: = 监听所有网卡 */
+export function isWildcardHost(host) {
+  return !host || host === "0.0.0.0" || host === "::";
+}
+
 /** 0.0.0.0 / :: 这类监听地址不能直接拿来访问，探测时换成回环地址 */
 export function mockBaseUrl(host, port) {
-  const reachable = !host || host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const reachable = isWildcardHost(host) ? "127.0.0.1" : host;
   return `http://${reachable}:${port}`;
+}
+
+/** 监听所有网卡时，局域网里其它设备（手机、同事电脑）能用的地址；只监听某个地址时返回空 */
+export function mockLanUrls(host, port, interfaces = os.networkInterfaces()) {
+  if (!host || !isWildcardHost(host)) return [];
+  const urls = [];
+  for (const list of Object.values(interfaces)) {
+    for (const item of list || []) {
+      if (item.family !== "IPv4" || item.internal) continue;
+      // 198.18.0.0/15 是保留的测试网段，Clash / Surge 等代理的虚拟网卡常用，别的设备连不上
+      if (/^198\.1[89]\./.test(item.address)) continue;
+      urls.push(`http://${item.address}:${port}`);
+    }
+  }
+  return urls;
 }
 
 export function readMockRuntime(mockAssetsDir) {

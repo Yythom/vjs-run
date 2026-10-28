@@ -6,6 +6,8 @@
 //   2. installCliLink：用户点「安装到命令行」时，把上面的脚本软链进 PATH 上的目录，终端里就能直接敲 vjtools。
 //      只挑登录 shell PATH 里、当前用户可写的几个常规目录；都不行就请管理员权限写 /usr/local/bin
 //      （macOS 的 /etc/paths 默认带它）。
+//   3. uninstallCliLink：用户点「从命令行移除」时删掉上一步装的软链；只认指向内置命令的软链，
+//      npm 装的 vjtools 不碰。<userData>/bin/vjtools 本身保留（AI 兜底还要用），随时可以重新安装。
 //
 // 纯 node 模块，路径都由调用方传入（userData、PATH 由 IPC 层从 electron / 登录 shell 取），方便直测。
 
@@ -110,10 +112,14 @@ export function getCliStatus({ shimPath, pathEnv }) {
   };
 }
 
+function expandHome(dir, home) {
+  return dir.startsWith("~/") ? path.join(home, dir.slice(2)) : dir;
+}
+
 export function pickLinkDir(pathEnv, { home = os.homedir(), candidates = LINK_DIR_CANDIDATES } = {}) {
   const onPath = new Set(pathDirs(pathEnv));
   for (const raw of candidates) {
-    const dir = raw.startsWith("~/") ? path.join(home, raw.slice(2)) : raw;
+    const dir = expandHome(raw, home);
     if (!onPath.has(dir)) continue;
     try {
       fs.accessSync(dir, fs.constants.W_OK);
@@ -181,4 +187,59 @@ export async function installCliLink({ shimPath, pathEnv, home, candidates, admi
   if (!ok) return { status: "canceled" };
   // /usr/local/bin 不在登录 shell 的 PATH 上（极少见）时提示用户自己加
   return { status: "installed", linkPath, admin: true, onPath: pathDirs(pathEnv).includes(ADMIN_LINK_DIR) };
+}
+
+// ─── 移除软链 ────────────────────────────────────────────────────────────────
+
+/** 是不是指向内置命令的软链：先比 readlink（脚本被删了也认得出），再比 realpath（中间隔了一层软链） */
+function linksToShim(file, shimPath) {
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat?.isSymbolicLink()) return false;
+  const target = path.resolve(path.dirname(file), fs.readlinkSync(file));
+  return target === path.resolve(shimPath) || isOurLink(file, shimPath);
+}
+
+/**
+ * 本 app 装过的所有 vjtools 软链。除了 PATH 上的目录，还查安装可能落到的目录：
+ * 经授权装进 /usr/local/bin 时它不一定在 PATH 上，也得能移除
+ */
+export function findCliLinks({ shimPath, pathEnv, home = os.homedir(), candidates = LINK_DIR_CANDIDATES }) {
+  const dirs = new Set([
+    ...pathDirs(pathEnv),
+    ...candidates.map((dir) => path.resolve(expandHome(dir, home))),
+    ADMIN_LINK_DIR,
+  ]);
+  return [...dirs].map((dir) => path.join(dir, CLI_NAME)).filter((file) => linksToShim(file, shimPath));
+}
+
+/**
+ * 删掉本 app 装进 PATH 的 vjtools 软链（可能不止一处）。目录不可写（当初经授权装进 /usr/local/bin）时弹系统授权框。
+ * @returns {Promise<{ status: "removed"|"none"|"canceled", removed?: string[], remaining?: string|null }>}
+ *   none：没找到本 app 装的软链；remaining：移除后 PATH 上仍能找到的 vjtools（别处装的），界面据此提示
+ */
+export async function uninstallCliLink({ shimPath, pathEnv, home, candidates, admin = runAsAdmin }) {
+  const links = findCliLinks({ shimPath, pathEnv, home, candidates });
+  if (!links.length) return { status: "none" };
+
+  const removed = [];
+  const needAdmin = [];
+  for (const link of links) {
+    try {
+      fs.unlinkSync(link);
+      removed.push(link);
+    } catch (err) {
+      if (err.code !== "EACCES" && err.code !== "EPERM") throw err;
+      needAdmin.push(link);
+    }
+  }
+
+  if (needAdmin.length) {
+    // 只删软链：等授权的这会儿被换成了真文件就不动
+    const ok = await admin(
+      needAdmin.map((link) => `if [ -L ${shQuote(link)} ]; then rm -f ${shQuote(link)}; fi`).join("; "),
+    );
+    if (!ok) return { status: "canceled", removed };
+    removed.push(...needAdmin);
+  }
+  return { status: "removed", removed, remaining: whichCli(pathEnv) };
 }

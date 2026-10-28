@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { startMockServer } from "../src/mock/server.js";
-import { writeMockRuntime } from "../src/mock/runtime.js";
+import { mockLanUrls, writeMockRuntime } from "../src/mock/runtime.js";
 
 const CLI = fileURLToPath(new URL("../src/cli/index.js", import.meta.url));
 
@@ -271,6 +271,54 @@ test("app 在跑的 mock：CLI start 视为已运行，stop 拒绝并提示去 a
   assert.equal(stopped.code, 1);
   assert.match(stopped.err, /app 里停止/);
   assert.ok(handle.server.listening, "app 的 mock 不能被 CLI 停掉");
+});
+
+test("监听 0.0.0.0：status 说明是所有网卡，地址行仍给本机可访问的 127.0.0.1", async (t) => {
+  const ctx = await setup();
+  // 真绑 0.0.0.0 会触发系统防火墙弹窗：server 只绑回环，运行记录里写 0.0.0.0（和真实后台进程写的一致）
+  const handle = await startMockServer({
+    specPath: path.join(ctx.userData, "specs"),
+    host: "127.0.0.1",
+    port: ctx.port,
+    mockAll: true,
+  });
+  writeMockRuntime(path.join(ctx.userData, "mock-assets"), {
+    pid: process.pid,
+    owner: "cli",
+    host: "0.0.0.0",
+    port: ctx.port,
+  });
+  t.after(async () => {
+    await Promise.all(handle.watchers.map((w) => w.close()));
+    await new Promise((resolve) => handle.server.close(resolve));
+  });
+
+  const status = await run(ctx, ["mock", "status"]);
+  assert.equal(status.code, 0, status.err);
+  assert.match(status.out, new RegExp(`运行中 http://127\\.0\\.0\\.1:${ctx.port}`));
+  assert.match(status.out, new RegExp(`监听 +0\\.0\\.0\\.0:${ctx.port}（所有网卡）`));
+
+  const json = JSON.parse((await run(ctx, ["mock", "status", "--json"])).out);
+  assert.equal(json.host, "0.0.0.0");
+  assert.deepEqual(json.lanUrls, mockLanUrls("0.0.0.0", ctx.port));
+});
+
+test("mockLanUrls：只在监听所有网卡时列出非回环 IPv4", () => {
+  const interfaces = {
+    lo0: [{ family: "IPv4", address: "127.0.0.1", internal: true }],
+    en0: [
+      { family: "IPv6", address: "fe80::1", internal: false },
+      { family: "IPv4", address: "192.168.1.23", internal: false },
+    ],
+    utun3: [{ family: "IPv4", address: "10.8.0.2", internal: false }],
+    utun4: [{ family: "IPv4", address: "198.18.0.1", internal: false }], // 代理软件的虚拟网卡
+  };
+  assert.deepEqual(mockLanUrls("0.0.0.0", 3002, interfaces), [
+    "http://192.168.1.23:3002",
+    "http://10.8.0.2:3002",
+  ]);
+  assert.deepEqual(mockLanUrls("::", 3002, interfaces).length, 2);
+  assert.deepEqual(mockLanUrls("127.0.0.1", 3002, interfaces), []);
 });
 
 test("运行记录残留（pid 已不存在）：start 照常启动并覆盖记录", async (t) => {

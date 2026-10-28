@@ -6,6 +6,7 @@ import MockRuleList from "./mock-rule-list";
 import MockRuleEditor from "./mock-rule-editor";
 import { formatRelativeTime, ruleKey } from "./utils";
 import { useAppConfig } from "../../stores/app-config-store";
+import { refreshMockStatus } from "../../stores/runner-store";
 import { showToast } from "../../utils/toast";
 import useConfirm from "../../hooks/use-confirm";
 import Modal from "../../components/modal";
@@ -683,6 +684,12 @@ export default function MockConfigPage() {
 
   const { confirm, confirmDialog } = useConfirm();
 
+  // 右上角「刷新」：除了重拉规则与路由，顺带重新检查 mock 运行状态（app 开着时用命令行启动的也能接上）
+  const handleRefresh = () => {
+    load();
+    refreshMockStatus();
+  };
+
   // Editor 上报的「有未保存改动」。切换选中项前用它拦截，避免静默丢失。
   // 只在事件处理器里读取、不参与渲染，用 ref 存：编辑器进入/退出 dirty
   // 状态时不重渲染整页（state 版还会让 guardSwitch 闭包变化，击穿列表 memo）。
@@ -1016,10 +1023,10 @@ export default function MockConfigPage() {
           />
           <button
             type="button"
-            onClick={load}
+            onClick={handleRefresh}
             disabled={loading}
             className="px-2.5 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer transition-all bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-50 shadow-2xs flex items-center gap-1.5"
-            title="刷新规则与路由列表"
+            title="刷新规则与路由列表，并重新检查 Mock 运行状态"
           >
             <svg
               className={clsx("w-3.5 h-3.5 text-slate-400", loading && "animate-spin")}

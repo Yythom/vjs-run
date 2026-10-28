@@ -51,6 +51,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   stopMock: () => ipcRenderer.invoke("stop-mock"),
 
+  // 重新检查 mock 后台进程（命令行启动的也能接上）：{ success, status, running: { url, ownerLabel, … } | null }
+  refreshMockStatus: () => ipcRenderer.invoke("refresh-mock-status"),
+
   // 从 swagger 源服务器生成 OpenAPI JSON 到 mockSpecPath 目录（独立操作）
   generateMockSpec: () => ipcRenderer.invoke("generate-mock-spec"),
 
@@ -164,6 +167,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // 把 app 内置的 vjtools 命令装到 PATH：{ success, status: installed|already|external|canceled, linkPath, error }
   installCli: () => ipcRenderer.invoke("install-cli"),
+
+  // 从 PATH 移除 app 装的 vjtools 软链：{ success, status: removed|none|canceled, removed, remaining, error }
+  uninstallCli: () => ipcRenderer.invoke("uninstall-cli"),
 
   // 端口占用查看：传入端口数组，返回每个端口的占用状态、进程名、PID
   checkPorts: (ports) => ipcRenderer.invoke("check-ports", { ports }),

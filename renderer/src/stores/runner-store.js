@@ -89,6 +89,25 @@ export const useRunnerStore = create((set, get) => ({
     );
   },
 
+  /**
+   * 重新检查 mock 后台进程：app 开着时在终端 vjtools mock start 的，手动点刷新时接上。
+   * 静默对齐状态，只有「界面显示没跑、其实在跑」时提示一下
+   */
+  refreshMockStatus: async () => {
+    const prev = statusStore.get(MOCK_ID);
+    const result = await window.electronAPI.refreshMockStatus();
+    if (!result.success) {
+      showToast(`检查 Mock 状态失败: ${result.error}`, "error");
+      return;
+    }
+    // 主进程状态没变时不会推 process-status，这里以返回值为准对齐一次
+    statusStore.set(MOCK_ID, result.status);
+    if (result.status === "running" && prev !== "running") {
+      const from = result.running?.ownerLabel ? `（${result.running.ownerLabel}）` : "";
+      showToast(`已接上运行中的 Mock ${result.running?.url || ""}${from}`, "success");
+    }
+  },
+
   /** 独立操作：从 swagger 源服务器生成 OpenAPI JSON 到 mockSpecPath 目录 */
   generatingMockSpec: false,
   generateMockSpec: async () => {
@@ -174,6 +193,7 @@ export const stopProject = (id) => useRunnerStore.getState().stopProject(id);
 export const runDebugCommand = (id) => useRunnerStore.getState().runDebugCommand(id);
 export const startMock = () => useRunnerStore.getState().startMock();
 export const stopMock = () => useRunnerStore.getState().stopMock();
+export const refreshMockStatus = () => useRunnerStore.getState().refreshMockStatus();
 export const generateMockSpec = () => useRunnerStore.getState().generateMockSpec();
 export const useGeneratingMockSpec = () =>
   useRunnerStore((s) => s.generatingMockSpec);

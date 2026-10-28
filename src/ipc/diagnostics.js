@@ -1,6 +1,6 @@
 // 杂项诊断/调试类 IPC：
 //   - check-env：体检面板，检测 node/pnpm/git 等工具是否就绪
-//   - install-cli：把 app 内置的 vjtools 命令装到 PATH（见 services/cli-shim.js）
+//   - install-cli / uninstall-cli：把 app 内置的 vjtools 命令装到 PATH / 从 PATH 移除（见 services/cli-shim.js）
 //   - check-ports / kill-single-port：端口占用查看器
 //   - run-project-command：在项目目录里执行调试命令（流式日志）
 
@@ -15,7 +15,13 @@ import { killPort } from "../port-utils.js";
 import { getProjectById, getProjectRepo } from "../config/lookup.js";
 import { runStreaming } from "../process-manager.js";
 import { sendLog } from "../ui-channel.js";
-import { cliShimPath, getCliStatus, installCliLink } from "../services/cli-shim.js";
+import {
+  cliShimPath,
+  findCliLinks,
+  getCliStatus,
+  installCliLink,
+  uninstallCliLink,
+} from "../services/cli-shim.js";
 
 function stripAnsi(text) {
   // eslint-disable-next-line no-control-regex
@@ -48,6 +54,8 @@ async function inspectVjtoolsCli() {
   const env = await buildSpawnEnv();
   const shimPath = cliShimPath(app.getPath("userData"));
   const status = getCliStatus({ shimPath, pathEnv: env.PATH });
+  // 有本 app 装的软链就能移除；PATH 上排第一的可能是 npm 装的，也可能根本不在 PATH 上（授权装进 /usr/local/bin 时）
+  const canUninstall = findCliLinks({ shimPath, pathEnv: env.PATH }).length > 0;
   if (!status.onPath) {
     return {
       status: "missing",
@@ -55,6 +63,7 @@ async function inspectVjtoolsCli() {
       cmd: status.shimReady ? `内置命令已就绪，未加入 PATH：${shimPath}` : "终端里还没有 vjtools 命令",
       // 开发模式不生成内置命令（见 main.js），只能提示 npm 安装
       canInstall: status.shimReady,
+      canUninstall,
     };
   }
   const version = await new Promise((resolve) => {
@@ -67,6 +76,7 @@ async function inspectVjtoolsCli() {
     version: version && `${version}（${status.source === "app" ? "app 内置" : "单独安装"}）`,
     cmd: status.onPath,
     canInstall: false,
+    canUninstall,
   };
 }
 
@@ -227,6 +237,12 @@ export function registerDiagnosticsIpc() {
   ipcSafe("install-cli", async () => {
     const env = await buildSpawnEnv();
     return installCliLink({ shimPath: cliShimPath(app.getPath("userData")), pathEnv: env.PATH });
+  });
+
+  // 删掉 app 装进 PATH 的 vjtools 软链（npm 装的不碰）；目录不可写时同样弹授权框
+  ipcSafe("uninstall-cli", async () => {
+    const env = await buildSpawnEnv();
+    return uninstallCliLink({ shimPath: cliShimPath(app.getPath("userData")), pathEnv: env.PATH });
   });
 
   // 查询指定端口列表的占用情况

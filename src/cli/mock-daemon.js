@@ -22,7 +22,9 @@ import {
   fetchMockHealth,
   findLiveMockRuntime,
   isPidAlive,
+  isWildcardHost,
   mockBaseUrl,
+  mockLanUrls,
   readMockRuntime,
   writeMockRuntime,
 } from "../mock/runtime.js";
@@ -222,6 +224,11 @@ function tailText(file, lines) {
 
 function printRunning(running) {
   console.log(`● mock 运行中 ${running.url}`);
+  // 配的 0.0.0.0：上面是本机访问用的地址，这里说明实际监听在所有网卡，并列出局域网地址
+  if (running.host && isWildcardHost(running.host)) {
+    console.log(`  监听      ${running.host}:${running.port}（所有网卡）`);
+    for (const url of mockLanUrls(running.host, running.port)) console.log(`  局域网    ${url}`);
+  }
   console.log(`  启动方式  ${ownerLabel(running)}`);
   if (running.pid) console.log(`  pid       ${running.pid}`);
   if (running.health) {
@@ -345,6 +352,8 @@ export async function status({ json = false } = {}) {
       startedBy: running?.startedBy ?? null,
       pid: running?.pid ?? null,
       url: running?.url ?? mockBaseUrl(config.host, config.port),
+      host: running ? running.host ?? null : config.host,
+      lanUrls: running?.host ? mockLanUrls(running.host, running.port) : [],
       routes: running?.health?.routes ?? null,
       files: running?.health?.files ?? null,
       backendBaseUrl: running ? running.health?.backendBaseUrl ?? null : config.backendBaseUrl || null,

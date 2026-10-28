@@ -19,6 +19,7 @@ import {
   generateMockSpecs,
   getMockRouteMetas,
   normalizeRulesForSave,
+  refreshMockStatus,
   startSwaggerMock,
   stopMockService,
 } from "./service.js";
@@ -130,6 +131,9 @@ export function registerMockIpc() {
   });
 
   ipcSafe("stop-mock", () => stopMockService(MOCK_ID));
+
+  // 重新检查 mock 后台进程：app 开着时用命令行启动的，在这里接上
+  ipcSafe("refresh-mock-status", () => refreshMockStatus());
 
   // 独立的「生成 OpenAPI JSON」操作：从 swagger 源服务器拉文档写入 mockSpecPath
   ipcSafe("generate-mock-spec", () => generateMockSpecs(MOCK_ID));

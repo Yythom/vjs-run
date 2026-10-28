@@ -12,9 +12,11 @@ import path from "node:path";
 
 import {
   cliShimPath,
+  findCliLinks,
   getCliStatus,
   installCliLink,
   pickLinkDir,
+  uninstallCliLink,
   writeCliShim,
 } from "../src/services/cli-shim.js";
 
@@ -182,4 +184,77 @@ test("installCliLink：内置命令还没生成时报错（开发模式不生成
     installCliLink({ shimPath: path.join(root, "bin", "vjtools"), pathEnv: "", candidates: [] }),
     /内置命令还没生成/,
   );
+});
+
+test("uninstallCliLink：删掉本 app 装的软链（多处都删），npm 装的不碰", async () => {
+  const { shimPath, root } = setup();
+  const [npmBin, binA, offPath] = ["npm", "a", "off"].map((name) => {
+    const dir = path.join(root, name);
+    fs.mkdirSync(dir);
+    return dir;
+  });
+  const npmCli = path.join(npmBin, "vjtools");
+  fs.writeFileSync(npmCli, "#!/bin/sh\necho npm\n", { mode: 0o755 });
+  fs.symlinkSync(shimPath, path.join(binA, "vjtools"));
+  // 不在 PATH 上的候选目录（授权装进 /usr/local/bin 但它不在 PATH 上的情形）
+  fs.symlinkSync(shimPath, path.join(offPath, "vjtools"));
+  const pathEnv = `${binA}:${npmBin}`;
+  const admin = () => assert.fail("目录可写时不应请求管理员权限");
+
+  assert.deepEqual(findCliLinks({ shimPath, pathEnv, candidates: [offPath] }).sort(), [
+    path.join(binA, "vjtools"),
+    path.join(offPath, "vjtools"),
+  ]);
+
+  const res = await uninstallCliLink({ shimPath, pathEnv, candidates: [offPath], admin });
+  assert.equal(res.status, "removed");
+  assert.deepEqual(res.removed.sort(), [path.join(binA, "vjtools"), path.join(offPath, "vjtools")]);
+  assert.equal(res.remaining, npmCli, "移除后 PATH 上还剩 npm 装的那个");
+  assert.equal(fs.existsSync(path.join(binA, "vjtools")), false);
+  assert.equal(fs.readFileSync(npmCli, "utf8"), "#!/bin/sh\necho npm\n");
+  assert.equal(fs.existsSync(shimPath), true, "内置命令本身保留");
+
+  assert.deepEqual(await uninstallCliLink({ shimPath, pathEnv, candidates: [offPath], admin }), { status: "none" });
+});
+
+test("uninstallCliLink：内置命令被删了（readlink 仍指向它）的软链也认得出来", async () => {
+  const { shimPath, root } = setup();
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  fs.symlinkSync(shimPath, path.join(bin, "vjtools"));
+  fs.symlinkSync(path.join(root, "别的东西"), path.join(bin, "other"));
+  fs.unlinkSync(shimPath);
+
+  const res = await uninstallCliLink({ shimPath, pathEnv: bin, candidates: [] });
+  assert.deepEqual(res, { status: "removed", removed: [path.join(bin, "vjtools")], remaining: null });
+  assert.equal(fs.lstatSync(path.join(bin, "other")).isSymbolicLink(), true);
+});
+
+test("uninstallCliLink：目录不可写时走管理员授权；用户取消返回 canceled", async () => {
+  const { shimPath, root } = setup();
+  const bin = path.join(root, "root owned");
+  fs.mkdirSync(bin);
+  const link = path.join(bin, "vjtools");
+  fs.symlinkSync(shimPath, link);
+  fs.chmodSync(bin, 0o555);
+  try {
+    const commands = [];
+    const granted = await uninstallCliLink({
+      shimPath,
+      pathEnv: bin,
+      candidates: [],
+      admin: async (command) => {
+        commands.push(command);
+        return true;
+      },
+    });
+    assert.equal(granted.status, "removed");
+    assert.deepEqual(granted.removed, [link]);
+    assert.equal(commands[0], `if [ -L '${link}' ]; then rm -f '${link}'; fi`, "授权命令只删软链");
+
+    const canceled = await uninstallCliLink({ shimPath, pathEnv: bin, candidates: [], admin: async () => false });
+    assert.deepEqual(canceled, { status: "canceled", removed: [] });
+  } finally {
+    fs.chmodSync(bin, 0o755);
+  }
 });
