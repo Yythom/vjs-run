@@ -288,7 +288,9 @@ function createMockServer({
               forcedStatus,
             });
             await sleep(requestControls.delay);
-            const status = Number(variant?.status ?? customRule.status) || 200;
+            // 与 swagger 路由一致：请求控制参数（__mockStatus/x-mock-status）＞ 命中变体 ＞ 规则顶层
+            const status =
+              requestControls.status || Number(variant?.status ?? customRule.status) || 200;
             const mockSource = variant ? "rule-variant" : "rule-custom";
             setMockMetaHeaders(res, {
               source: mockSource,

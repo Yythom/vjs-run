@@ -357,6 +357,35 @@ test("__mockStatus / x-mock-status 能在无规则时单独触发 mock 并改状
   });
 });
 
+test("__mockStatus / x-mock-status 对 swagger 外的自定义规则同样生效，优先于变体和规则的 status", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/legacy",
+        status: 201,
+        response: { legacy: true },
+        variants: [{ name: "vip", when: { query: { vip: "1" } }, status: 202, response: { vip: true } }],
+      },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get, records }) => {
+    const viaQuery = await get("/api/legacy?__mockStatus=500");
+    assert.equal(viaQuery.status, 500);
+    assert.deepEqual(await viaQuery.json(), { legacy: true });
+
+    const viaHeader = await get("/api/legacy?vip=1", { headers: { "x-mock-status": "503" } });
+    assert.equal(viaHeader.status, 503);
+    assert.deepEqual(await viaHeader.json(), { vip: true });
+
+    // 不带控制参数时照旧用变体 / 规则自己的 status
+    assert.equal((await get("/api/legacy?vip=1")).status, 202);
+    assert.equal((await get("/api/legacy")).status, 201);
+
+    assert.deepEqual(records.map((r) => r.status), [500, 503, 202, 201]);
+  });
+});
+
 test("__mockDelay 生效且请求仍正常返回", async () => {
   const { specPath } = fixture();
   await withServer({ specPath }, async ({ get }) => {
