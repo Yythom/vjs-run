@@ -21,8 +21,9 @@ command -v vjtools && vjtools --version
 "$HOME/Library/Application Support/vjtools/bin/vjtools" --version
 ```
 
-- 输出 `vjtools-cli x.y.z`（npm 包）→ 需要 **≥ 0.2.0**。更旧的版本缺 `sample` / `describe` / `save-scene` /
-  `--from-history`，还会**静默忽略不认识的参数**（`--from-history` 被吞掉后照样退出码 0，写出一条没有 response 的规则）。
+- 输出 `vjtools-cli x.y.z`（npm 包）→ 需要 **≥ 0.3.0**。0.2.0 及更早：管道上游稍慢时（`vjtools mock sample … | vjtools mock rule set …`）
+  response 会被静默丢掉、照样报成功，被程序调用时 `rule set` 可能永久挂起，雪花 ID 会被舍入；0.1.x 还缺 `sample` / `describe` /
+  `save-scene` / `--from-history`，并**静默忽略不认识的参数**（`--from-history` 被吞掉后照样退出码 0，写出一条没有 response 的规则）。
   版本不够就征得用户同意后 `npm i -g vjtools-cli@latest`；用着用着报「未知命令 / 未知子命令」也是这个原因。
 - 输出 `vjtools <版本>`（app 内置）→ 能找到就够新。只有它能用时，下文的 `vjtools …` 都换成
   `"$HOME/Library/Application Support/vjtools/bin/vjtools" …`，并提示用户在 app「开发环境体检」页点「安装到命令行」。

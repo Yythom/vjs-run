@@ -1,6 +1,6 @@
 {
   "name": "vjtools-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "vjtools 接口 mock 服务命令行：不装 app 也能启停 mock、改规则与场景、查请求历史",
   "type": "module",
   "bin": {
