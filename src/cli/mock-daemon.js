@@ -183,18 +183,20 @@ export async function serve({ daemon = false } = {}) {
       throw err;
     }
     current = config;
-    const info = writeMockRuntime(paths.mockAssetsDir, {
+    // 先写日志、再写运行记录：app 以「运行记录出现 + health 通过」判定重连成功，随即从日志文件补齐断线期间的内容。
+    // 反过来的话它可能抢在这几行写进文件之前去读，「已启动 + 新地址」就丢了（stdout 写文件是同步的）
+    log(
+      `✔ mock 已启动 ${mockBaseUrl(config.host, config.port)}（${service.routes.length} 条路由，${service.sources.length} 个 spec 文件）`,
+    );
+    log(`  spec    ${config.specPath}`);
+    log(`  后端    ${config.backendBaseUrl || "(未配置，未命中 mock 的接口返回 404/502)"}`);
+    log(`  规则    ${rulesFile}`);
+    writeMockRuntime(paths.mockAssetsDir, {
       ...identity,
       pid: process.pid,
       host: config.host,
       port: config.port,
     });
-    log(
-      `✔ mock 已启动 ${info.url}（${service.routes.length} 条路由，${service.sources.length} 个 spec 文件）`,
-    );
-    log(`  spec    ${config.specPath}`);
-    log(`  后端    ${config.backendBaseUrl || "(未配置，未命中 mock 的接口返回 404/502)"}`);
-    log(`  规则    ${rulesFile}`);
   };
 
   const stopServer = async () => {

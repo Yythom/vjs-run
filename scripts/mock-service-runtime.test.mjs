@@ -191,18 +191,21 @@ test("后台进程改配置自动重启后 app 自动重连；被命令行停掉
 
   await startSwaggerMock();
   const { pid } = readMockRuntime(ctx.mockAssets);
+  const statusesBefore = statuses().length;
   const nextPort = await freePort();
+  // config 会等守护进程重启完才返回，但那时 app 未必已经感知到断线：不能立刻断言，要等 app 走完「断线 → 重连」
   assert.equal((await cli(ctx, ["mock", "config", "--port", String(nextPort)])).status, 0);
 
-  assert.ok(
-    await waitFor(() => readMockRuntime(ctx.mockAssets)?.port === nextPort && isMockRunning()),
-    "重启后要重新连上",
+  const panel = () => sent.filter((e) => e.channel === "process-log").map((e) => e.payload.data).join("");
+  const reconnected = await waitFor(
+    () =>
+      statuses().slice(statusesBefore).includes("starting") &&
+      isMockRunning() &&
+      panel().includes(`mock 已启动 http://127.0.0.1:${nextPort}`),
   );
-  assert.ok(statuses().includes("starting"), "重启期间显示启动中");
-  flushLogs();
   assert.ok(
-    sent.some((e) => e.channel === "process-log" && e.payload.data.includes(`mock 已启动 http://127.0.0.1:${nextPort}`)),
-    "断线期间写的「已启动 + 新地址」要补进日志面板",
+    reconnected,
+    `重启期间显示启动中、之后重新连上，并把断线期间写的「已启动 + 新地址」补进日志面板，实际收到：\n${panel().slice(-1500)}`,
   );
   await fetch(`http://127.0.0.1:${nextPort}/api/a`);
   assert.ok(await waitFor(async () => (await fetchMockHistory()).length === 1), "历史从新端口读");

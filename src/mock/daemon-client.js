@@ -33,7 +33,9 @@ const REPLAY_LOG_LINES = 200;
 let status = "stopped";
 let current = null; // 当前连着的后台进程（mock-runtime 记录 + health）
 let watching = null; // { controller: AbortController }
-let lastLogLine = ""; // 已经显示到日志面板的最后一行（用来补齐断线后才写进日志文件的内容）
+// 日志面板已经显示到后台进程日志文件的哪个位置（字节）：断线重连 / 进程退出时从这里补齐漏掉的内容。
+// 按字节记而不是按「最后一行的内容」去找：时间戳只到秒，同一秒内重启时前后两段启动日志一字不差，按内容会找错位置
+let shownLog = { file: null, offset: 0 };
 
 function userDataDir() {
   return path.dirname(path.dirname(getConfig().mockRulesFile));
@@ -140,29 +142,41 @@ function attach(running) {
 // 接上时把后台进程已有的日志补进 app 的日志面板（之后的日志走事件推送）
 function replayLogFile(file) {
   if (!file) return;
+  let buf;
   try {
-    const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n").slice(-REPLAY_LOG_LINES);
-    const text = lines.join("\n");
-    if (text) log(text);
-    lastLogLine = lines.at(-1) || "";
+    buf = fs.readFileSync(file);
   } catch {
-    // 日志文件不存在：没什么可补的
+    return; // 日志文件不存在：没什么可补的
   }
+  const text = buf.toString("utf8").trimEnd().split("\n").slice(-REPLAY_LOG_LINES).join("\n");
+  if (text) log(text);
+  shownLog = { file, offset: buf.length };
 }
 
 // 后台进程按新配置重启时会先断开事件流：这期间的日志（重启后的新地址、重启失败的原因）只写进了日志文件，
-// app 收不到。重连上或发现它退出时，把日志文件里「最后显示过的那一行」之后的内容补上
+// app 收不到。重连上或发现它退出时，把日志文件里已显示位置之后的内容补上
 function replayMissedLog(file) {
   if (!file) return;
-  let lines;
+  let buf;
   try {
-    lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+    buf = fs.readFileSync(file);
   } catch {
     return;
   }
-  const at = lastLogLine ? lines.lastIndexOf(lastLogLine) : -1;
-  const missed = at >= 0 ? lines.slice(at + 1) : lines.slice(-10);
-  if (missed.length) log(missed.join("\n"));
+  // 换了文件 / 文件被截断重写（vjtools mock start 起了新进程）：从头补（最多 REPLAY_LOG_LINES 行）
+  if (file !== shownLog.file || buf.length < shownLog.offset) {
+    shownLog = { file, offset: 0 };
+  }
+  let start = shownLog.offset;
+  // 日志文件里还可能有不经事件流的输出（console.error 等），已显示位置会略微落后、落在某行中间：
+  // 从下一行开头补，宁可重复一两行也不截出半行
+  if (start > 0 && buf[start - 1] !== 0x0a) {
+    const next = buf.indexOf(0x0a, start);
+    start = next < 0 ? buf.length : next + 1;
+  }
+  const text = buf.subarray(start).toString("utf8").trimEnd().split("\n").slice(-REPLAY_LOG_LINES).join("\n");
+  if (text) log(text);
+  shownLog = { file, offset: buf.length };
 }
 
 async function watchLoop(initial, signal) {
@@ -294,8 +308,8 @@ function handleEvent(block) {
     handleRecordedEntry(payload);
   } else if (event === "log") {
     log(payload);
-    // 一条日志可能有多行（端口被占的提示等），日志文件里按行存，记最后一行才对得上
-    lastLogLine = String(payload).split("\n").at(-1);
+    // 后台进程写日志文件就是 console.log(line)：文件里多了 line + 换行这么多字节
+    shownLog.offset += Buffer.byteLength(String(payload)) + 1;
   }
 }
 

@@ -1176,10 +1176,12 @@ test("spec 文件改坏了：热更新失败经 onLog 报出来（进日志文�
   const logs = [];
   await withServer({ specPath: dir, onLog: (line) => logs.push(line) }, async ({ get }) => {
     assert.equal((await get("/__mock/routes").then((r) => r.json())).length, 3);
-    fs.writeFileSync(specPath, "{ 坏掉的 JSON");
-    const deadline = Date.now() + 5_000;
-    while (!logs.some((line) => /spec 重新加载失败/.test(line)) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    // chokidar 是异步就绪的：服务刚起来就改文件可能赶在监听就绪前被漏掉，没等到日志就再写一次
+    const reported = () => logs.some((line) => /spec 重新加载失败/.test(line));
+    for (let attempt = 0; attempt < 8 && !reported(); attempt++) {
+      fs.writeFileSync(specPath, `{ 坏掉的 JSON ${attempt}`);
+      const deadline = Date.now() + 1_500;
+      while (!reported() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
     }
     assert.ok(logs.some((line) => /spec 重新加载失败，继续使用上一次的路由/.test(line)), logs.join("\n"));
     assert.equal((await get("/__mock/routes").then((r) => r.json())).length, 3, "旧路由还在");
