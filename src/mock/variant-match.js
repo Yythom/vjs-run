@@ -7,7 +7,8 @@
 //   - query：请求 query 中存在该 key 且字符串相等（条件值归一化时已 String 强转）
 //   - headers：条件 key 归一化为小写（Node 入站 header 天然小写），字符串相等
 //   - body：key 是点路径（a.b.c，数字段可索引数组）；仅 JSON body 可命中。
-//     原始值（string/number/boolean）两边 String() 互转比较（1 与 "1" 命中）；
+//     原始值（string/number/boolean）两边 String() 互转比较（1 与 "1" 命中），
+//     超出安全范围的大整数（雪花 ID）已被 JSON.parse 舍入，按数值比；
 //     条件值为对象/数组时做深度相等（嵌套内不做数字/字符串互转）；null 仅命中 null。
 //
 // 命不中任何变体时回退规则顶层的 response/status/delay——所以「空 when」非法，
@@ -19,6 +20,7 @@
 
 import get from "lodash-es/get.js";
 import isEqual from "lodash-es/isEqual.js";
+import { unwrapRawJson } from "./json-lossless.js";
 
 const VARIANT_NAME_MAX = 60;
 
@@ -28,14 +30,33 @@ export function isValidHttpStatus(status) {
   return Number.isInteger(status) && status >= 100 && status <= 599;
 }
 
+// 延迟上限：模拟超时用不着更久，写成 999999999 这类值请求会被挂几天
+export const MAX_DELAY_MS = 600_000;
+
 // ─── 归一化 ──────────────────────────────────────────────────────────────────
 
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// 超出安全范围的整数（雪花 ID 等）：JSON.parse 后已经被舍入，不能再当精确值用
+function isUnsafeInteger(value) {
+  return typeof value === "number" && Number.isInteger(value) && !Number.isSafeInteger(value);
+}
+
+// 用户输入的 body 条件值（命令行 --when-body、app 条件编辑器共用语义）：尝试 JSON.parse，
+// 2→数字、true→布尔、{"a":1}→对象，失败按字符串；大整数保留原文，免得 1850123456789012345 被存成 …2200
+export function parseBodyConditionValue(text) {
+  try {
+    const value = JSON.parse(text);
+    return isUnsafeInteger(value) ? text.trim() : value;
+  } catch {
+    return text;
+  }
+}
+
 // when 归一化：header key 小写化，query/header 条件值 String 强转；
-// 无任何有效条件时返回 undefined。
+// 空 / 纯空白的 key 匹配不到任何东西，丢掉；无任何有效条件时返回 undefined。
 export function normalizeWhen(when) {
   if (!isPlainObject(when)) return undefined;
 
@@ -45,8 +66,8 @@ export function normalizeWhen(when) {
   if (isPlainObject(when.query)) {
     const query = {};
     for (const [key, value] of Object.entries(when.query)) {
-      if (!key) continue;
-      query[key] = String(value);
+      if (!key.trim()) continue;
+      query[key] = String(unwrapRawJson(value));
       total++;
     }
     if (Object.keys(query).length) out.query = query;
@@ -55,8 +76,8 @@ export function normalizeWhen(when) {
   if (isPlainObject(when.headers)) {
     const headers = {};
     for (const [key, value] of Object.entries(when.headers)) {
-      if (!key) continue;
-      headers[key.toLowerCase()] = String(value);
+      if (!key.trim()) continue;
+      headers[key.toLowerCase()] = String(unwrapRawJson(value));
       total++;
     }
     if (Object.keys(headers).length) out.headers = headers;
@@ -65,8 +86,10 @@ export function normalizeWhen(when) {
   if (isPlainObject(when.body)) {
     const body = {};
     for (const [key, value] of Object.entries(when.body)) {
-      if (!key) continue;
-      body[key] = value; // body 条件值保留原始 JSON 类型，比较时再区分原始值/深相等
+      if (!key.trim()) continue;
+      // body 条件值保留原始 JSON 类型，比较时再区分原始值/深相等；规则文件按无损方式读出时大整数
+      // 是 rawJSON 包装，还原成普通解析的结果（数字），比较语义与以前一致
+      body[key] = unwrapRawJson(value);
       total++;
     }
     if (Object.keys(body).length) out.body = body;
@@ -109,7 +132,7 @@ export function normalizeVariantStrict(variant, label) {
   const when = normalizeWhen(variant.when);
   if (!when) {
     throw new Error(
-      `${label}的 when 至少要有一个条件（query/headers/body）；无条件的兜底响应请放在规则顶层`,
+      `${label}的 when 至少要有一个条件（query/headers/body，key 为空或纯空白的不算）；无条件的兜底响应请放在规则顶层`,
     );
   }
   if (variant.response === undefined) throw new Error(`${label}缺少 response`);
@@ -129,6 +152,7 @@ export function normalizeVariantStrict(variant, label) {
     if (!Number.isInteger(delay) || delay < 0) {
       throw new Error(`${label}的 delay 必须是大于等于 0 的整数`);
     }
+    if (delay > MAX_DELAY_MS) throw new Error(`${label}的 delay 最多 ${MAX_DELAY_MS} 毫秒（10 分钟）`);
     out.delay = delay;
   }
 
@@ -160,7 +184,10 @@ function isPrimitive(value) {
 function matchBodyValue(actual, expected) {
   if (expected === null) return actual === null;
   if (isPrimitive(expected)) {
-    return isPrimitive(actual) && String(actual) === String(expected);
+    if (!isPrimitive(actual)) return false;
+    if (String(actual) === String(expected)) return true;
+    // 大整数一边已被 JSON.parse 舍入（请求体里写成数字字面量，或旧版本存下的条件），只能按舍入后的数值比
+    return (isUnsafeInteger(actual) || isUnsafeInteger(expected)) && Number(actual) === Number(expected);
   }
   return isEqual(actual, expected); // 对象/数组条件：深相等，嵌套内不做互转
 }

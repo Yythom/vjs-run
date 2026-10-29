@@ -5,6 +5,7 @@ import { useAppConfig } from "../stores/app-config-store";
 import { startMock, stopMock } from "../stores/runner-store";
 import { useStatus } from "../stores/status-store";
 import * as logStore from "../stores/log-store";
+import { mockLocalUrl } from "../utils/mock-url";
 
 const MOCK_STATUS_LABELS = {
   running: "运行中",
@@ -18,13 +19,10 @@ export default function MockServiceDetail() {
   const status = useStatus(MOCK_ID);
 
   const isActive = status === "running" || status === "starting";
-  const host = appConfig.mockHost || "127.0.0.1";
-  const port = appConfig.mockPort || 3002;
-
   const detail = {
     name: "Swagger Mock 服务",
     filter: appConfig.mockSpecPath || "—",
-    logTitle: `swagger-mock — http://${host}:${port}`,
+    logTitle: `swagger-mock — ${mockLocalUrl(appConfig.mockHost, appConfig.mockPort)}`,
     status,
     label: MOCK_STATUS_LABELS[status] || MOCK_STATUS_LABELS.stopped,
     badgeClass: status === "running" ? "mock-running" : status,

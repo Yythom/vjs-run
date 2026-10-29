@@ -5,6 +5,7 @@
 // 自己会 normalize 一遍。字段默认值与 normalize.js 保持一致。
 
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { DEFAULT_CONFIG } from "../config/defaults.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
@@ -83,7 +84,27 @@ function httpUrl(flag, value) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new CliError(`--${flag} 只支持 http/https：${text}`);
   }
+  // 两个地址都是「前缀」，后面还要拼接口路径（后端还会补尾部 /），带了 query / hash 会拼成坏地址
+  if (url.search || url.hash || /[?#]/.test(text)) {
+    throw new CliError(`--${flag} 不能带 ? 或 #，只填到路径前缀：${text}`);
+  }
   return text;
+}
+
+const HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+
+// server.listen 要的是裸地址：[::1] 去掉方括号；带协议 / 端口的（http://…、127.0.0.1:3002）直接拒绝，
+// 否则 listen 报 ENOTFOUND，拼出来的访问地址也是 http://[127.0.0.1:3002]:3002 这种非法 URL
+function listenHost(raw) {
+  let host = raw.trim();
+  if (!host) throw new CliError("--host 不能为空");
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (!net.isIP(host) && !HOSTNAME_RE.test(host)) {
+    throw new CliError(
+      `--host 只填地址本身，不带协议和端口（如 127.0.0.1、0.0.0.0、::1、localhost；端口用 --port）：${raw}`,
+    );
+  }
+  return host;
 }
 
 export function configUpdatesFromFlags(values) {
@@ -101,13 +122,13 @@ export function configUpdatesFromFlags(values) {
     updates.mockBackendBaseUrl = normalizeBackendBaseUrl(httpUrl("backend", values.backend));
   }
   if (values.host !== undefined) {
-    const host = String(requireValue("host", values.host)).trim();
-    if (!host) throw new CliError("--host 不能为空");
-    updates.mockHost = host;
+    updates.mockHost = listenHost(String(requireValue("host", values.host)));
   }
   if (values.port !== undefined) {
-    const port = Number(requireValue("port", values.port));
-    if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    // 只认十进制数字：Number() 会把 1e3、0x10 也当成端口
+    const text = String(requireValue("port", values.port)).trim();
+    const port = Number(text);
+    if (!/^\d+$/.test(text) || port <= 0 || port > 65535) {
       throw new CliError(`--port 必须是 1–65535 的整数：${values.port}`);
     }
     updates.mockPort = port;
@@ -142,5 +163,21 @@ export function assertSpecReady(config) {
         "  · 从 Swagger 拉取：vjtools mock config --swagger-server <url> && vjtools mock gen\n" +
         "  · 用已有文件：     vjtools mock config --spec-dir <OpenAPI JSON 所在目录>",
     );
+  }
+  if (fs.statSync(config.specPath).isDirectory() && !hasSpecFiles(config.specPath)) {
+    throw new CliError(
+      `spec 目录里还没有 OpenAPI 文件：${config.specPath}\n` +
+        "  · 从 Swagger 拉取：vjtools mock config --swagger-server <url> && vjtools mock gen\n" +
+        "  · 或把 OpenAPI JSON / YAML 文件放进这个目录",
+    );
+  }
+}
+
+/** 目录第一层有没有 OpenAPI 文件（加载时也只看第一层） */
+export function hasSpecFiles(dir) {
+  try {
+    return fs.readdirSync(dir).some((name) => /\.(json|ya?ml)$/i.test(name));
+  } catch {
+    return false;
   }
 }

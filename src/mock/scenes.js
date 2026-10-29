@@ -103,7 +103,14 @@ export function renameScene(scenesDir, oldName, newName) {
   if (!fs.existsSync(fromFile)) throw new Error(`场景不存在：${from}`);
   if (to === from) return to;
   const toFile = sceneFilePath(scenesDir, to);
-  if (fs.existsSync(toFile)) throw new Error(`场景已存在：${to}`);
+  // macOS 默认文件系统不区分大小写：Login → login 时 toFile「已存在」其实就是它自己，照常改名
+  if (fs.existsSync(toFile) && !isSameFile(fromFile, toFile)) throw new Error(`场景已存在：${to}`);
   fs.renameSync(fromFile, toFile);
   return to;
+}
+
+function isSameFile(a, b) {
+  const sa = fs.statSync(a);
+  const sb = fs.statSync(b);
+  return sa.dev === sb.dev && sa.ino === sb.ino;
 }

@@ -5,7 +5,7 @@ const DEFAULT_APP_CONFIG = {
   frontendProjectGroups: [],
   mockSpecPath: "",
   mockSwaggerServer: "",
-  mockHost: "127.0.0.1",
+  mockHost: "0.0.0.0",
   mockPort: 3002,
   mockServiceAddress: "",
   mockVjToken: "",

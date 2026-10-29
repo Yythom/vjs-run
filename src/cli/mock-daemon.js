@@ -33,31 +33,77 @@ import { MOCK_RESTART_FIELDS, assertSpecReady, readMockConfig } from "./config.j
 import { CliError, clockTime, cliVersion, printJson, sleep } from "./util.js";
 
 const CLI_ENTRY = fileURLToPath(new URL("./index.js", import.meta.url));
+// 重启也要重新加载 spec，和首次启动用同一个上限
 const START_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 5_000;
 
 export const NOT_RUNNING_EXIT_CODE = 3;
 
-/** owner=cli 是后台进程（startedBy 区分谁拉起的）；app / unknown 是旧版 app 在进程内跑的 */
+/**
+ * owner=cli 是后台进程（startedBy 区分谁拉起的）；app / unknown 是旧版 app 在进程内跑的；
+ * other 是另一个数据目录（VJTOOLS_USER_DATA_DIR 隔离环境等）的后台进程，恰好配了同一个端口
+ */
 export function ownerLabel(running) {
   if (running.owner === "cli") {
     return running.startedBy === "app" ? "vjtools app（后台进程）" : "命令行（vjtools mock start）";
   }
   if (running.owner === "app") return "旧版 vjtools app（在 app 进程里运行）";
+  if (running.owner === "other") return `另一个数据目录的 vjtools（${running.userDataDir}）`;
   return "未知来源（端口上有 mock，但没有运行记录，可能是旧版 vjtools app）";
+}
+
+/** 别的数据目录的 mock 怎么停：给出带 VJTOOLS_USER_DATA_DIR 的命令 */
+export function otherDataDirHint(running) {
+  return `它属于另一个数据目录，请在那边操作：VJTOOLS_USER_DATA_DIR='${running.userDataDir}' vjtools mock stop`;
+}
+
+// 同一个规则文件才是同一个数据目录（/tmp 与 /private/tmp 这类软链按真实路径比）
+function sameFile(a, b) {
+  if (!a || !b) return false;
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return path.resolve(a) === path.resolve(b);
+  }
 }
 
 /**
  * 当前在跑的 mock：优先看运行记录；没有记录但配置端口上有 mock 也算（owner=unknown）。
+ * @param {object|null} config 读不出配置时传 null：只看运行记录，不探测端口
  * @returns {Promise<null | {owner, pid, url, health, logFile?, startedAt?, version?}>}
  */
 export async function detectRunningMock(paths, config) {
   const live = await findLiveMockRuntime(paths.mockAssetsDir);
   if (live) return live;
+  if (!config) return null;
   const url = mockBaseUrl(config.host, config.port);
   const health = await fetchMockHealth(url);
-  if (health) return { owner: "unknown", pid: health.pid ?? null, url, health };
-  return null;
+  if (!health) return null;
+  if (health.owner === "cli" && isPidAlive(health.pid)) {
+    // 运行记录丢了 / 坏了，但端口上就是本数据目录的 CLI 后台进程（health 自报身份 + 规则文件对得上）：
+    // 照样当自己起的处理，stop 停得掉。规则文件对不上的是别的数据目录的进程，绝不能当成自己的去停
+    if (sameFile(health.mockRulesFile, paths.rulesFile)) {
+      const { pid, startedBy, logFile = null, version } = health;
+      return { owner: "cli", pid, startedBy, logFile, version, host: config.host, port: config.port, url, health };
+    }
+    const userDataDir = path.dirname(path.dirname(String(health.mockRulesFile || "")));
+    return { owner: "other", pid: health.pid, userDataDir, url, health };
+  }
+  return { owner: "unknown", pid: health.pid ?? null, url, health };
+}
+
+/**
+ * 只是找在跑的进程（stop / logs / history）时用：config.json 写坏了也不能罢工——守护进程遇到坏配置
+ * 会忽略变更继续跑，这时用户最需要的就是能停掉它、看它的日志
+ */
+export function detectRunningMockLenient(paths) {
+  let config = null;
+  try {
+    config = readMockConfig(paths.configFile);
+  } catch {
+    // 坏配置：只看运行记录
+  }
+  return detectRunningMock(paths, config);
 }
 
 function portInUseMessage(port) {
@@ -103,6 +149,14 @@ export async function serve({ daemon = false } = {}) {
   };
   let service = null;
   let current = null;
+  // 写进运行记录的身份信息，同时经 /__mock/health 自报（运行记录丢了也认得出）
+  const identity = {
+    owner: "cli",
+    logFile: daemon ? paths.logFile : null,
+    version: cliVersion().version,
+    // app 拉起时会带上这个环境变量，status 据此显示「vjtools app（后台进程）」
+    startedBy: process.env.VJTOOLS_STARTED_BY === "app" ? "app" : "cli",
+  };
 
   const startServer = async () => {
     const config = readMockConfig(paths.configFile);
@@ -122,6 +176,7 @@ export async function serve({ daemon = false } = {}) {
         getHistory: getMockHistory,
         clearHistory: clearMockHistory,
         subscribe,
+        identity,
       });
     } catch (err) {
       if (err?.code === "EADDRINUSE") throw new CliError(portInUseMessage(config.port));
@@ -129,14 +184,10 @@ export async function serve({ daemon = false } = {}) {
     }
     current = config;
     const info = writeMockRuntime(paths.mockAssetsDir, {
+      ...identity,
       pid: process.pid,
-      owner: "cli",
       host: config.host,
       port: config.port,
-      logFile: daemon ? paths.logFile : null,
-      version: cliVersion().version,
-      // app 拉起时会带上这个环境变量，status 据此显示「vjtools app（后台进程）」
-      startedBy: process.env.VJTOOLS_STARTED_BY === "app" ? "app" : "cli",
     });
     log(
       `✔ mock 已启动 ${info.url}（${service.routes.length} 条路由，${service.sources.length} 个 spec 文件）`,
@@ -249,12 +300,78 @@ function printRunning(running) {
  */
 export async function startDaemon({ paths = cliPaths(), execPath = process.execPath, env = process.env } = {}) {
   seedMockAssets(paths.userDataDir);
-  const config = readMockConfig(paths.configFile);
+  return withStartLock(paths, async () => {
+    // 拿到锁之后再查：等锁期间可能别人已经起好了
+    const config = readMockConfig(paths.configFile);
+    const running = await detectRunningMock(paths, config);
+    if (running?.owner === "other") {
+      // 那个进程用的是别的规则和配置，当成「已在运行」接上只会让人对着不生效的规则排查半天
+      throw new CliError(
+        `端口 ${config.port} 被${ownerLabel(running)}的 mock 占用了。\n` +
+          `  · ${otherDataDirHint(running)}\n  · 或换个端口：vjtools mock config --port <端口>`,
+      );
+    }
+    if (running) return { status: "already", running };
+    // 子进程里也会校验，这里先挡一次，错误信息能直接回到调用方而不是埋在日志里
+    assertSpecReady(config);
+    return spawnDaemon(paths, execPath, env);
+  });
+}
 
-  const running = await detectRunningMock(paths, config);
-  if (running) return { status: "already", running };
-  // 子进程里也会校验，这里先挡一次，错误信息能直接回到调用方而不是埋在日志里
-  assertSpecReady(config);
+/**
+ * 同一时刻只让一个 startDaemon 真正去拉进程（app 和命令行、两个 AI 调用可能同时 start）。不加锁时
+ * 两边都判定「没在跑」各拉一个：后拉的撞端口退出，还用 "w" 截断了共用的日志文件，发起它的一方误报「启动失败」。
+ * 锁文件里记持有者 pid，持有者已经不在、或锁比启动超时还老，就当残留清掉。
+ */
+async function withStartLock(paths, fn) {
+  const lockFile = path.join(paths.mockAssetsDir, "mock-starting.lock");
+  const deadline = Date.now() + START_TIMEOUT_MS + 5_000;
+  for (;;) {
+    if (tryCreateLock(lockFile)) break;
+    let holder;
+    let ageMs;
+    try {
+      holder = Number(fs.readFileSync(lockFile, "utf8"));
+      ageMs = Date.now() - fs.statSync(lockFile).mtimeMs;
+    } catch {
+      continue; // 刚好被释放：重新抢
+    }
+    // 读不出 pid（手动建的空文件等）只按年龄判残留，不能当成「持有者已退出」立刻删
+    const stale = Number.isInteger(holder) && holder > 0 ? !isPidAlive(holder) : ageMs > 2_000;
+    if (stale || ageMs > START_TIMEOUT_MS + 5_000) {
+      fs.rmSync(lockFile, { force: true });
+      continue;
+    }
+    if (Date.now() > deadline) throw new CliError(`等待另一个 mock 启动操作超时（pid ${holder}）`);
+    await sleep(200);
+  }
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync(lockFile, { force: true });
+  }
+}
+
+// 原子地建锁：pid 先写进临时文件，再 link 成锁文件（已存在则 EEXIST）。直接 writeFileSync(wx) 会有
+// 「文件建好了、pid 还没写进去」的空窗，别人这时读到空内容会误判成残留锁删掉，两边就都去拉进程了
+let lockTmpSeq = 0;
+
+function tryCreateLock(lockFile) {
+  // pid + 进程内序号保证唯一：同一进程（app）同一毫秒里并发 start 也不会共用同一个临时文件
+  const tmp = `${lockFile}.${process.pid}.${++lockTmpSeq}`;
+  fs.writeFileSync(tmp, String(process.pid));
+  try {
+    fs.linkSync(tmp, lockFile);
+    return true;
+  } catch (err) {
+    if (err.code === "EEXIST") return false;
+    throw err;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+async function spawnDaemon(paths, execPath, env) {
 
   fs.mkdirSync(path.dirname(paths.logFile), { recursive: true });
   const fd = fs.openSync(paths.logFile, "w");
@@ -266,7 +383,13 @@ export async function startDaemon({ paths = cliPaths(), execPath = process.execP
   });
   fs.closeSync(fd);
   let exited = false;
+  let spawnError = null;
   child.on("exit", () => {
+    exited = true;
+  });
+  // 可执行文件不存在 / 没权限时 spawn 不抛，而是异步发 error：不接住整个进程（app 主进程）会崩
+  child.on("error", (err) => {
+    spawnError = err;
     exited = true;
   });
   child.unref();
@@ -274,6 +397,7 @@ export async function startDaemon({ paths = cliPaths(), execPath = process.execP
   const deadline = Date.now() + START_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(200);
+    if (spawnError) throw new CliError(`mock 启动失败：无法运行 ${execPath}（${spawnError.message}）`);
     if (exited) {
       throw new CliError(`mock 启动失败：\n${tailText(paths.logFile, 20) || "(没有日志输出)"}`);
     }
@@ -303,19 +427,28 @@ export async function start() {
  *   foreign：端口上的 mock 不是后台进程（旧版 app 在进程内跑的，或别的来源），不能停
  */
 export async function stopDaemon({ paths = cliPaths() } = {}) {
-  const running = await detectRunningMock(paths, readMockConfig(paths.configFile));
+  const running = await detectRunningMockLenient(paths);
   if (!running) return { status: "not-running" };
   if (running.owner !== "cli") return { status: "foreign", running };
 
-  process.kill(running.pid, "SIGTERM");
+  killQuietly(running.pid, "SIGTERM");
   const deadline = Date.now() + STOP_TIMEOUT_MS;
   while (isPidAlive(running.pid) && Date.now() < deadline) await sleep(100);
   if (isPidAlive(running.pid)) {
-    process.kill(running.pid, "SIGKILL");
+    killQuietly(running.pid, "SIGKILL");
     await sleep(200);
   }
   clearMockRuntime(paths.mockAssetsDir, running.pid);
   return { status: "stopped", pid: running.pid };
+}
+
+// 探测到它在跑、到发信号之间它可能刚好自己退出了（ESRCH）：目的已经达到，不算失败
+function killQuietly(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  } catch (err) {
+    if (err.code !== "ESRCH") throw err;
+  }
 }
 
 export async function stop() {
@@ -325,8 +458,11 @@ export async function stop() {
     return 0;
   }
   if (result.status === "foreign") {
+    const { running } = result;
     throw new CliError(
-      `这个 mock 是由${ownerLabel(result.running)}启动的（${result.running.url}），请在 vjtools app 里停止。`,
+      running.owner === "other"
+        ? `端口上的 mock 不是这个数据目录的（${running.url}）。${otherDataDirHint(running)}`
+        : `这个 mock 是由${ownerLabel(running)}启动的（${running.url}），请在 vjtools app 里停止。`,
     );
   }
   console.log(`✔ mock 已停止（pid ${result.pid}）`);
@@ -334,8 +470,37 @@ export async function stop() {
 }
 
 export async function restart() {
+  // 先确认新进程起得来再停旧的：配置写坏 / spec 目录没了时，原本正常跑着的 mock 不该先被杀掉
+  assertSpecReady(readMockConfig(cliPaths().configFile));
   await stop();
   return start();
+}
+
+/**
+ * 改了 config.json 里影响 server 的字段后，等后台进程按新配置重启完。重启失败（端口被占、spec 目录
+ * 不存在…）时进程会直接退出，这里如实报错，免得调用方以为「会自动重启」就万事大吉。
+ * @param {object} running 改配置之前 detectRunningMock 拿到的记录（owner=cli）
+ * @returns {Promise<object>} 重启后的运行记录（附 health）
+ */
+export async function waitForDaemonRestart({ paths = cliPaths(), running }) {
+  const deadline = Date.now() + START_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(200);
+    if (!isPidAlive(running.pid)) {
+      const log = running.logFile ? tailText(running.logFile, 6) : "";
+      throw new CliError(
+        `配置已写入，但 mock 按新配置重启失败，已退出${log ? `：\n${log}` : "（原因见运行 vjtools mock serve 的终端）"}\n` +
+          "  改好配置后重新启动：vjtools mock start",
+      );
+    }
+    const info = readMockRuntime(paths.mockAssetsDir);
+    if (info?.pid !== running.pid || info.startedAt === running.startedAt) continue;
+    const health = await fetchMockHealth(info.url);
+    if (health?.pid === running.pid) return { ...info, health };
+  }
+  throw new CliError(
+    `配置已写入，但 ${START_TIMEOUT_MS / 1000}s 内没等到 mock 按新配置重启完成。\n  · 查看日志：vjtools mock logs`,
+  );
 }
 
 // ─── status ──────────────────────────────────────────────────────────────────
@@ -343,11 +508,15 @@ export async function restart() {
 export async function status({ json = false } = {}) {
   const paths = cliPaths();
   const config = readMockConfig(paths.configFile);
-  const running = await detectRunningMock(paths, config);
+  const found = await detectRunningMock(paths, config);
+  // 端口被别的数据目录的进程占着：对这个数据目录来说 mock 没在跑（退出码 3），但要说清楚端口被谁占了
+  const occupiedBy = found?.owner === "other" ? found : null;
+  const running = occupiedBy ? null : found;
 
   if (json) {
     printJson({
       running: Boolean(running),
+      occupiedBy: occupiedBy ? ownerLabel(occupiedBy) : null,
       owner: running?.owner ?? null,
       startedBy: running?.startedBy ?? null,
       pid: running?.pid ?? null,
@@ -366,6 +535,9 @@ export async function status({ json = false } = {}) {
     });
   } else if (running) {
     printRunning(running);
+  } else if (occupiedBy) {
+    console.log(`○ mock 未运行；配置的端口 ${config.port} 被${ownerLabel(occupiedBy)}占用`);
+    console.log(`  ${otherDataDirHint(occupiedBy)}，或换个端口：vjtools mock config --port <端口>`);
   } else {
     console.log(`○ mock 未运行（配置地址 ${mockBaseUrl(config.host, config.port)}）`);
     console.log("  启动：vjtools mock start");
@@ -377,25 +549,35 @@ export async function status({ json = false } = {}) {
 
 export async function logs({ lines = 50, follow = false } = {}) {
   const paths = cliPaths();
-  const running = await detectRunningMock(paths, readMockConfig(paths.configFile));
+  const running = await detectRunningMockLenient(paths);
+  if (running?.owner === "other") {
+    console.log(`当前端口上的 mock 属于${ownerLabel(running)}，日志在那个数据目录的 logs/ 下。`);
+    return 0;
+  }
   if (running && running.owner !== "cli") {
     console.log(`当前 mock 由${ownerLabel(running)}运行，日志在 app 的 mock 面板里。`);
     return 0;
   }
-  if (!fs.existsSync(paths.logFile)) {
+  // 前台 vjtools mock serve 不写日志文件：磁盘上的 mock-cli.log 是以前后台运行留下的，打出来只会误导
+  if (running && !running.logFile) {
+    console.log("当前 mock 在前台运行（vjtools mock serve），日志直接输出在它所在的终端里。");
+    return 0;
+  }
+  const logFile = running?.logFile || paths.logFile;
+  if (!fs.existsSync(logFile)) {
     console.log("暂无日志（只有 vjtools mock start 后台启动的 mock 会写日志文件）。");
     return 0;
   }
 
-  const text = tailText(paths.logFile, lines);
+  const text = tailText(logFile, lines);
   if (text) console.log(text);
   if (!follow) return 0;
 
-  let offset = fs.statSync(paths.logFile).size;
-  fs.watchFile(paths.logFile, { interval: 300 }, (curr) => {
+  let offset = fs.statSync(logFile).size;
+  fs.watchFile(logFile, { interval: 300 }, (curr) => {
     if (curr.size < offset) offset = 0; // 重启 mock 时日志被截断重写
     if (curr.size === offset) return;
-    const stream = fs.createReadStream(paths.logFile, { start: offset, end: curr.size - 1 });
+    const stream = fs.createReadStream(logFile, { start: offset, end: curr.size - 1 });
     offset = curr.size;
     stream.pipe(process.stdout, { end: false });
   });

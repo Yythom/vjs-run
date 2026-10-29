@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +29,7 @@ import {
   stopMockService,
 } from "../src/mock/service.js";
 import { startRecording, stopRecording } from "../src/mock/recorder.js";
-import { isPidAlive, readMockRuntime } from "../src/mock/runtime.js";
+import { isPidAlive, readMockRuntime, writeMockRuntime } from "../src/mock/runtime.js";
 
 const CLI = fileURLToPath(new URL("../src/cli/index.js", import.meta.url));
 
@@ -198,6 +199,11 @@ test("后台进程改配置自动重启后 app 自动重连；被命令行停掉
     "重启后要重新连上",
   );
   assert.ok(statuses().includes("starting"), "重启期间显示启动中");
+  flushLogs();
+  assert.ok(
+    sent.some((e) => e.channel === "process-log" && e.payload.data.includes(`mock 已启动 http://127.0.0.1:${nextPort}`)),
+    "断线期间写的「已启动 + 新地址」要补进日志面板",
+  );
   await fetch(`http://127.0.0.1:${nextPort}/api/a`);
   assert.ok(await waitFor(async () => (await fetchMockHistory()).length === 1), "历史从新端口读");
   assert.equal(readMockRuntime(ctx.mockAssets).pid, pid, "改配置是进程内重启，pid 不变");
@@ -230,4 +236,62 @@ test("app 开着时命令行才启动的 mock：手动刷新（refreshMockStatus
   assert.equal((await refreshMockStatus()).status, "running");
   flushLogs();
   assert.equal(replays(), before);
+});
+
+test("后台进程拒绝事件订阅（如 403）：app 退避重试，不和 health 探活原地打转，状态也不来回闪", async (t) => {
+  const ctx = await setup();
+  // 假后台进程：health 正常、事件流 403（监听具体网卡 IP 时旧版 server 就是这样）。
+  // pid 用本测试进程，绝不能走 cleanup 里的 vjtools mock stop——那会 SIGTERM 测试进程自己
+  let events = 0;
+  const server = http.createServer((req, res) => {
+    if (req.url === "/__mock/health") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, pid: process.pid }));
+    } else if (req.url === "/__mock/events") {
+      events++;
+      res.statusCode = 403;
+      res.end("{}");
+    } else {
+      res.statusCode = 404;
+      res.end();
+    }
+  });
+  await new Promise((resolve) => server.listen(ctx.port, "127.0.0.1", resolve));
+  writeMockRuntime(ctx.mockAssets, { pid: process.pid, owner: "cli", host: "127.0.0.1", port: ctx.port });
+  t.after(async () => {
+    detachMock();
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+
+  await attachIfRunning();
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const stillRunning = isMockRunning();
+  detachMock();
+  flushLogs();
+
+  assert.ok(events <= 3, `1.5s 内只该重试几次，实际订阅了 ${events} 次`);
+  assert.equal(stillRunning, true);
+  assert.ok(!statuses().includes("starting"), "mock 本身是好的，不该在 running / starting 间来回切");
+  const warnings = sent.filter((e) => e.channel === "process-log" && /拒绝了事件订阅（HTTP 403）/.test(e.payload.data));
+  assert.equal(warnings.length, 1, "原因提示一次，不刷屏");
+});
+
+test("后台进程按新配置重启失败（如端口被占）：app 日志面板里能看到失败原因，不只是「已退出」", async (t) => {
+  const ctx = await setup();
+  t.after(() => cleanup(ctx));
+  await startSwaggerMock();
+  const { pid } = readMockRuntime(ctx.mockAssets);
+
+  const busyPort = await freePort();
+  const blocker = net.createServer().listen(busyPort, "127.0.0.1");
+  await new Promise((resolve) => blocker.once("listening", resolve));
+  t.after(() => blocker.close());
+
+  // 和 app 设置页保存一样改 config.json；守护进程监听到后重启，撞端口退出
+  assert.equal((await cli(ctx, ["mock", "config", "--port", String(busyPort)])).status, 1);
+  assert.ok(await waitFor(() => !isPidAlive(pid) && statuses().at(-1) === "stopped"), "app 感知到后台进程退出");
+  flushLogs();
+  const logs = sent.filter((e) => e.channel === "process-log").map((e) => e.payload.data).join("");
+  assert.match(logs, /已被占用/, "失败原因要出现在 app 的日志面板里");
 });

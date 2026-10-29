@@ -20,7 +20,8 @@ export const DEFAULT_CONFIG = {
   // swagger 源服务器地址（如 http://xxx/t2）。在设置页点击「生成 OpenAPI JSON」
   // 时，从该服务器拉取 swagger 文档写入 mockSpecPath
   mockSwaggerServer: "",
-  mockHost: "127.0.0.1",
+  // 默认监听所有网卡：手机 / 同事电脑在局域网里也能直接连 mock。只想本机用就改成 127.0.0.1
+  mockHost: "0.0.0.0",
   mockPort: 3002,
   mockServiceAddress: "",
   // 这两条会在 ensureUserMockAssets 之后被覆盖到 userData 路径

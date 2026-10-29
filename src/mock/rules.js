@@ -9,13 +9,17 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { parseJsonLossless } from "./json-lossless.js";
 import {
+  MAX_DELAY_MS,
   isValidHttpStatus,
   normalizeVariantLoose,
   normalizeVariantsStrict,
 } from "./variant-match.js";
 
 // ─── 规整 / 校验 ─────────────────────────────────────────────────────────────
+
+const RULE_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 // 规则必须带具体 method——OpenAPI 里每个操作本来就绑定在某个 method 上，规则没理由
 // 比 spec 更宽松。缺 method 或写 "*" 的规则一律不再命中，但**不能静默跳过**：
@@ -26,6 +30,14 @@ function warnMissingMethod(rulePath) {
     `[mock] 规则 ${rulePath || "(缺 path)"} 没有具体 method（缺省或 "*"），` +
       `不会命中任何请求。请改成 GET / POST 等具体方法。`,
   );
+}
+
+/**
+ * 文件里这一项能不能当规则读（normalizeMockRule 只接受对象或字符串简写）。null / 数字 / 数组这类
+ * 手改文件留下的条目要先滤掉，否则 normalizeMockRule 直接抛错：server 每个请求 500、存场景打报错堆栈
+ */
+export function isRuleEntry(rule) {
+  return typeof rule === "string" || (rule !== null && typeof rule === "object" && !Array.isArray(rule));
 }
 
 /** 读取路径（加载热路径 / 编辑器展示）：宽松，非法变体静默丢弃，手改文件不至于整条规则失效 */
@@ -77,6 +89,7 @@ export function parseRuleDelay(value, label = "") {
   if (!Number.isInteger(delay) || delay < 0) {
     throw new Error(`${label}delay 必须是大于等于 0 的整数：${value}`);
   }
+  if (delay > MAX_DELAY_MS) throw new Error(`${label}delay 最多 ${MAX_DELAY_MS} 毫秒（10 分钟）：${value}`);
   return delay;
 }
 
@@ -93,11 +106,21 @@ export function normalizeRuleStrict(rule, label = "") {
   if (!rulePath) throw new Error(`${label || "规则"}缺少 path`);
   // path 会编译成锚定正则去匹配请求 pathname（必然以 / 开头），不以 / 开头的规则永远命中不了
   if (!rulePath.startsWith("/")) throw new Error(`${of}path 必须以 / 开头：${rulePath}`);
+  // pathname 里永远不会有 ? 和 #，带了的规则同样永远命中不了
+  if (/[?#]/.test(rulePath)) {
+    throw new Error(
+      `${of}path 不能带 ? 或 #：${rulePath}（只按路径匹配；要按 query 返回不同数据，用变体的 query 条件，命令行是 set-variant --when-query）`,
+    );
+  }
 
   // 缺 method / "*" 的规则 server 永远不会命中（只在主进程 console.warn），保存时就挡住
   const method = String(source.method ?? "").trim().toUpperCase();
   if (!method || method === "*") {
     throw new Error(`${label || "规则"}（${rulePath}）缺少具体 method，请改成 GET / POST 等`);
+  }
+  // FOO、"GET POST" 这类存进去也命中不了（浏览器 / 前端代码不会发），与 swagger 支持的方法保持一致
+  if (!RULE_METHODS.includes(method)) {
+    throw new Error(`${label || "规则"}（${rulePath}）的 method 不支持：${method}（可用 ${RULE_METHODS.join(" / ")}）`);
   }
 
   const status = parseRuleStatus(source.status, of);
@@ -177,6 +200,8 @@ export function removeVariant(rule, name) {
 /**
  * 严格读取：文件不存在 / 空文件视为 []；损坏则抛错（调用方据此拒绝写入，
  * 绝不能把读不出来的文件当成空数组再覆盖回去）。
+ * 只给命令行用（读改写）：大整数按无损方式读出，改一条规则不会把别的规则里的雪花 ID 舍入；
+ * 结果里可能有 rawJSON 包装，不能直接走 IPC。兼容 server 也认的旧格式 { rules: [...] }，写回时变成数组。
  */
 export function readRulesFile(file) {
   if (!fs.existsSync(file)) return [];
@@ -184,12 +209,13 @@ export function readRulesFile(file) {
   if (!text) return [];
   let parsed;
   try {
-    parsed = JSON.parse(text);
+    parsed = parseJsonLossless(text);
   } catch (err) {
     throw new Error(`规则文件不是合法 JSON：${file}\n  ${err.message}`, { cause: err });
   }
-  if (!Array.isArray(parsed)) throw new Error(`规则文件顶层必须是数组：${file}`);
-  return parsed;
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.rules)) return parsed.rules;
+  throw new Error(`规则文件顶层必须是数组：${file}`);
 }
 
 /** 原子写入：先写 .tmp 再 rename，mock server 的 watcher / mtime 缓存不会读到半个文件 */

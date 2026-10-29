@@ -19,6 +19,20 @@ function isAbsoluteSpecDir(value) {
   return value.startsWith("/") && !/\.(json|ya?ml)$/i.test(value);
 }
 
+// 监听地址只填地址本身（与命令行 --host 同一规则）：[::1] 去掉方括号；
+// 带协议 / 路径 / 空白的，或只有一个冒号的「地址:端口」都不行，否则 mock 起不来、访问地址也拼不对
+function normalizeMockHost(value) {
+  const host = value.trim();
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
+
+function isValidMockHost(value) {
+  const host = normalizeMockHost(value);
+  if (!host) return true; // 留空 = 用默认值
+  if (/[\s/]/.test(host)) return false;
+  return (host.match(/:/g) || []).length !== 1;
+}
+
 const settingsSchema = z.object({
   mockSpecPath: z
     .string()
@@ -26,7 +40,9 @@ const settingsSchema = z.object({
       message: "OpenAPI JSON 路径必须是绝对目录",
     }),
   mockSwaggerServer: z.string(),
-  mockHost: z.string(),
+  mockHost: z.string().refine(isValidMockHost, {
+    message: "只填地址本身，不带协议和端口（如 0.0.0.0、127.0.0.1、::1）",
+  }),
   mockPort: z
     .string()
     .refine((v) => v.trim() !== "" && Number.isInteger(Number(v.trim())), {
@@ -68,7 +84,7 @@ export default function SettingsPage() {
     defaultValues: {
       mockSpecPath: cfg.mockSpecPath || "",
       mockSwaggerServer: cfg.mockSwaggerServer || "",
-      mockHost: cfg.mockHost || "127.0.0.1",
+      mockHost: cfg.mockHost || "0.0.0.0",
       mockPort: String(cfg.mockPort || 3002),
       mockServiceAddress: cfg.mockServiceAddress || "",
       mockBackendBaseUrl: cfg.mockBackendBaseUrl || "",
@@ -84,7 +100,7 @@ export default function SettingsPage() {
     const synced = {
       mockSpecPath: liveConfig.mockSpecPath || "",
       mockSwaggerServer: liveConfig.mockSwaggerServer || "",
-      mockHost: liveConfig.mockHost || "127.0.0.1",
+      mockHost: liveConfig.mockHost || "0.0.0.0",
       mockPort: String(liveConfig.mockPort || 3002),
       mockServiceAddress: liveConfig.mockServiceAddress || "",
       mockBackendBaseUrl: liveConfig.mockBackendBaseUrl || "",
@@ -190,7 +206,7 @@ export default function SettingsPage() {
       await updateAppConfig({
         mockSpecPath: values.mockSpecPath.trim(),
         mockSwaggerServer: values.mockSwaggerServer.trim(),
-        mockHost: values.mockHost.trim() || "127.0.0.1",
+        mockHost: normalizeMockHost(values.mockHost) || "0.0.0.0",
         mockPort: Number(values.mockPort.trim()),
         mockServiceAddress: values.mockServiceAddress.trim(),
         mockBackendBaseUrl: values.mockBackendBaseUrl.trim(),
@@ -344,9 +360,10 @@ export default function SettingsPage() {
               <input
                 type="text"
                 {...register("mockHost")}
-                placeholder="127.0.0.1"
+                placeholder="0.0.0.0"
                 className={INPUT_CLS}
               />
+              <FieldError message={errors.mockHost?.message} />
             </div>
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-slate-600">Mock Port</label>

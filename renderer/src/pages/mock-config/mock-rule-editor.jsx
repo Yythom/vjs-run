@@ -142,6 +142,8 @@ function conditionsToWhen(conditions) {
     if (cond.scope === "body") {
       try {
         value = JSON.parse(cond.value); // 2→数字、true→布尔、{"a":1}→对象；失败按字符串
+        // 超出安全范围的大整数（雪花 ID）保留原文，否则 1850123456789012345 会被存成 …2200（与 CLI 一致）
+        if (Number.isInteger(value) && !Number.isSafeInteger(value)) value = cond.value.trim();
       } catch {
         // 保留原字符串
       }

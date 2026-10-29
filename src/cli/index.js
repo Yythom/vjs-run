@@ -4,7 +4,7 @@
 //
 // 退出码：0 成功；1 失败；2 apply-scene 被守卫拒绝；3 mock 未运行。
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { logs, restart, serve, start, status, stop } from "./mock-daemon.js";
 import { config, describe, gen, history, init, routes, sample } from "./mock-tools.js";
 import { createRuleCommand } from "./rule.js";
@@ -57,7 +57,7 @@ export function buildProgram() {
 
   mock
     .command("stop")
-    .description("停止命令行启动的 mock")
+    .description("停止后台运行的 mock（命令行或 app 拉起的都能停）")
     .action(async () => {
       const code = await stop();
       if (typeof code === "number") process.exitCode = code;
@@ -74,7 +74,8 @@ export function buildProgram() {
   mock
     .command("serve")
     .description("前台运行，Ctrl+C 停止")
-    .option("--daemon", "守护进程模式")
+    // 只给 start 拉起后台进程时内部用：手动加上会把运行记录里的日志路径写成一个根本没人写的文件
+    .addOption(new Option("--daemon").hideHelp())
     .action(async (opts) => {
       await serve({ daemon: Boolean(opts.daemon) });
     });
@@ -102,7 +103,7 @@ export function buildProgram() {
 
   mock
     .command("routes [keyword...]")
-    .description("搜索 spec 里的接口（路径 / 摘要 / operationId）")
+    .description("搜索 spec 里的接口（路径 / 摘要 / operationId；多个词需全部命中）")
     .option("-m, --method <method>", "筛选 HTTP 方法")
     .option("-l, --limit <limit>", "限制返回条数")
     .option("--json", "以 JSON 格式输出")

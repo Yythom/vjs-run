@@ -11,6 +11,7 @@ import { showToast } from "../../utils/toast";
 import useConfirm from "../../hooks/use-confirm";
 import Modal from "../../components/modal";
 import { isEnterKey } from "../../utils/keyboard";
+import { mockLocalUrl } from "../../utils/mock-url";
 
 const CUSTOM_NEW_KEY = "__custom_new__";
 // 从请求历史「生成 mock 规则」跳转过来时的草稿选中项
@@ -960,9 +961,7 @@ export default function MockConfigPage() {
     }
   };
 
-  const mockBaseUrl = `http://${config?.mockHost || "127.0.0.1"}:${
-    config?.mockPort || 3002
-  }`;
+  const mockBaseUrl = mockLocalUrl(config?.mockHost, config?.mockPort);
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-base">

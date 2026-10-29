@@ -24,6 +24,8 @@ vjtools mock start
 # 3. 前端把接口代理到 mock 地址（默认 http://127.0.0.1:3002）
 ```
 
+默认监听所有网卡（`0.0.0.0`），手机、同事电脑在同一局域网里也能连，局域网地址见 `vjtools mock status`。只想本机用：`vjtools mock config --host 127.0.0.1`。
+
 已经有 OpenAPI JSON 文件的话，用 `vjtools mock config --spec-dir <目录>` 指过去就行，不用 `gen`。
 
 ## 命令
@@ -48,6 +50,8 @@ vjtools mock start
 ## 定制返回
 
 所有参数均支持 `--key value` 与 `--key=value` 两种写法，多条件（如 `--when-query`）可重复传入。
+
+response 从 stdin 读。管道在第一块数据到来之前有等待上限：shell 管道 10s，程序调用（如 `child_process.exec`）1s，超时按没有输入处理，所以只改状态码 / 延迟时不传 stdin 也不会卡住。程序调用要传 response，写完记得关闭 stdin。
 
 ```bash
 # 让某个接口固定返回这份数据（mock 运行中会自动热载）

@@ -11,6 +11,7 @@ import {
   normalizeVariantStrict,
   normalizeVariantsStrict,
   flattenBodyFields,
+  parseBodyConditionValue,
 } from "../src/mock/variant-match.js";
 
 // ─── matchWhen：query ────────────────────────────────────────────────────────
@@ -47,6 +48,30 @@ test("body：点路径取值，原始值两边 String 互转（1 与 \"1\"、tru
     true,
   );
   assert.equal(matchWhen(when, { body: { filter: { type: "new" }, count: 1, ok: true } }), false);
+});
+
+test("body：超出安全范围的大整数（雪花 ID）——条件存原文；请求体里是字符串精确比，是数字字面量按舍入后的数值比", () => {
+  const raw = "1850123456789012345";
+  assert.equal(parseBodyConditionValue(raw), raw, "不能被 JSON.parse 舍入成 …2200");
+  assert.equal(parseBodyConditionValue("2"), 2);
+  assert.equal(parseBodyConditionValue("true"), true);
+  assert.equal(parseBodyConditionValue("hot"), "hot");
+
+  const when = normalizeWhen({ body: { id: parseBodyConditionValue(raw) } });
+  assert.equal(matchWhen(when, { body: { id: raw } }), true, "前端按字符串传 ID");
+  assert.equal(matchWhen(when, { body: { id: "1850123456789012346" } }), false, "字符串差一位不命中");
+  assert.equal(matchWhen(when, { body: JSON.parse(`{"id":${raw}}`) }), true, "请求体写数字字面量，服务端 JSON.parse 后已舍入");
+
+  // 旧版本存下的条件已经是舍入后的数字：前端按字符串传精确 ID 也要能命中
+  const legacy = normalizeWhen({ body: { id: JSON.parse(raw) } });
+  assert.equal(matchWhen(legacy, { body: { id: raw } }), true);
+  // 安全范围内的数字照旧按 String 比，不做数值模糊匹配
+  assert.equal(matchWhen(normalizeWhen({ body: { n: 10 } }), { body: { n: "10.0" } }), false);
+});
+
+test("normalizeWhen：纯空白的 key 匹配不到任何东西，丢掉；全是这种 key 时视为没有条件", () => {
+  assert.equal(normalizeWhen({ query: { " ": "1" }, headers: { "  ": "x" }, body: { "\t": 1 } }), undefined);
+  assert.deepEqual(normalizeWhen({ query: { " ": "1", page: 2 } }), { query: { page: "2" } });
 });
 
 test("body：数组索引路径 items.0.id", () => {
@@ -259,4 +284,10 @@ test("normalizeVariantsStrict：非数组报错；name 规则内重复报错", (
   assert.throws(() => normalizeVariantsStrict([v, { ...v }], "第 1 条规则"), /name 重复：同名/);
   // 合法数组原样通过
   assert.equal(normalizeVariantsStrict([v], "第 1 条规则").length, 1);
+});
+
+test("normalizeVariantStrict：delay 超过 10 分钟上限报错", () => {
+  const base = { name: "慢", when: { query: { a: "1" } }, response: {} };
+  assert.equal(normalizeVariantStrict({ ...base, delay: 600000 }, "变体").delay, 600000);
+  assert.throws(() => normalizeVariantStrict({ ...base, delay: 600001 }, "变体"), /delay 最多 600000 毫秒/);
 });

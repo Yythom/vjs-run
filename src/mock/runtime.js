@@ -21,10 +21,11 @@ export function isWildcardHost(host) {
   return !host || host === "0.0.0.0" || host === "::";
 }
 
-/** 0.0.0.0 / :: 这类监听地址不能直接拿来访问，探测时换成回环地址 */
+/** 0.0.0.0 / :: 这类监听地址不能直接拿来访问，探测时换成回环地址；IPv6 地址（::1）在 URL 里要加方括号 */
 export function mockBaseUrl(host, port) {
   const reachable = isWildcardHost(host) ? "127.0.0.1" : host;
-  return `http://${reachable}:${port}`;
+  const urlHost = reachable.includes(":") && !reachable.startsWith("[") ? `[${reachable}]` : reachable;
+  return `http://${urlHost}:${port}`;
 }
 
 /** 监听所有网卡时，局域网里其它设备（手机、同事电脑）能用的地址；只监听某个地址时返回空 */

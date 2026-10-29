@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-import { startMockServer } from "../src/mock/server.js";
+import { isPrivateRequest, startMockServer } from "../src/mock/server.js";
 import { CURL_WRITE_OUT, parseCurlMeta } from "../src/mock/curl-meta.js";
 
 // ─── 夹具 ────────────────────────────────────────────────────────────────────
@@ -276,6 +276,17 @@ test("规则路径支持 {param} 占位，且 method 不匹配时不命中", asy
   });
 });
 
+test("规则路径的尾部 / 可有可无：写成 /api/users/ 的规则，请求带不带斜杠都命中", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [{ method: "GET", path: "/api/slash/", response: { hit: true } }],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    assert.deepEqual(await (await get("/api/slash")).json(), { hit: true });
+    assert.deepEqual(await (await get("/api/slash/")).json(), { hit: true });
+    assert.equal((await get("/api/slash/more")).status, 404, "只放宽尾部斜杠，不变成前缀匹配");
+  });
+});
+
 // ─── 变体 ────────────────────────────────────────────────────────────────────
 
 test("变体按 body 条件命中，未命中时回退规则顶层 response", async () => {
@@ -462,6 +473,11 @@ test("/__mock/routes 列出全部路由，/__mock/search 按关键字过滤", as
     assert.equal(found[0].operationId, "listUsers");
 
     assert.equal((await (await get("/__mock/search?q=zzz-no-such")).json()).length, 0);
+
+    // 多个词各自命中任一字段（method 和 operationId 不在同一个字段里）；每个词都得命中
+    const multi = await (await get(`/__mock/search?q=${encodeURIComponent("GET  listUsers")}`)).json();
+    assert.deepEqual(multi.map((r) => r.operationId), ["listUsers"]);
+    assert.equal((await (await get(`/__mock/search?q=${encodeURIComponent("listUsers zzz")}`)).json()).length, 0);
   });
 });
 
@@ -1059,7 +1075,8 @@ test("请求历史 / 事件流只给本机程序：浏览器页面（带 Origin�
   );
 });
 
-test("请求历史：局域网里的其它地址访问被拒绝（mock 常监听 0.0.0.0）", async (t) => {
+// 别的机器连进来（对端地址 ≠ 本机地址）被拒，见上面「本机专用接口的来源判定」；单机上造不出真的外部来源
+test("请求历史：本机经局域网 IP 访问照常放行（--host 192.168.x.x 时 vjtools / app 只能这么连），带 Origin 的仍拦", async (t) => {
   const lanIp = Object.values(os.networkInterfaces())
     .flat()
     .find((iface) => iface?.family === "IPv4" && !iface.internal)?.address;
@@ -1070,7 +1087,8 @@ test("请求历史：局域网里的其它地址访问被拒绝（mock 常监听
   const { specPath } = fixture();
   await withServer({ specPath, host: "0.0.0.0", getHistory: () => [] }, async ({ handle }) => {
     const lanBase = `http://${lanIp}:${handle.server.address().port}`;
-    assert.equal((await rawRequest(lanBase, "/__mock/history")).status, 403);
+    assert.equal((await rawRequest(lanBase, "/__mock/history")).status, 200);
+    assert.equal((await rawRequest(lanBase, "/__mock/history", { headers: { origin: "http://evil.test" } })).status, 403);
     assert.equal((await rawRequest(lanBase, "/__mock/health")).status, 200);
   });
 });
@@ -1105,4 +1123,65 @@ test("/__mock/events：订阅后实时收到新请求，断开即取消订阅", 
       assert.equal(subscribers.size, 0, "断开后要取消订阅");
     },
   );
+});
+
+test("本机专用接口的来源判定：本机连网卡 IP（--host 192.168.x.x）也算本机，别的机器和浏览器页面不算", () => {
+  const req = (remoteAddress, localAddress, origin) => ({
+    socket: { remoteAddress, localAddress },
+    headers: origin ? { origin } : {},
+  });
+  assert.equal(isPrivateRequest(req("127.0.0.1", "127.0.0.1")), true);
+  assert.equal(isPrivateRequest(req("::1", "::1")), true);
+  assert.equal(isPrivateRequest(req("::ffff:127.0.0.1", "::ffff:127.0.0.1")), true);
+  // 监听具体网卡 IP 时，本机 vjtools / app 只能连这个 IP，对端地址就是本机自己
+  assert.equal(isPrivateRequest(req("192.168.9.11", "192.168.9.11")), true);
+  assert.equal(isPrivateRequest(req("::ffff:192.168.9.11", "::ffff:192.168.9.11")), true);
+  // 局域网里别的机器
+  assert.equal(isPrivateRequest(req("192.168.9.20", "192.168.9.11")), false);
+  // 本机浏览器页面带 Origin：不管走哪个地址都拦
+  assert.equal(isPrivateRequest(req("192.168.9.11", "192.168.9.11", "http://evil.test")), false);
+  assert.equal(isPrivateRequest(req("127.0.0.1", "127.0.0.1", "http://localhost:5173")), false);
+  // 连接已断开时地址取不到
+  assert.equal(isPrivateRequest(req(undefined, undefined)), false);
+});
+
+test("规则文件里的雪花 ID 原样返回；旧版存下的舍入后数字条件照旧命中；null 等非规则条目跳过、不让每个请求都 500", async () => {
+  const big = "1850123456789012345";
+  const rounded = String(Number(big)); // 旧版本经 JSON.parse 存下的值
+  const { specPath, mockRulesFile } = fixture({ rules: [] });
+  fs.writeFileSync(
+    mockRulesFile,
+    `[null, 42, {"method":"GET","path":"/api/big","response":{"id":${big}}},` +
+      `{"method":"POST","path":"/api/legacy","response":{"base":true},` +
+      `"variants":[{"name":"旧条件","when":{"body":{"id":${rounded}}},"response":{"hit":true}}]}]`,
+  );
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const res = await get("/api/big");
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), new RegExp(`"id":${big}`));
+
+    const legacy = await get("/api/legacy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: big }),
+    });
+    assert.deepEqual(await legacy.json(), { hit: true }, "前端按字符串传精确 ID，旧的舍入条件仍命中");
+
+    assert.match(await (await get("/__mock/rules")).text(), new RegExp(big), "/__mock/rules 也是原样的");
+  });
+});
+
+test("spec 文件改坏了：热更新失败经 onLog 报出来（进日志文件和 app 日志面板），路由保持上一次的", async () => {
+  const { dir, specPath } = fixture();
+  const logs = [];
+  await withServer({ specPath: dir, onLog: (line) => logs.push(line) }, async ({ get }) => {
+    assert.equal((await get("/__mock/routes").then((r) => r.json())).length, 3);
+    fs.writeFileSync(specPath, "{ 坏掉的 JSON");
+    const deadline = Date.now() + 5_000;
+    while (!logs.some((line) => /spec 重新加载失败/.test(line)) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.ok(logs.some((line) => /spec 重新加载失败，继续使用上一次的路由/.test(line)), logs.join("\n"));
+    assert.equal((await get("/__mock/routes").then((r) => r.json())).length, 3, "旧路由还在");
+  });
 });

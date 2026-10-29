@@ -357,7 +357,7 @@ function SaveToSceneModal({ entries, onClose, onSaved }) {
           已选 <span className="font-semibold text-slate-700">{entries.length}</span> 条请求，
           其中 <span className="font-semibold text-slate-700">{rules.length}</span> 条可固化成规则
           {skipped > 0 && (
-            <span className="text-amber-700">（{skipped} 条响应体未记录，将跳过）</span>
+            <span className="text-amber-700">（{skipped} 条没有可用的响应体，将跳过）</span>
           )}
         </div>
 

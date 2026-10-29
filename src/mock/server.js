@@ -7,7 +7,8 @@ import chokidar from "chokidar";
 import { parse as parseCookie } from "cookie";
 import { mockFromSchema, tunePayloadForRequest } from "./data.js";
 import { selectVariant } from "./variant-match.js";
-import { normalizeMockRule } from "./rules.js";
+import { isRuleEntry, normalizeMockRule } from "./rules.js";
+import { parseJsonLossless } from "./json-lossless.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
 
 const HTTP_METHODS = new Set([
@@ -80,6 +81,7 @@ async function startMockServer({
   getHistory,
   clearHistory,
   subscribe,
+  identity,
 }) {
   const state = await loadMockState(specPath, serviceAddress);
   const { routes, sources } = state;
@@ -88,7 +90,7 @@ async function startMockServer({
     throw new Error("No mockable routes found in the OpenAPI document.");
   }
 
-  const watchers = watchOpenApiSources(specPath, state, serviceAddress);
+  const watchers = watchOpenApiSources(specPath, state, serviceAddress, onLog);
 
   const server = createMockServer({
     state,
@@ -106,6 +108,7 @@ async function startMockServer({
       getHistory,
       clearHistory,
       subscribe,
+      identity,
     },
   });
 
@@ -152,6 +155,7 @@ function createMockServer({
     getHistory: null,
     clearHistory: null,
     subscribe: null,
+    identity: null,
     ...config,
   };
   // 历史记录是旁路能力，回调抛错不能影响请求处理
@@ -181,7 +185,7 @@ function createMockServer({
       }
 
       if (requestUrl.pathname === "/__mock/rules") {
-        sendJsonPretty(res, 200, loadMockRules(runtimeConfig.mockRulesFile));
+        sendJsonPretty(res, 200, loadMockRules(runtimeConfig.mockRulesFile, { lossless: true }));
         return;
       }
 
@@ -240,6 +244,9 @@ function createMockServer({
           titles: currentSources
             .map((source) => source.spec.info?.title)
             .filter(Boolean),
+          // 宿主自报身份（CLI 后台进程传 owner / startedBy / logFile / version）：
+          // mock-runtime.json 丢了或坏了时，靠这个仍然认得出是谁起的、停得掉
+          ...runtimeConfig.identity,
         });
         return;
       }
@@ -557,7 +564,7 @@ async function loadMockState(specPath, serviceAddress = "") {
   };
 }
 
-function watchOpenApiSources(specPath, state, serviceAddress = "") {
+function watchOpenApiSources(specPath, state, serviceAddress = "", onLog) {
   const absolutePath = path.resolve(specPath);
   if (!fs.existsSync(absolutePath)) return [];
 
@@ -568,11 +575,10 @@ function watchOpenApiSources(specPath, state, serviceAddress = "") {
       state.routes = next.routes;
       state.loadedAt = next.loadedAt;
     } catch (error) {
-      console.error(
-        `Failed to reload OpenAPI sources: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      // 走 onLog 才会进日志文件和 app 的日志面板；只打 console 的话 app 用户不知道还在用旧路由
+      if (onLog) onLog(`⚠ spec 重新加载失败，继续使用上一次的路由：${message}`);
+      else console.error(`Failed to reload OpenAPI sources: ${message}`);
     }
   };
 
@@ -672,9 +678,12 @@ function buildRoutes(spec, sourcePath = "", serviceAddress = "") {
     .sort(compareRoutes);
 }
 
+// 尾部 / 可有可无：末尾的 / 先去掉，再由正则里的 /? 兜住。否则写成 /api/users/ 的规则 / swagger 路径
+// 会编译成 ^/api/users//?$，请求 /api/users 命中不了
 function compileOpenApiPath(openapiPath) {
   const paramNames = [];
-  const pattern = openapiPath
+  const trimmed = openapiPath.length > 1 ? openapiPath.replace(/\/+$/, "") : openapiPath;
+  const pattern = trimmed
     .split("/")
     .map((part) => {
       const match = /^\{([^}]+)\}$/.exec(part);
@@ -762,10 +771,11 @@ function getRouteErrorCodes(route) {
     .filter(Boolean);
 }
 
+// 与 vjtools mock routes 一致：多个词各自命中即可，不要求整串连在一起出现
 function searchRoutes(routes, query) {
-  const normalizedQuery = query.trim().toLowerCase();
-  const source = normalizedQuery
-    ? routes.filter((route) => route.searchText.includes(normalizedQuery))
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const source = words.length
+    ? routes.filter((route) => words.every((word) => route.searchText.includes(word)))
     : routes;
   return source.slice(0, 200).map(routeToMeta);
 }
@@ -1074,33 +1084,42 @@ function shouldUseMock({
 const jsonFileCache = new Map(); // filePath → { mtimeMs, value }
 
 // 读取并解析 JSON 文件，命中 mtime 缓存时跳过读盘。文件不存在返回 undefined。
-function readJsonByMtime(filePath, parse) {
+// 同一文件按不同方式解析（如规则的无损 / 普通两种）时用 cacheKey 区分缓存
+function readJsonByMtime(filePath, parse, cacheKey = filePath) {
   let stat;
   try {
     stat = fs.statSync(filePath);
   } catch {
-    jsonFileCache.delete(filePath);
+    jsonFileCache.delete(cacheKey);
     return undefined;
   }
-  const cached = jsonFileCache.get(filePath);
+  const cached = jsonFileCache.get(cacheKey);
   if (cached && cached.mtimeMs === stat.mtimeMs) return cached.value;
 
   const value = parse(fs.readFileSync(filePath, "utf8"));
-  jsonFileCache.set(filePath, { mtimeMs: stat.mtimeMs, value });
+  jsonFileCache.set(cacheKey, { mtimeMs: stat.mtimeMs, value });
   return value;
 }
 
-function loadMockRules(mockRulesFile) {
+/**
+ * @param {{ lossless?: boolean }} [options] lossless：规则 response 里的大整数（雪花 ID）按原文保留、原样返回给前端，
+ *   只给 server 自己命中规则 / 输出 JSON 用；app 主进程拿去走 IPC 的必须用默认的普通解析（rawJSON 不能结构化克隆）
+ */
+function loadMockRules(mockRulesFile, { lossless = false } = {}) {
   if (!mockRulesFile) return [];
 
-  const rules = readJsonByMtime(mockRulesFile, (raw) => {
-    const trimmed = raw.trim();
-    if (!trimmed) return [];
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) return parsed.map(normalizeMockRule);
-    if (Array.isArray(parsed.rules)) return parsed.rules.map(normalizeMockRule);
-    return [];
-  });
+  const rules = readJsonByMtime(
+    mockRulesFile,
+    (raw) => {
+      const trimmed = raw.trim();
+      if (!trimmed) return [];
+      const parsed = lossless ? parseJsonLossless(trimmed) : JSON.parse(trimmed);
+      const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.rules) ? parsed.rules : [];
+      // null / 数字这类不是规则的条目（手改文件留下的）跳过，不然 normalizeMockRule 抛错，每个请求都 500
+      return list.filter(isRuleEntry).map(normalizeMockRule);
+    },
+    `${mockRulesFile}${lossless ? "#lossless" : ""}`,
+  );
   return rules || [];
 }
 
@@ -1127,7 +1146,7 @@ function findMockRule(mockRulesFile, method, pathname) {
   const normalizedMethod = method.toUpperCase();
   let best;
   let bestScore = -1;
-  for (const rule of loadMockRules(mockRulesFile)) {
+  for (const rule of loadMockRules(mockRulesFile, { lossless: true })) {
     // method 为空的（缺省 / "*" / 字符串简写）在 normalizeMockRule 里已经警告过，
     // 这里让它匹配不上任何请求即可
     if (!rule.enabled || !rule.path || !rule.method) continue;
@@ -1311,7 +1330,8 @@ function capProxyResponseForRecord(buffer, contentType) {
   const text = buffer.toString("utf8");
   if (contentType.includes("json")) {
     try {
-      return { value: JSON.parse(text), truncated: false, isJson: true };
+      // 无损解析：后端返回的雪花 ID 存成规则（--from-history / 存入场景）后不能被舍入
+      return { value: parseJsonLossless(text), truncated: false, isJson: true };
     } catch {
       // content-type 撒谎 / 半截 JSON：按文本兜底
     }
@@ -1407,11 +1427,18 @@ function isLoopbackAddress(address = "") {
   return address === "::1" || address.startsWith("127.") || address.startsWith("::ffff:127.");
 }
 
+// 本机发起的连接：走回环地址；或者连的是本机网卡 IP（--host 192.168.x.x 时 vjtools / app 只能这么连），
+// 这时对端地址就是本机这个 IP，和 localAddress 相同。别的机器连进来，对端地址必然不同
+function isLocalSocket(socket) {
+  const remote = socket.remoteAddress || "";
+  return isLoopbackAddress(remote) || remote === socket.localAddress;
+}
+
 // mock 常监听 0.0.0.0，所以要限制来源是本机；又因为 CORS 对任意 origin 放行，还要拦住
 // 浏览器页面（带 Origin 头）——否则本机打开的任意网页都能 fetch 走请求历史。
 // app 主进程、vjtools 命令、curl 都不带 Origin。
 function isPrivateRequest(req) {
-  return isLoopbackAddress(req.socket.remoteAddress) && !req.headers.origin;
+  return isLocalSocket(req.socket) && !req.headers.origin;
 }
 
 const EVENT_HEARTBEAT_MS = 15_000;
@@ -1642,6 +1669,7 @@ function runMiddleware(req, res, middleware) {
 export {
   buildRoutes,
   isLoopbackAddress,
+  isPrivateRequest,
   loadMockRules,
   loadOpenApiSources,
   normalizeMockRule,

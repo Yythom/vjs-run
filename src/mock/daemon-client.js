@@ -19,18 +19,21 @@ import { handleRecordedEntry } from "./recorder.js";
 import { findLiveMockRuntime, isPidAlive } from "./runtime.js";
 import { cliPaths } from "../cli/user-data.js";
 import { toMockConfig } from "../cli/config.js";
-import { detectRunningMock, ownerLabel, startDaemon, stopDaemon } from "../cli/mock-daemon.js";
+import { detectRunningMock, otherDataDirHint, ownerLabel, startDaemon, stopDaemon } from "../cli/mock-daemon.js";
 
 export const MOCK_ID = "__mock__";
 
 // 改配置触发的重启要重新加载全部 spec，留足时间
 const RECONNECT_TIMEOUT_MS = 60_000;
 const RECONNECT_POLL_MS = 300;
+// 事件订阅被拒（HTTP 403 等）时的重试退避上限
+const REJECTED_RETRY_MAX_MS = 30_000;
 const REPLAY_LOG_LINES = 200;
 
 let status = "stopped";
 let current = null; // 当前连着的后台进程（mock-runtime 记录 + health）
 let watching = null; // { controller: AbortController }
+let lastLogLine = ""; // 已经显示到日志面板的最后一行（用来补齐断线后才写进日志文件的内容）
 
 function userDataDir() {
   return path.dirname(path.dirname(getConfig().mockRulesFile));
@@ -85,6 +88,8 @@ export async function stopMock() {
   detachMock();
   const result = await stopDaemon({ paths: daemonPaths() });
   if (result.status === "foreign") {
+    // 别的数据目录的进程：不接上（它的规则、历史都不是这边的）
+    if (result.running.owner === "other") throw new Error(`端口上的 mock 不是这个数据目录的。${otherDataDirHint(result.running)}`);
     // 旧版 app 在进程内跑的 mock：后台进程管不了它
     attach(result.running);
     throw new Error(`端口上的 mock 是${ownerLabel(result.running)}，这里停不了，请在启动它的地方停止`);
@@ -96,7 +101,9 @@ export async function stopMock() {
 
 /** app 启动时调用：已有后台进程在跑（命令行或上次 app 拉起的）就直接接上 */
 export async function attachIfRunning() {
-  const running = await detectRunningMock(daemonPaths(), toMockConfig(getConfig()));
+  const found = await detectRunningMock(daemonPaths(), toMockConfig(getConfig()));
+  // 别的数据目录的进程恰好占着同一个端口：不接上，当作这边没在跑（启动时会报端口被它占用）
+  const running = found?.owner === "other" ? null : found;
   if (running) attach(running);
   return running;
 }
@@ -134,20 +141,49 @@ function attach(running) {
 function replayLogFile(file) {
   if (!file) return;
   try {
-    const text = fs.readFileSync(file, "utf8").trimEnd().split("\n").slice(-REPLAY_LOG_LINES).join("\n");
+    const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n").slice(-REPLAY_LOG_LINES);
+    const text = lines.join("\n");
     if (text) log(text);
+    lastLogLine = lines.at(-1) || "";
   } catch {
     // 日志文件不存在：没什么可补的
   }
 }
 
+// 后台进程按新配置重启时会先断开事件流：这期间的日志（重启后的新地址、重启失败的原因）只写进了日志文件，
+// app 收不到。重连上或发现它退出时，把日志文件里「最后显示过的那一行」之后的内容补上
+function replayMissedLog(file) {
+  if (!file) return;
+  let lines;
+  try {
+    lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+  } catch {
+    return;
+  }
+  const at = lastLogLine ? lines.lastIndexOf(lastLogLine) : -1;
+  const missed = at >= 0 ? lines.slice(at + 1) : lines.slice(-10);
+  if (missed.length) log(missed.join("\n"));
+}
+
 async function watchLoop(initial, signal) {
   let running = initial;
+  let rejectedRetryMs = 0;
   while (!signal.aborted) {
     current = running;
     setStatus("running");
-    const outcome = await streamEvents(running.url, signal);
+    const { outcome, httpStatus } = await streamEvents(running.url, signal);
     if (signal.aborted) return;
+    if (outcome === "rejected") {
+      // mock 在跑、只是拒绝订阅：立刻重连会和 health 探活原地打转（打满 CPU、状态来回闪）。
+      // mock 本身是好的，状态不动，退避后重试；进程退出 / 换端口重启时下一轮连不上，走下面的正常流程
+      if (!rejectedRetryMs) {
+        log(`⚠ mock 拒绝了事件订阅（HTTP ${httpStatus}），请求日志、历史推送和录制暂不可用，稍后自动重试`);
+      }
+      rejectedRetryMs = Math.min(rejectedRetryMs * 2 || 1000, REJECTED_RETRY_MAX_MS);
+      await delay(rejectedRetryMs, signal);
+      continue;
+    }
+    rejectedRetryMs = 0;
     if (outcome === "unsupported") {
       log("⚠ 当前 mock 不支持事件推送（旧版本），请求历史和录制暂不可用，重启一次 mock 即可");
       await waitUntilGone(running, signal);
@@ -156,8 +192,11 @@ async function watchLoop(initial, signal) {
 
     // 连接断了：要么后台进程在重启（改了配置，pid 不变），要么已经退出
     setStatus("starting");
+    const previous = running;
     running = await waitForMock(running, signal);
     if (signal.aborted) return;
+    // 断线期间写进日志文件的内容（重启后的「✔ mock 已启动 …」、失败原因）补进面板，再接着订阅
+    replayMissedLog((running || previous).logFile);
     if (!running) {
       current = null;
       watching = null;
@@ -168,15 +207,30 @@ async function watchLoop(initial, signal) {
   }
 }
 
+// 先等再查：事件流不管因为什么一断上就立刻 health 通过，也不会无休眠地重连
 async function waitForMock(previous, signal) {
   const deadline = Date.now() + RECONNECT_TIMEOUT_MS;
   while (!signal.aborted && Date.now() < deadline) {
+    await delay(RECONNECT_POLL_MS, signal);
+    if (signal.aborted) return null;
     const live = await findLiveMockRuntime(daemonPaths().mockAssetsDir);
     if (live) return live;
     if (previous.pid && !isPidAlive(previous.pid)) return null;
-    await new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS));
   }
   return null;
+}
+
+/** 可被 detach 打断的等待：app 退出 / 重新接上时不用等满退避时间 */
+function delay(ms, signal) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+  });
 }
 
 // 旧版本不推事件时，只能靠进程还在不在来判断
@@ -186,16 +240,23 @@ async function waitUntilGone(running, signal) {
   }
 }
 
-/** @returns {Promise<"closed" | "unsupported">} */
+/**
+ * @returns {Promise<{ outcome: "closed" | "unsupported" | "rejected", httpStatus?: number }>}
+ *   rejected：mock 在线但拒绝订阅（如 403），重连之前要退避
+ */
 async function streamEvents(url, signal) {
   let res;
   try {
     res = await fetch(`${url}/__mock/events`, { signal });
   } catch {
-    return "closed";
+    return { outcome: "closed" };
   }
-  if (res.status === 404) return "unsupported";
-  if (!res.ok || !res.body) return "closed";
+  if (res.status === 404) return { outcome: "unsupported" };
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {});
+    return { outcome: "rejected", httpStatus: res.status };
+  }
+  if (!res.body) return { outcome: "closed" };
 
   const decoder = new TextDecoder();
   let buffer = "";
@@ -211,7 +272,7 @@ async function streamEvents(url, signal) {
   } catch {
     // 主动断开或后台进程退出
   }
-  return "closed";
+  return { outcome: "closed" };
 }
 
 function handleEvent(block) {
@@ -233,6 +294,8 @@ function handleEvent(block) {
     handleRecordedEntry(payload);
   } else if (event === "log") {
     log(payload);
+    // 一条日志可能有多行（端口被占的提示等），日志文件里按行存，记最后一行才对得上
+    lastLogLine = String(payload).split("\n").at(-1);
   }
 }
 

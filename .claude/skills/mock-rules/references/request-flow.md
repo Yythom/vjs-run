@@ -83,7 +83,7 @@ override 命中时同样走信封化，但**不做**分页 / 长度调整（按�
 
 ## 调试接口
 
-先取 `$BASE`（host/port 在 config.json 里，缺省 `127.0.0.1:3002`，别猜端口）：
+先取 `$BASE`（host/port 在 config.json 里，缺省监听 `0.0.0.0:3002`、本机用 `127.0.0.1:3002` 访问，别猜端口）：
 
 ```bash
 BASE=$(vjtools mock rule base --quiet)   # 不带 --quiet 还会打印配置来源，排查「是不是读错配置文件」时用

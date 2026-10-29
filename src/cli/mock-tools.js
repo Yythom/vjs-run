@@ -7,15 +7,24 @@ import { buildRoutes, loadOpenApiSources, routeToMeta, wrapSampleInEnvelope } fr
 import { recommendResponse, resolveRoute } from "../mock/route-info.js";
 import { getRequestSchema, getResponseSchema } from "../mock/request-schema.js";
 import { seedMockAssets } from "../mock/seed-assets.js";
+import { parseJsonLossless } from "../mock/json-lossless.js";
 import { cliPaths } from "./user-data.js";
 import {
+  MOCK_RESTART_FIELDS,
   assertSpecReady,
   configUpdatesFromFlags,
+  hasSpecFiles,
   patchRawConfig,
   readMockConfig,
   toMockConfig,
 } from "./config.js";
-import { NOT_RUNNING_EXIT_CODE, detectRunningMock } from "./mock-daemon.js";
+import {
+  NOT_RUNNING_EXIT_CODE,
+  detectRunningMock,
+  detectRunningMockLenient,
+  ownerLabel,
+  waitForDaemonRestart,
+} from "./mock-daemon.js";
 import { CliError, clockTime, printJson } from "./util.js";
 
 // ─── config ──────────────────────────────────────────────────────────────────
@@ -35,41 +44,52 @@ function configJson(paths, config) {
   return { ...config, configFile: paths.configFile, rulesFile: paths.rulesFile };
 }
 
-/** 应用 flags，返回最新 mock 配置；没有任何 flag 时不写盘 */
-function applyConfigFlags(paths, values) {
+/**
+ * 应用 flags，返回改前 / 改后的 mock 配置；没有任何 flag 时不写盘。
+ * 写盘前先记下在跑的 mock（running）：reportRestart 靠运行记录的 startedAt 变化判断它按新配置重启完没有
+ */
+async function applyConfigFlags(paths, values) {
   const updates = configUpdatesFromFlags(values);
-  if (!Object.keys(updates).length) return { config: readMockConfig(paths.configFile), changed: false };
-  return { config: toMockConfig(patchRawConfig(paths.configFile, updates)), changed: true };
+  const before = readMockConfig(paths.configFile);
+  if (!Object.keys(updates).length) return { before, config: before, running: null, changed: false };
+  const running = await detectRunningMock(paths, before);
+  return { before, config: toMockConfig(patchRawConfig(paths.configFile, updates)), running, changed: true };
 }
 
-async function printRestartHint(paths, config) {
-  const running = await detectRunningMock(paths, config);
-  if (!running) return;
-  console.log(
-    running.owner === "cli"
-      ? "  mock 运行中：守护进程监听 config.json，改了 spec / 地址 / 后端会自动重启。"
-      : "  mock 由 vjtools app 运行：软件会自动重新加载配置，必要时重启 mock。",
-  );
+/** 守护进程监听 config.json 自动重启：改了影响 server 的字段就等它重启完，失败如实报错 */
+async function reportRestart(paths, running, before, after, quiet) {
+  if (!running || !MOCK_RESTART_FIELDS.some((key) => before[key] !== after[key])) return;
+  if (running.owner === "other") {
+    if (!quiet) console.log(`  端口上的 mock 属于${ownerLabel(running)}，这里的配置改动对它不生效。`);
+    return;
+  }
+  if (running.owner !== "cli") {
+    if (!quiet) console.log("  mock 由 vjtools app 运行：软件会自动重新加载配置，必要时重启 mock。");
+    return;
+  }
+  const next = await waitForDaemonRestart({ paths, running });
+  if (!quiet) console.log(`  mock 已按新配置重启：${next.url}`);
 }
 
 export async function config(values) {
   const paths = cliPaths();
-  const { config, changed } = applyConfigFlags(paths, values);
+  const { before, config, running, changed } = await applyConfigFlags(paths, values);
   if (values.json) {
     printJson(configJson(paths, config));
-    return 0;
+  } else {
+    if (changed) console.log("✔ 配置已更新");
+    printConfig(paths, config);
   }
-  if (changed) console.log("✔ 配置已更新");
-  printConfig(paths, config);
-  if (changed) await printRestartHint(paths, config);
+  if (changed) await reportRestart(paths, running, before, config, values.json);
   return 0;
 }
 
 // ─── gen ─────────────────────────────────────────────────────────────────────
 
-/** spec 目录没配时落到 <userData>/mock-specs，并写回 config.json */
+/** spec 目录没配时落到 <userData>/mock-specs（顺手建好，免得紧接着 routes / start 报「目录不存在」），并写回 config.json */
 function ensureSpecDir(paths, config) {
   if (config.specPath) return config;
+  fs.mkdirSync(paths.defaultSpecDir, { recursive: true });
   patchRawConfig(paths.configFile, { mockSpecPath: paths.defaultSpecDir });
   console.log(`  spec 目录未设置，使用默认目录：${paths.defaultSpecDir}`);
   return { ...config, specPath: paths.defaultSpecDir };
@@ -108,21 +128,15 @@ export async function gen() {
 
 // ─── init ────────────────────────────────────────────────────────────────────
 
-function hasSpecFiles(dir) {
-  try {
-    return fs.readdirSync(dir).some((name) => /\.(json|ya?ml)$/i.test(name));
-  } catch {
-    return false;
-  }
-}
-
 export async function init(values) {
   const paths = cliPaths();
   seedMockAssets(paths.userDataDir);
-  let { config } = applyConfigFlags(paths, values);
-  config = ensureSpecDir(paths, config);
+  const applied = await applyConfigFlags(paths, values);
+  const config = ensureSpecDir(paths, applied.config);
   console.log(`✔ 数据目录：${paths.userDataDir}`);
   printConfig(paths, config);
+  // 和 config 一样：mock 在跑、改了端口等字段时等它按新配置重启完，失败如实报错
+  if (applied.changed) await reportRestart(paths, applied.running, applied.before, config, false);
 
   if (config.swaggerServer && !hasSpecFiles(config.specPath)) {
     console.log("");
@@ -157,13 +171,16 @@ export async function routes(keyword, values) {
     const method = values.method.toUpperCase();
     metas = metas.filter((meta) => meta.method === method);
   }
-  if (keyword) {
-    const needle = keyword.toLowerCase();
-    metas = metas.filter((meta) =>
-      [meta.method, meta.path, meta.openapiPath, meta.summary, meta.operationId, meta.source]
+  // 多个词各自命中任一字段即可（`GET /api/users`、`用户 列表`），不要求整串出现在同一个字段里
+  const words = keyword.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length) {
+    metas = metas.filter((meta) => {
+      const text = [meta.method, meta.path, meta.openapiPath, meta.summary, meta.operationId, meta.source]
         .filter(Boolean)
-        .some((text) => String(text).toLowerCase().includes(needle)),
-    );
+        .join(" ")
+        .toLowerCase();
+      return words.every((word) => text.includes(word));
+    });
   }
   const matched = metas.length;
   const limit = parseLimit(values.limit, 50);
@@ -313,10 +330,18 @@ function queryString(query) {
   return text ? `?${text}` : "";
 }
 
+const HISTORY_KINDS = ["mock", "proxy", "proxy-error", "miss"];
+
 export async function history(values) {
+  if (values.kind !== undefined && !HISTORY_KINDS.includes(values.kind)) {
+    throw new CliError(`--kind 只能是 ${HISTORY_KINDS.join(" / ")}：${values.kind}`);
+  }
   const paths = cliPaths();
-  const running = await detectRunningMock(paths, readMockConfig(paths.configFile));
+  const running = await detectRunningMockLenient(paths);
   if (!running) throw new CliError("mock 未在运行，没有请求历史。", NOT_RUNNING_EXIT_CODE);
+  if (running.owner === "other") {
+    throw new CliError(`这个数据目录的 mock 没在运行，端口上的是${ownerLabel(running)}。`, NOT_RUNNING_EXIT_CODE);
+  }
 
   const res = await fetch(`${running.url}/__mock/history`).catch(() => null);
   if (!res?.ok) {
@@ -326,7 +351,8 @@ export async function history(values) {
         : `读取请求历史失败：${res ? `HTTP ${res.status}` : "连接失败"}`,
     );
   }
-  let entries = await res.json();
+  // 无损解析：--id / --json 输出里的雪花 ID 不被舍入
+  let entries = parseJsonLossless(await res.text());
 
   if (values.id !== undefined) {
     const entry = entries.find((item) => String(item.id) === String(values.id));

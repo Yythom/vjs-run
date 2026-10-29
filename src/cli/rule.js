@@ -17,6 +17,7 @@ import { Command } from "commander";
 import {
   findRuleIndex,
   findVariantIndex,
+  isRuleEntry,
   normalizeMockRule,
   normalizeRuleStrict,
   normalizeRulesForSave,
@@ -35,11 +36,19 @@ import {
   scenesDirOf,
   writeSceneRules,
 } from "../mock/scenes.js";
-import { readAppliedScene, recordAppliedScene, renameAppliedScene } from "../mock/applied-scene.js";
-import { normalizeVariantStrict } from "../mock/variant-match.js";
-import { historyEntryToRule } from "../mock/history-rule.js";
+import {
+  clearAppliedScene,
+  readAppliedScene,
+  recordAppliedScene,
+  renameAppliedScene,
+} from "../mock/applied-scene.js";
+import { normalizeVariantStrict, parseBodyConditionValue } from "../mock/variant-match.js";
+import { historyEntryRejectReason, historyEntryToRule } from "../mock/history-rule.js";
+import { parseJsonLossless } from "../mock/json-lossless.js";
+import { mockBaseUrl } from "../mock/runtime.js";
+import { resolveRoute } from "../mock/route-info.js";
 import { readMockConfig, readRawConfig, toMockConfig } from "./config.js";
-import { NOT_RUNNING_EXIT_CODE, detectRunningMock } from "./mock-daemon.js";
+import { NOT_RUNNING_EXIT_CODE, detectRunningMockLenient } from "./mock-daemon.js";
 import { config as configCommand } from "./mock-tools.js";
 import { cliPaths } from "./user-data.js";
 import { CliError } from "./util.js";
@@ -99,7 +108,7 @@ function requireVariantName(flags) {
 }
 
 // --when-query/--when-header/--when-body（可重复）→ when 对象；一个都没给返回 undefined。
-// header key 小写、body 值尝试 JSON.parse（2→数字、true→布尔、{"a":1}→对象，失败按字符串），
+// key 去掉首尾空白（header 再转小写）、不能为空；body 值按 parseBodyConditionValue 解析（与 app 一致），
 // 其余归一化交给 variant-match.js 的 normalizeVariantStrict。
 function collectWhenFlags(flags) {
   const scopes = [
@@ -117,38 +126,61 @@ function collectWhenFlags(flags) {
       if (entry === true) throw new CliError(`--${flag} 需要 key=value 形式，如 --${flag} page=2`);
       const text = String(entry);
       const eq = text.indexOf("=");
-      if (eq <= 0) throw new CliError(`--${flag} 需要 key=value 形式：${text}`);
-      const key = scope === "headers" ? text.slice(0, eq).toLowerCase() : text.slice(0, eq);
-      let value = text.slice(eq + 1);
-      if (scope === "body") {
-        try {
-          value = JSON.parse(value);
-        } catch {
-          // 保留原字符串
-        }
-      }
-      (when[scope] ||= {})[key] = value;
+      const rawKey = eq > 0 ? text.slice(0, eq).trim() : "";
+      if (!rawKey) throw new CliError(`--${flag} 需要 key=value 形式（key 不能为空）：${text}`);
+      const key = scope === "headers" ? rawKey.toLowerCase() : rawKey;
+      const rawValue = text.slice(eq + 1);
+      (when[scope] ||= {})[key] = scope === "body" ? parseBodyConditionValue(rawValue) : rawValue;
       total++;
     }
   }
   return total > 0 ? when : undefined;
 }
 
-function readStdin() {
+// 管道在第一块数据到来之前最多等多久。管道不一定有人关：node 的 child_process.exec 默认给子进程一个
+// 没人写、也没人关的 socket 管道，一直等 EOF 就是永久挂起。shell 管道（FIFO）的上游可能要跑一会儿
+// （`vjtools mock sample ... | vjtools mock rule set ...`），多给点；程序调用要传数据都是立刻写
+const STDIN_FIRST_CHUNK_MS = { fifo: 10_000, other: 1_000 };
+
+// 必须按流读：一碰 process.stdin，管道就被切成非阻塞，这时 readFileSync(0) 遇上还没写出数据的
+// 上游会直接抛 EAGAIN（response 曾因此被静默丢掉）。文件、/dev/null 读到 EOF 不会卡，不限时
+async function readStdin() {
   if (process.stdin.isTTY) return null; // 没有管道输入时不阻塞
-  try {
-    const text = fs.readFileSync(0, "utf8").trim();
-    return text || null;
-  } catch {
-    return null;
-  }
+  const stat = fs.fstatSync(0);
+  const waitMs =
+    stat.isFile() || stat.isCharacterDevice() ? 0 : stat.isFIFO() ? STDIN_FIRST_CHUNK_MS.fifo : STDIN_FIRST_CHUNK_MS.other;
+  const stdin = process.stdin;
+  stdin.setEncoding("utf8");
+  const text = await new Promise((resolve, reject) => {
+    let buffer = "";
+    const timer =
+      waitMs &&
+      setTimeout(() => {
+        stdin.destroy();
+        console.error(`⚠ stdin 是打开的管道，但 ${waitMs / 1000}s 内没有数据，按没有输入处理`);
+        resolve("");
+      }, waitMs);
+    stdin.on("data", (chunk) => {
+      clearTimeout(timer);
+      buffer += chunk;
+    });
+    stdin.once("end", () => {
+      clearTimeout(timer);
+      resolve(buffer);
+    });
+    stdin.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+  return text.trim() || null;
 }
 
-function readJsonStdin() {
-  const text = readStdin();
+async function readJsonStdin() {
+  const text = await readStdin();
   if (text === null) return undefined;
   try {
-    return JSON.parse(text);
+    return parseJsonLossless(text); // 大整数（雪花 ID）原样写进规则
   } catch (err) {
     throw new CliError(`stdin 不是合法 JSON：${err.message}`);
   }
@@ -159,24 +191,50 @@ function readJsonStdin() {
 async function ruleFromHistory(flags) {
   const id = valueFlag(flags, "fromHistory", "--from-history 需要一个请求编号（vjtools mock history 里 # 后面的数字）");
   const paths = cliPaths();
-  const running = await detectRunningMock(paths, readMockConfig(paths.configFile));
-  if (!running) {
-    throw new CliError("mock 未在运行，读不到请求历史（--from-history 需要 mock 在跑）", NOT_RUNNING_EXIT_CODE);
+  const running = await detectRunningMockLenient(paths);
+  if (!running || running.owner === "other") {
+    throw new CliError("mock 未在运行，读不到请求历史（--from-history 需要这个数据目录的 mock 在跑）", NOT_RUNNING_EXIT_CODE);
   }
   const res = await fetch(`${running.url}/__mock/history`).catch(() => null);
   if (!res?.ok) throw new CliError(`读取请求历史失败：${res ? `HTTP ${res.status}` : "连接失败"}`);
-  const entry = (await res.json()).find((item) => String(item.id) === String(id));
+  // 无损解析：后端响应里的雪花 ID 原样存进规则
+  const entry = parseJsonLossless(await res.text()).find((item) => String(item.id) === String(id));
   if (!entry) throw new CliError(`没有编号为 ${id} 的请求（只保留最近 300 条；mock 进程重启后会清空）`);
-  const rule = historyEntryToRule(entry);
-  if (!rule) throw new CliError(`#${id} 的响应体没有被完整记录（超出记录上限），不能存成规则`);
-  return { id, rule };
+  const reason = historyEntryRejectReason(entry);
+  if (reason) throw new CliError(`#${id} ${reason}，不能存成规则`);
+  return { id, rule: historyEntryToRule(entry) };
+}
+
+// 没有 response（也没有变体）的规则效果取决于接口在不在 swagger 里：在的话命中时按 swagger 生成示例数据
+// （带上规则的状态码 / 延迟）；不在的话 server 根本不认这条规则，请求照样走代理或 404
+async function noResponseHint(method, rulePath) {
+  const fix = "要自定义返回就把 JSON 从 stdin 传入";
+  let inSpec = null;
+  try {
+    const config = readMockConfig(cliPaths().configFile);
+    if (config.specPath) {
+      await resolveRoute({ specPath: config.specPath, serviceAddress: config.serviceAddress, method, path: rulePath });
+      inSpec = true;
+    }
+  } catch (err) {
+    if (/未在 swagger 中找到/.test(err.message)) inSpec = false;
+  }
+  if (inSpec === true) return `  ⚠ stdin 没有输入，规则没有 response：命中时按 swagger 生成示例数据返回（${fix}）`;
+  if (inSpec === false) {
+    return `  ⚠ stdin 没有输入，且 swagger 里没有 ${method} ${rulePath}：没有 response 的规则不会生效，请求照样走代理或 404（${fix}）`;
+  }
+  return `  ⚠ stdin 没有输入，规则没有 response：swagger 里有的接口按 swagger 生成示例数据返回，swagger 之外的路径不会生效（${fix}）`;
 }
 
 // ─── 定位 ────────────────────────────────────────────────────────────────────
 
 function resolveRulesFile(flags) {
-  if (flags.file === true) throw new CliError("--file 需要一个规则文件路径");
-  if (flags.file) return path.resolve(flags.file);
+  // 传了 --file 就必须有值：脚本里 --file "$FILE" 变量为空时，静默回退会读写真实的活动规则
+  if (flags.file !== undefined) {
+    const file = flags.file === true ? "" : String(flags.file).trim();
+    if (!file) throw new CliError("--file 需要一个规则文件路径（传了空值；不想指定就别传 --file）");
+    return path.resolve(file);
+  }
   if (process.env.MOCK_RULES_FILE) return path.resolve(process.env.MOCK_RULES_FILE);
   return cliPaths().rulesFile;
 }
@@ -206,13 +264,26 @@ function findRuleOrFail(rules, method, rulePath, hint = "") {
 
 const COMMANDS = {
   list(flags, ctx) {
+    // 场景文件不存在时 readRulesFile 返回空数组，不挡的话拼错场景名也只会看到「(空)」
+    if (ctx.target !== ctx.rulesFile && !fs.existsSync(ctx.target)) {
+      throw new CliError(`场景不存在：${sceneNameFlag(flags.scene)}\n  已有场景：vjtools mock rule scenes`);
+    }
     const rules = readRulesFile(ctx.target);
     console.log(`# ${ctx.target}`);
     if (!rules.length) {
       console.log("(空)");
       return;
     }
-    for (const r of rules) {
+    for (const [index, r] of rules.entries()) {
+      // 手改文件留下的非规则条目：说清楚是第几条，不然要么打一堆报错堆栈，要么显示成 undefined
+      if (typeof r === "string") {
+        console.log(`● ?      ${r}  ← 字符串简写没有 method，不会命中（需手改文件删除）`);
+        continue;
+      }
+      if (!r || typeof r !== "object" || Array.isArray(r)) {
+        console.log(`✗ 第 ${index + 1} 条不是规则对象：${JSON.stringify(r)}（不会生效，需手改文件删除）`);
+        continue;
+      }
       const flag = r.enabled === false ? "○" : "●";
       const status = r.status ? ` [${r.status}]` : "";
       const delay = r.delay ? ` +${r.delay}ms` : "";
@@ -243,7 +314,7 @@ const COMMANDS = {
         ? { method: flags.method ?? history.rule.method, path: flags.path ?? history.rule.path }
         : flags,
     );
-    const response = history ? history.rule.response : readJsonStdin();
+    const response = history ? history.rule.response : await readJsonStdin();
     const rules = readRulesFile(ctx.target);
     const index = findRuleIndex(rules, method, rulePath);
     const existing = index >= 0 ? rules[index] : {};
@@ -272,10 +343,15 @@ const COMMANDS = {
     writeRulesFile(ctx.target, saved);
     const origin = history ? `（response 取自请求历史 #${history.id}）` : "";
     console.log(`✔ 已${created ? "新增" : "更新"}：${method} ${rulePath}${origin}`);
+    // 没收到 stdin 也照常保存（只改状态码 / 延迟是正常用法），但要说清楚，免得以为数据传进去了
+    if (response === undefined) {
+      if (next.response !== undefined) console.log("  stdin 没有输入：response 沿用原值");
+      else if (!next.variants?.length) console.log(await noResponseHint(method, rulePath));
+    }
     console.log(`  → ${ctx.target}${ctx.applyHint}`);
   },
 
-  "set-variant"(flags, ctx) {
+  async "set-variant"(flags, ctx) {
     const { method, rulePath } = requireTarget(flags);
     const name = requireVariantName(flags);
     const rules = readRulesFile(ctx.target);
@@ -285,7 +361,7 @@ const COMMANDS = {
       rulePath,
       "\n  变体必须挂在已有规则上（规则顶层 response 兜底）：先用 set 创建",
     );
-    const response = readJsonStdin();
+    const response = await readJsonStdin();
     const when = collectWhenFlags(flags);
     const rule = rules[index];
     const existing = rule.variants?.[findVariantIndex(rule, name)];
@@ -430,9 +506,12 @@ const COMMANDS = {
     if (fs.existsSync(file) && !flags.force) {
       throw new CliError(`场景已存在：${name}\n  换个名字；确认要用当前活动规则覆盖它时再加 --force`);
     }
-    const rules = readRulesFile(ctx.rulesFile).map(normalizeMockRule);
+    const entries = readRulesFile(ctx.rulesFile);
+    const rules = entries.filter(isRuleEntry).map(normalizeMockRule);
     writeSceneRules(ctx.scenesDir, name, rules);
     console.log(`✔ 已把当前活动规则（${rules.length} 条）存为场景「${name}」`);
+    const skipped = entries.length - rules.length;
+    if (skipped) console.log(`  跳过 ${skipped} 条不是规则对象的条目（null 等，本来就不会生效）`);
     console.log(`  → ${file}`);
   },
 
@@ -440,8 +519,9 @@ const COMMANDS = {
     const name = sceneNameFlag(flags.scene);
     const file = sceneFilePath(ctx.scenesDir, name);
     if (!fs.existsSync(file)) throw new CliError(`场景不存在：${name}`);
-    // 只删场景文件本身，不影响活动 mock-rules.json（即使该场景曾被「应用」过）
+    // 只删场景文件本身，不影响活动 mock-rules.json（即使该场景曾被「应用」过）；指向它的「当前应用」标记一并清掉
     deleteScene(ctx.scenesDir, name);
+    clearAppliedScene(ctx.rulesFile, name);
     console.log(`✔ 已删除场景：${name}`);
     console.log(`  → ${file}`);
   },
@@ -461,18 +541,18 @@ const COMMANDS = {
   // config.json 缺失 / 损坏时回退默认值，不报错。
   base(flags) {
     const { configFile } = cliPaths();
-    let raw = null;
+    let raw = {};
+    let note = fs.existsSync(configFile) ? "" : "（文件不存在，用默认值）";
     try {
       raw = readRawConfig(configFile);
     } catch {
-      // 损坏：用默认值
+      note = "（读取失败，用默认值）";
     }
-    const { host, port } = toMockConfig(raw || {});
-    const url = `http://${host}:${port}`;
+    const { host, port } = toMockConfig(raw);
+    const url = mockBaseUrl(host, port);
     console.log(url);
     if (flags.quiet) return;
-    const fromConfig = Boolean(raw?.mockHost);
-    console.log(`  来源：${fromConfig ? configFile : `${configFile}（读不到，用默认值）`}`);
+    console.log(`  来源：${configFile}${note}`);
     console.log(`  自检：curl -fsS ${url}/__mock/health`);
   },
 };

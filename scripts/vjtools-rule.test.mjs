@@ -18,7 +18,7 @@ function freshUserData() {
 }
 
 // 跑一次 CLI。stdin 传 string 即管道输入；不传则模拟无管道（stdin 关闭，非 TTY，
-// readFileSync(0) 返回空 → readStdin() 归一为 null，与终端直跑等价）。
+// 读到的是空 → readStdin() 归一为 null，与终端直跑等价）。
 function run(userData, args, stdin) {
   const result = spawnSync(process.execPath, [CLI, "mock", "rule", ...args], {
     input: stdin ?? "",
@@ -130,6 +130,33 @@ test("list 展示开关/状态码/延迟标记；空文件显示 (空)", () => {
   assert.match(out, /○ GET\s+\/api\/b/);
 });
 
+test("list --scene：场景不存在时报错（拼错名字不再只显示 (空)）；存在的空场景照常显示 (空)", () => {
+  const ud = freshUserData();
+  const missing = run(ud, ["list", "--scene", "不存在"]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.err, /场景不存在：不存在/);
+
+  run(ud, ["new-scene", "--scene", "空场景"]);
+  const empty = run(ud, ["list", "--scene", "空场景"]);
+  assert.equal(empty.code, 0, empty.err);
+  assert.match(empty.out, /\(空\)/);
+});
+
+test("set 没有 stdin：照常保存，但提示没有 response / response 沿用原值", () => {
+  const ud = freshUserData();
+  const created = run(ud, ["set", "--method", "GET", "--path", "/api/a", "--status", "500"]);
+  assert.equal(created.code, 0, created.err);
+  assert.match(created.out, /stdin 没有输入，规则没有 response/);
+  assert.equal(readJson(rulesFile(ud))[0].response, undefined);
+
+  run(ud, ["set", "--method", "GET", "--path", "/api/b"], '{"v":1}');
+  const updated = run(ud, ["set", "--method", "GET", "--path", "/api/b", "--delay", "100"]);
+  assert.match(updated.out, /response 沿用原值/);
+  assert.deepEqual(readJson(rulesFile(ud))[1].response, { v: 1 });
+
+  assert.doesNotMatch(run(ud, ["set", "--method", "GET", "--path", "/api/b"], '{"v":2}').out, /stdin 没有输入/);
+});
+
 test("rm 只删目标规则；未命中非 0 退出", () => {
   const ud = freshUserData();
   run(ud, ["set", "--method", "GET", "--path", "/api/a"], '{"v":1}');
@@ -146,6 +173,13 @@ test("校验失败均非 0 退出并带原因", () => {
   const cases = [
     [["set"], "缺少 --path"],
     [["set", "--method", "GET", "--path", "api/no-slash"], "必须以 \\/ 开头"],
+    // 请求 pathname 里永远没有 ? / #：存进去也命中不了，直接挡住并指向变体
+    [["set", "--method", "GET", "--path", "/api/orders?page=2"], "不能带 \\? 或 #.*--when-query"],
+    [["set", "--method", "GET", "--path", "/api/orders#top"], "不能带 \\? 或 #"],
+    // 存进去也命中不了的 method；超过上限的 delay
+    [["set", "--method", "FOO", "--path", "/api/a"], "method 不支持：FOO"],
+    [["set", "--method", "GET POST", "--path", "/api/a"], "method 不支持：GET POST"],
+    [["set", "--method", "GET", "--path", "/api/a", "--delay", "600001"], "delay 最多 600000 毫秒"],
     [["set", "--method", "GET", "--path", "/api/a", "--status", "abc"], "status 必须是整数"],
     [["set", "--method", "GET", "--path", "/api/a", "--status", "2000"], "status 必须在 100–599 之间"],
     [["set", "--method", "GET", "--path", "/api/a", "--status"], "--status 需要一个整数值"],
@@ -183,6 +217,29 @@ test("set-variant：规则不存在时报错并提示先 set", () => {
   assert.equal(r.code, 1);
   assert.match(r.err, /未找到规则/);
   assert.match(r.err, /先用 set 创建/);
+});
+
+test("set-variant：--when-body 大整数按原文落盘不丢精度；key 去首尾空白，纯空白 key 报错不写盘", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--path", "/api/orders", "--method", "POST"], '{"fallback":true}');
+  const ok = run(
+    ud,
+    ["set-variant", "--path", "/api/orders", "--method", "POST", "--name", "雪花",
+     "--when-body", "id=1850123456789012345", "--when-query", " page =2"],
+    '{"snow":true}',
+  );
+  assert.equal(ok.code, 0, ok.err);
+  assert.deepEqual(readJson(rulesFile(ud))[0].variants[0].when, {
+    query: { page: "2" },
+    body: { id: "1850123456789012345" },
+  });
+
+  for (const flag of ["--when-query", "--when-header", "--when-body"]) {
+    const bad = run(ud, ["set-variant", "--path", "/api/orders", "--method", "POST", "--name", "空白", flag, " =1"], "{}");
+    assert.equal(bad.code, 1, flag);
+    assert.match(bad.err, /key 不能为空/);
+  }
+  assert.equal(readJson(rulesFile(ud))[0].variants.length, 1);
 });
 
 test("set-variant 新建：when 三域落盘（header key 小写、body 值 JSON 解析）、追加到末尾", () => {
@@ -351,6 +408,17 @@ test("场景名清洗：非法字符剔除、空名/超长报错（对齐 record
 
 // ─── 文件定位 ─────────────────────────────────────────────────────────────────
 
+test("--file 传了空值（脚本里 --file \"$FILE\" 变量为空）直接报错，不回退去读写真实活动规则", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--method", "GET", "--path", "/api/real"], '{"v":1}');
+  for (const value of ["", "  "]) {
+    const r = run(ud, ["set", "--file", value, "--method", "GET", "--path", "/api/x"], '{"v":2}');
+    assert.equal(r.code, 1, JSON.stringify(value));
+    assert.match(r.err, /--file 需要一个规则文件路径/);
+  }
+  assert.deepEqual(readJson(rulesFile(ud)).map((x) => x.path), ["/api/real"], "活动规则不能被动到");
+});
+
 // ─── apply-scene ─────────────────────────────────────────────────────────────
 
 function markerFile(userData) {
@@ -424,6 +492,36 @@ test("apply-scene：rename-scene 后标记跟着改名；场景不存在报错",
   run(ud, ["set", "--scene", "A2", "--method", "GET", "--path", "/api/a"], '{"v":3}');
   assert.equal(run(ud, ["apply-scene", "--scene", "A2"]).code, 0);
   assert.equal(run(ud, ["apply-scene", "--scene", "不存在"]).code, 1);
+});
+
+test("apply-scene：rm-scene 删掉当前应用的场景后清掉标记，同名重建不会被当成在用、不能免守卫覆盖", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["apply-scene", "--scene", "A"]);
+  run(ud, ["set", "--method", "GET", "--path", "/api/manual"], '{"v":0}');
+
+  assert.equal(run(ud, ["rm-scene", "--scene", "A"]).code, 0);
+  assert.equal(fs.existsSync(markerFile(ud)), false);
+
+  run(ud, ["new-scene", "--scene", "A"]);
+  assert.doesNotMatch(run(ud, ["scenes"]).out, /当前应用中/);
+  const r = run(ud, ["apply-scene", "--scene", "A"]);
+  assert.equal(r.code, 2);
+  assert.match(r.err, /当前没有记录在用的场景/);
+  assert.deepEqual(readJson(rulesFile(ud)).map((x) => x.path), ["/api/a", "/api/manual"], "活动规则不能被空场景清掉");
+});
+
+test("clearAppliedScene（rm-scene 与软件删除场景共用）：只清指向被删场景的标记", async () => {
+  const { clearAppliedScene, readAppliedScene, recordAppliedScene } = await import("../src/mock/applied-scene.js");
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "A", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  recordAppliedScene(rulesFile(ud), "A");
+
+  clearAppliedScene(rulesFile(ud), "B");
+  assert.equal(readAppliedScene(rulesFile(ud)), "A", "删的是别的场景：标记不动");
+  clearAppliedScene(rulesFile(ud), "A");
+  assert.equal(readAppliedScene(rulesFile(ud)), "");
+  clearAppliedScene(rulesFile(ud), "A"); // 没有标记时也不报错
 });
 
 test("apply-scene：软件应用场景写的标记（src/mock/applied-scene.js）CLI 能认出", async () => {
@@ -511,8 +609,29 @@ test("base：从同一 userData 的 config.json 读 mockHost/mockPort（隔离�
   );
   const { code, out } = run(ud, ["base"]);
   assert.equal(code, 0);
-  assert.match(out, /http:\/\/0\.0\.0\.0:4567/);
+  // 与 status 一致：监听所有网卡时给本机可访问的回环地址
+  assert.match(out, /http:\/\/127\.0\.0\.1:4567/);
   assert.match(out, /来源：/);
+});
+
+test("base：来源说明按实际情况区分（只缺 mockHost 不算读不到；文件不存在 / 损坏各自说明）", () => {
+  const partial = freshUserData();
+  fs.writeFileSync(path.join(partial, "config.json"), JSON.stringify({ mockPort: 4567 }));
+  const ok = run(partial, ["base"]).out;
+  assert.match(ok, /http:\/\/127\.0\.0\.1:4567/);
+  assert.doesNotMatch(ok, /用默认值/);
+
+  assert.match(run(freshUserData(), ["base"]).out, /文件不存在，用默认值/);
+
+  const broken = freshUserData();
+  fs.writeFileSync(path.join(broken, "config.json"), "{ 这不是 JSON");
+  assert.match(run(broken, ["base"]).out, /读取失败，用默认值/);
+});
+
+test("base：IPv6 监听地址在 URL 里加方括号", () => {
+  const ud = freshUserData();
+  fs.writeFileSync(path.join(ud, "config.json"), JSON.stringify({ mockHost: "::1", mockPort: 4567 }));
+  assert.equal(run(ud, ["base", "--quiet"]).out.trim(), "http://[::1]:4567");
 });
 
 test("base --quiet：只输出地址本身，可直接 BASE=$(...) 取值", () => {
@@ -535,4 +654,65 @@ test("base：config.json 缺失或损坏时回退默认值，不报错", () => {
   const { code, out } = run(broken, ["base", "--quiet"]);
   assert.equal(code, 0);
   assert.equal(out.trim(), "http://127.0.0.1:3002");
+});
+
+// ─── 第二轮审查补的用例 ──────────────────────────────────────────────────────
+
+test("list：规则文件里的 null / 字符串简写逐条说明，不打报错堆栈、不显示 undefined", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--method", "GET", "--path", "/api/ok"], '{"v":1}');
+  const rules = readJson(rulesFile(ud));
+  fs.writeFileSync(rulesFile(ud), JSON.stringify([null, "/api/legacy", ...rules]));
+  const r = run(ud, ["list"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /✗ 第 1 条不是规则对象：null/);
+  assert.match(r.out, /\/api\/legacy {2}← 字符串简写没有 method/);
+  assert.match(r.out, /● GET\s+\/api\/ok/);
+  assert.doesNotMatch(r.out + r.err, /undefined|TypeError/);
+});
+
+test("规则文件是旧的 { rules: [...] } 格式（server 也认）：命令行照常读改，写回时变成数组", () => {
+  const ud = freshUserData();
+  fs.mkdirSync(path.dirname(rulesFile(ud)), { recursive: true });
+  fs.writeFileSync(rulesFile(ud), JSON.stringify({ rules: [{ method: "GET", path: "/api/obj", response: { o: 1 } }] }));
+  assert.match(run(ud, ["list"]).out, /GET\s+\/api\/obj/);
+  assert.equal(run(ud, ["set", "--method", "GET", "--path", "/api/new"], '{"n":1}').code, 0);
+  assert.deepEqual(readJson(rulesFile(ud)).map((x) => x.path), ["/api/obj", "/api/new"]);
+});
+
+test("rename-scene：只改大小写（Login → login）也能改名，标记跟着改", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--scene", "Login", "--method", "GET", "--path", "/api/a"], '{"v":1}');
+  run(ud, ["apply-scene", "--scene", "Login"]);
+  const r = run(ud, ["rename-scene", "--scene", "Login", "--to", "login"]);
+  assert.equal(r.code, 0, r.err);
+  assert.deepEqual(fs.readdirSync(path.dirname(sceneFile(ud, "x"))), ["login.json"]);
+  assert.equal(readJson(markerFile(ud)).name, "login");
+});
+
+test("historyEntryRejectReason / historyEntryToRule：代理失败、无响应体、超限、非 JSON 都不能存成规则", async () => {
+  const { historyEntryRejectReason, historyEntryToRule } = await import("../src/mock/history-rule.js");
+  const ok = { kind: "proxy", method: "GET", path: "/a", status: 200, responseBody: { v: 1 }, responseIsJson: true };
+  assert.equal(historyEntryRejectReason(ok), null);
+  assert.deepEqual(historyEntryToRule(ok), { enabled: true, method: "GET", path: "/a", response: { v: 1 } });
+  const cases = [
+    [{ ...ok, kind: "proxy-error", status: 502 }, /代理失败/],
+    [{ ...ok, kind: "miss", responseBody: undefined }, /没有响应体/],
+    [{ ...ok, responseBody: undefined, responseTruncated: true }, /超出记录上限/],
+    [{ ...ok, responseBody: "<html>", responseIsJson: false }, /不是 JSON/],
+  ];
+  for (const [entry, reason] of cases) {
+    assert.match(historyEntryRejectReason(entry), reason);
+    assert.equal(historyEntryToRule(entry), null);
+  }
+});
+
+test("save-scene：活动规则里有 null 等非规则条目时跳过并说明，不打报错堆栈", () => {
+  const ud = freshUserData();
+  run(ud, ["set", "--method", "GET", "--path", "/api/ok"], '{"v":1}');
+  fs.writeFileSync(rulesFile(ud), JSON.stringify([null, ...readJson(rulesFile(ud)), 42]));
+  const r = run(ud, ["save-scene", "--scene", "带null"]);
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.out, /跳过 2 条不是规则对象的条目/);
+  assert.deepEqual(readJson(sceneFile(ud, "带null")).map((x) => x.path), ["/api/ok"]);
 });

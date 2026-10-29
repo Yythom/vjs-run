@@ -38,12 +38,14 @@ import {
   writeSceneRules,
 } from "./recorder.js";
 import {
+  clearAppliedScene,
   readAppliedScene,
   recordAppliedScene,
   renameAppliedScene,
 } from "./applied-scene.js";
-import { writeRulesFile } from "./rules.js";
+import { isRuleEntry, writeRulesFile } from "./rules.js";
 import { recommendResponse, resolveRoute } from "./route-info.js";
+import { mockBaseUrl } from "./runtime.js";
 
 // 场景文件与 mock-rules.json 同目录，放 scenes/ 子目录下
 function getScenesDir() {
@@ -123,11 +125,7 @@ export function registerMockIpc() {
   ipcSafe("start-mock", async () => {
     const config = getConfig();
     await startSwaggerMock(MOCK_ID);
-    return {
-      url: `http://${config.mockHost || "127.0.0.1"}:${
-        Number(config.mockPort || 3002)
-      }`,
-    };
+    return { url: mockBaseUrl(config.mockHost, Number(config.mockPort || 3002)) };
   });
 
   ipcSafe("stop-mock", () => stopMockService(MOCK_ID));
@@ -257,10 +255,7 @@ export function registerMockIpc() {
   // 用于验证「当前接口在本地服务下的实际返回」。
   ipcSafe("execute-mock-local-curl", (_, payload = {}) => {
     const config = getConfig();
-    const localBaseUrl = `http://${config.mockHost || "127.0.0.1"}:${
-      Number(config.mockPort || 3002)
-    }`;
-    return executeCurl(localBaseUrl, payload);
+    return executeCurl(mockBaseUrl(config.mockHost, Number(config.mockPort || 3002)), payload);
   });
 
   ipcSafe(
@@ -363,6 +358,7 @@ export function registerMockIpc() {
 
   ipcSafe("delete-mock-scene", (_, payload = {}) => {
     deleteScene(getScenesDir(), payload.name);
+    clearAppliedScene(getConfig().mockRulesFile, sanitizeSceneName(payload.name));
   });
 
   // 重命名场景（改文件名）；同名冲突 / 录制中会抛错
@@ -428,7 +424,7 @@ export function registerMockIpc() {
   ipcSafe(
     "get-mock-scene-rules",
     (_, payload = {}) => ({
-      rules: readSceneRules(getScenesDir(), payload.name).map(normalizeMockRule),
+      rules: readSceneRules(getScenesDir(), payload.name).filter(isRuleEntry).map(normalizeMockRule),
       file: sceneFilePath(getScenesDir(), payload.name),
     }),
     { rules: [] },
