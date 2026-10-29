@@ -94,4 +94,7 @@ curl -fsS "$BASE/__mock/search?q=user"   # 按关键词搜路由；命令行版�
 curl -fsS "$BASE/__mock/history"         # 最近 300 条请求记录；命令行版是 vjtools mock history
 ```
 
+`/__mock/history` 和 `/__mock/events` 里有完整的请求体 / 响应体，**只给本机程序用**：浏览器页面（带 `Origin` 头）
+和局域网里的其它机器访问会得到 403。本机用 curl、`vjtools` 命令或 vjtools app 访问不受影响。
+
 `/__mock/ui` 是给人看的浏览器调试页，你用不上，但可以让用户去开。

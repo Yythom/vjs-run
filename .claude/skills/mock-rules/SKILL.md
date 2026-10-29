@@ -1,6 +1,6 @@
 ---
 name: mock-rules
-description: 定制或排查 vjtools 的接口 mock 数据时使用。覆盖 mock 规则与「场景」（scenes/<名>.json）的增删改查、变体（按 query/header/body 返回不同响应）、状态码与延迟模拟、mock 服务的启停与请求历史、以及 mock 不生效时的排障。定制类触发："改某个接口返回什么"、"让 /api/xxx 返回 …"、"造一份假数据联调"、"建一个联调场景"、"关掉某条 mock"、"模拟接口超时/500"、"分页第二页返回别的数据"、"把刚才那个接口的真实返回存下来改一改"。排障类同样触发："mock 怎么没生效"、"规则明明改了但没用"、"返回怎么多了一层 rc/code/data"、"变体不命中"、"接口返回 502 或 404 No mock route matched"、"这条走的是 mock 还是真后端"、"看看最近的请求"。改地址类同样触发："把后端代理地址换成 …"、"换个 swagger 源服务器"、"mock 回源到测试环境"。启停类同样触发："把 mock 跑起来"、"启动 / 停掉 mock"、"mock 在不在跑"、"重新拉一下 swagger 文档"、"vjtools 命令找不到"。只要涉及 vjtools mock server 的行为就用本 skill，哪怕用户没说"mock 规则"这几个字。
+description: 定制或排查 vjtools 的接口 mock 数据时使用。覆盖 mock 规则与「场景」（scenes/<名>.json）的增删改查、变体（按 query/header/body 返回不同响应）、状态码与延迟模拟、mock 服务的启停与请求历史、以及 mock 不生效时的排障。定制类触发："改某个接口返回什么"、"让 /api/xxx 返回 …"、"造一份假数据联调"、"建一个联调场景"、"关掉某条 mock"、"模拟接口超时/500"、"分页第二页返回别的数据"、"把刚才那个接口的真实返回存下来改一改"。排障类同样触发："mock 怎么没生效"、"规则明明改了但没用"、"返回怎么多了一层 rc/code/data"、"变体不命中"、"接口返回 502 或 404 No mock route matched"、"这条走的是 mock 还是真后端"、"看看最近的请求"。改地址类同样触发："把后端代理地址换成 …"、"换个 swagger 源服务器"、"mock 回源到测试环境"。启停类同样触发："把 mock 跑起来"、"启动 / 停掉 mock"、"mock 在不在跑"、"重新拉一下 swagger 文档"、"vjtools 命令找不到"、"手机 / 同事电脑连不上 mock"。只要涉及 vjtools mock server 的行为就用本 skill，哪怕用户没说"mock 规则"这几个字。
 ---
 
 # 定制 vjtools 的 mock 接口数据
@@ -25,8 +25,9 @@ command -v vjtools && vjtools --version
   response 会被静默丢掉、照样报成功，被程序调用时 `rule set` 可能永久挂起，雪花 ID 会被舍入；0.1.x 还缺 `sample` / `describe` /
   `save-scene` / `--from-history`，并**静默忽略不认识的参数**（`--from-history` 被吞掉后照样退出码 0，写出一条没有 response 的规则）。
   版本不够就征得用户同意后 `npm i -g vjtools-cli@latest`；用着用着报「未知命令 / 未知子命令」也是这个原因。
-- 输出 `vjtools <版本>`（app 内置）→ 能找到就够新。只有它能用时，下文的 `vjtools …` 都换成
-  `"$HOME/Library/Application Support/vjtools/bin/vjtools" …`，并提示用户在 app「开发环境体检」页点「安装到命令行」。
+- 输出 `vjtools <版本>`（app 内置，版本号就是 app 的版本）→ 可以用。app 0.0.25 及更早内置的命令行有和 0.2.0
+  一样的管道问题，所以传 response 一律用 heredoc 或 `< 文件`（见「`set` 的要点」）。只有它能用时，下文的 `vjtools …`
+  都换成 `"$HOME/Library/Application Support/vjtools/bin/vjtools" …`，并提示用户在 app「开发环境体检」页点「安装到命令行」。
 - 都找不到 → 请用户二选一并征得同意：装了 app 的，升级到带内置命令的新版并打开一次；没装的，
   `npm i -g vjtools-cli`（Node ≥ 22.12）。用户不让装就停下来说明，装了 app 的可以在 app 的 mock 配置页手动操作。
 
@@ -49,7 +50,8 @@ command -v vjtools && vjtools --version
    - 有标着「← 当前应用中」的场景 → 把它当默认选项问：「要直接改正在用的「X」，还是新建一个场景？」
      用户多半是想在正在用的场景上接着改，这样能自动应用，改完立刻生效。
    - 没有 → 问：「这次联调放到哪个场景？给个场景名（如 `登录联调`）」。
-   - 场景名规则：非空、≤60 字符，不能含 `/ \ : * ? " < > |`。
+   - 场景名规则：非空、≤60 字符。`/ \ : * ? " < > |` 会被**直接去掉**而不是报错（`v2/联调` 实际变成 `v2联调`），
+     所以别用这些字符，后续命令要用去掉后的名字。
 2. **新场景才要建**：`vjtools mock rule new-scene --scene <名>`；往已有场景里加接口就跳过这步。
    报「场景已存在」→ 告诉用户，问是换个名字，还是就往这个已有场景里加。
 3. **逐个把接口写进场景**：`vjtools mock rule set --scene <名> --method <M> --path <P> …`（见「`set` 的要点」）。
@@ -134,8 +136,14 @@ vjtools mock rule rm-scene     --scene 登录联调
 
 - 按 **method + path 幂等定位**：命中则覆盖、未命中则追加，**绝不动其它规则**。
   覆盖已有规则时，**本次没传的字段保留原值**（比如只改 response 不会丢 delay）。
-- 可选项：`--status <整数>`、`--delay <毫秒>`、`--disabled` / `--enabled`。
-- `--method` **必填**且必须是具体方法：mock server 只按具体 method 匹配，`"*"` 或不写的规则一条都不会命中，CLI 直接拒收。
+- 可选项：`--status <整数>`、`--delay <毫秒，最多 600000>`、`--disabled` / `--enabled`。
+- `--method` **必填**，只能是 `GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS`：mock server 只按具体 method 匹配，
+  `"*"`、不写或别的值都命中不了，CLI 直接拒收。
+- `--path` 只写路径：带 `?query` 或 `#` 会被拒收（请求的 pathname 里永远没有它们）。「`page=2` 时返回别的」用变体
+  `--when-query page=2`。尾部 `/` 可有可无，`/api/users/` 和 `/api/users` 都能命中。
+- response 从 stdin 读，**用 heredoc 或 `< 文件` 传，别用 `cmd | vjtools …` 管道**：旧版本（CLI ≤ 0.2.0、app ≤ 0.0.25）
+  在管道上游稍慢时会把 response 静默丢掉、照样报成功。写完用 `get` 看一眼 response 在不在。
+- 不传 response（只改 `--status` / `--delay`）时会照常保存，并提示这条规则在不在 swagger 里——不在的话它不会生效。
 - 定位是**字面 path 字符串**：占位符规则 `/api/user/{id}` 必须原样传 `--path '/api/user/{id}'`，
   传具体的 `/api/user/123` 定位不到那条、反而会新增一条。
 - 多条规则都能命中时，**路径最具体的赢**（`/api/user/123` 优先于 `/api/user/{id}`），与数组顺序无关。
@@ -153,7 +161,9 @@ vjtools mock rule rm-scene     --scene 登录联调
 3. `vjtools mock rule set --scene <名> --from-history <编号>`，之后照常改值、加变体。
 
 - 历史最多 300 条；`vjtools mock restart` 或停掉再启动 mock 会清空（改配置引起的自动重启不清）——编号现查现用。
-- 响应体太大、没被完整记录的那条会被拒绝，改用 `vjtools mock sample` 拿骨架。
+- 这几类记录会被拒绝，报错写明原因：代理失败（后端没连上）、未命中 / 没配后端时 mock 自己返回的 404 / 502（没有响应体）、
+  后端返回的不是 JSON（HTML 等）、响应体太大没被完整记录。这时改用 `vjtools mock sample` 拿骨架。
+- 后端响应里的大整数（雪花 ID）会原样存进规则、原样返回给前端，不用改成字符串。
 - 存下的 path 默认是 swagger 路由模板（如 `/api/user/{id}`，同类请求都能命中），之后 `get` / `rm` / `set-variant`
   也要用这个模板路径定位；想存成别的路径就加 `--path`。状态码跟那条真实响应走（不是 200 才写进规则）。
 
@@ -188,7 +198,8 @@ vjtools mock rule rm-variant --scene 订单联调 --method GET --path /api/order
 - 写条件前先 `vjtools mock describe --method <M> --path <P>`，看接口实际有哪些 query 参数和请求体字段路径，
   别猜字段名——写错了变体永远不命中，也不会报错。
 - query 值按字符串比；header 名不分大小写；body 用点路径（如 `items.0.id`），值先按 JSON 解析
-  （`2` → 数字），失败按字符串。数字 / 字符串互转、深度相等、`null` 的细节见 `references/rule-format.md`。
+  （`2` → 数字），失败按字符串。超出安全范围的大整数（雪花 ID）按原文存，请求里传字符串或数字都能命中。
+  数字 / 字符串互转、深度相等、`null` 的细节见 `references/rule-format.md`。
 - 变体按顺序 **first-match**，都不命中回退规则顶层；调整顺序 = `rm-variant` 后按序重加。
 - `--name` 规则内唯一，≤60 字符。
 
@@ -201,7 +212,7 @@ vjtools mock stop                # 停掉后台进程（命令行和新版 app �
 vjtools mock restart             # 重启（会清空请求历史；改配置会自动重启，一般用不上）
 vjtools mock logs -n 50          # 后台日志（启动失败、重启原因都在这里）
 
-vjtools mock routes 登录 --method POST   # 在 spec 里搜接口（路径 / 摘要 / operationId），定位 --path 用
+vjtools mock routes 登录 --method POST   # 在 spec 里搜接口（路径 / 摘要 / operationId；多个词需全部命中），定位 --path 用
 vjtools mock describe --method POST --path /api/login   # 接口的参数、请求体、响应字段（含说明和例值）
 vjtools mock sample --method POST --path /api/login     # 按 swagger 生成的推荐响应 JSON
 vjtools mock history --path /api/orders --limit 10       # 最近请求：每条是 mock 还是代理、命中了哪条规则 / 变体
@@ -212,7 +223,7 @@ vjtools mock history --id 12     # 单条的完整请求体 / 响应体
 要解析结果时加 `--json`：`status`、`routes`、`describe`、`history`、`config` 都支持，比解析文字输出可靠。
 
 - 用户要联调或要你验证效果、而 mock 没在跑时，直接 `vjtools mock start`，不要回头去改规则文件。
-- `start` 报「还没有 OpenAPI spec」→ 按提示二选一：配 `--swagger-server` 后 `vjtools mock gen`，或 `--spec-dir`
+- `start` 报「还没有 OpenAPI spec」或「spec 目录里还没有 OpenAPI 文件」→ 按提示二选一：配 `--swagger-server` 后 `vjtools mock gen`，或 `--spec-dir`
   指向已有文件。首次使用也可以一步到位：`vjtools mock init --swagger-server <url> --backend <url>`。
 - 「这条走的是 mock 还是真后端」「规则怎么没命中」先看 `history`：`kind` 是 `mock` / `proxy` / `proxy-error` / `miss`，
   `mock:` 后面是来源（`rule-response` / `rule-variant` / `openapi-sample` 等，含义见 `references/request-flow.md`）。
@@ -227,11 +238,15 @@ vjtools mock config --backend https://api.example.com/t2     # 修改（可只�
 vjtools mock config --swagger-server http://swagger.example.com/t2
 ```
 
-- **后端代理地址**：没命中 mock 的请求回源到这里。改完 mock 会在进程内**自动重启**（请求历史保留），
-  几秒后生效，可用 `vjtools mock status` 确认已恢复。
+- **后端代理地址**：没命中 mock 的请求回源到这里。改完 mock 会在进程内**自动重启**（请求历史保留）；
+  `config` 会等它重启完再返回，看到「mock 已按新配置重启」就是生效了。重启失败（端口被占、spec 目录不存在等）
+  会以退出码 1 报出原因，此时 mock 已经停了，改好配置后 `vjtools mock start`。
 - **Swagger 源服务器**：只在生成 OpenAPI JSON 时使用，改完要接着 `vjtools mock gen`（mock 运行中会自动热更新路由）。
 - 同一个命令还能改 `--spec-dir`（已有 OpenAPI JSON 的目录）、`--host` / `--port`、`--service-address`、
   `--mock-all true|false`。
+- **`--host`** 只填地址本身，不带协议和端口：`0.0.0.0` 监听所有网卡（默认值，手机 / 同事电脑能连，局域网地址见
+  `vjtools mock status`），`127.0.0.1` 只允许本机。装过 app 的用户配置里通常已经写死了 `127.0.0.1`，
+  「手机连不上」时先看这个。
 
 ## 与 vjtools app 共存
 
@@ -240,6 +255,8 @@ mock 只有一个后台进程：app 的「启动」和 `vjtools mock start` 起�
 
 - **停 mock 前先确认用户不需要了**：用户可能正在 app 里看着它，`status` 的「启动方式」会写明是谁起的。
   只停你自己为了验证而启动的；旧版 app 在自己进程里跑的 mock，`vjtools mock stop` 会拒绝，请用户在 app 里停。
+  端口被**另一个数据目录**（`VJTOOLS_USER_DATA_DIR` 隔离环境）的 mock 占着时，`status` / `stop` / `start` 都会说明，
+  按提示到那个数据目录下操作或换端口，别去停它。
 - **「录制」只能在 app 里开关，正在录制的场景不要用命令行写**（`set` / `set-variant` / `rename-scene` / `rm-scene`）：
   录制把规则攥在内存里，下一条请求到来就整份重写场景文件，命令行写进去的会被悄悄冲掉。
   命令行查不到录制状态，用户提到在录制时先请他停掉。录制具体录什么见 `references/request-flow.md`。
@@ -261,11 +278,12 @@ curl -si "$BASE/api/orders?page=2"       # 看实际返回；响应头 x-mock-so
 
 | 症状 | 先查 |
 |---|---|
-| 命令报「未知命令 / 未知子命令」，或 `--from-history` 写出的规则没有 response | CLI 版本太旧，见第 0 步 |
+| 命令报「未知命令 / 未知子命令」，或 `--from-history` / 管道传进去的 response 没写进规则 | CLI 版本太旧，见第 0 步；传 response 改用 heredoc 或 `< 文件` |
 | curl 全部连不上 | `vjtools mock status`；没跑就 `vjtools mock start`，起不来看 `vjtools mock logs`，别改文件 |
 | 分不清这次请求走了 mock 还是真后端 | `vjtools mock history --path <路径>`，再 `--id` 看单条；或看响应头 `x-mock-source` |
 | `/__mock/rules` 里没有你写的规则 | 写进场景了但没「应用」（最常见，看 `apply-scene` 是不是退出码 2）；或 `--file` / `--scene` 指向了别处 |
-| 规则在 `/__mock/rules` 里但没生效 | 先看 `method` 是不是 `"*"` 或没写（这类规则不会命中，mock 启动日志有警告）；再看是否有更具体的同 method 规则先命中 |
+| 规则在 `/__mock/rules` 里但没生效 | 先看 `method` 是不是 `"*"` 或没写、`path` 有没有带 `?query`（手改文件留下的，都不会命中）；再看是否有更具体的同 method 规则先命中 |
+| `config` 报「按新配置重启失败」，mock 停了 | 按报错改（端口被占就换端口，spec 目录不存在就改 `--spec-dir`），再 `vjtools mock start` |
 | 返回的 body 比你写的多了一层 `{rc,code,message,data}` | 正常，信封化（见「`set` 的要点」） |
 | 502 + 没配后端 | 没有任何启用的规则 / override / 控制参数命中，被 `shouldUseMock` 闸门拦住了（`references/request-flow.md`） |
 | 404 `No mock route matched` | spec 外路径且规则没带 response（只有 status/delay 的规则对 spec 外无效） |
