@@ -23,7 +23,6 @@ const EnvCheckPage = lazy(() => import("./pages/env-check-page"));
 const PortCheckerPage = lazy(() => import("./pages/port-checker-page"));
 const CleanupPage = lazy(() => import("./pages/cleanup-page"));
 const CodecPage = lazy(() => import("./pages/codec-page"));
-const WeappDeployPage = lazy(() => import("./pages/weapp-deploy-page"));
 const RepoEditorModal = lazy(loadRepoEditorModal);
 const CleanModal = lazy(loadCleanModal);
 
@@ -42,9 +41,6 @@ function MainRoutes() {
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
       <Route path="/swagger-convert" element={<SwaggerConvertPage />} />
-
-      {/* 小程序管理 */}
-      <Route path="/weapp-deploy" element={<WeappDeployPage />} />
 
       {/* 工具与配置页 */}
       <Route path="/settings" element={<SettingsPage />} />
