@@ -28,6 +28,7 @@ import {
   startSwaggerMock,
   stopMockService,
 } from "../src/mock/service.js";
+import { parseJsonLossless } from "../src/mock/json-lossless.js";
 import { startRecording, stopRecording } from "../src/mock/recorder.js";
 import { isPidAlive, readMockRuntime, writeMockRuntime } from "../src/mock/runtime.js";
 
@@ -134,7 +135,7 @@ test("app 启动 mock = 拉起后台进程：状态、日志、请求推送、�
 
   await fetch(`${ctx.base}/api/a?x=1`);
   assert.ok(
-    await waitFor(() => sent.some((e) => e.channel === "mock-request" && e.payload.path === "/api/a")),
+    await waitFor(() => sent.some((e) => e.channel === "mock-request" && parseJsonLossless(e.payload).path === "/api/a")),
     "新请求实时推给渲染层",
   );
   assert.equal((await fetchMockHistory()).at(-1).path, "/api/a");
@@ -166,6 +167,35 @@ test("录制留在 app：后台进程推来的请求照样录进场景", async (
   const [rule] = JSON.parse(fs.readFileSync(sceneFile, "utf8"));
   assert.equal(rule.method, "GET");
   assert.equal(rule.path, "/api/a");
+});
+
+test("后台进程推来的请求带雪花 ID：推给渲染层、全量历史、录制都不丢位", async (t) => {
+  const ctx = await setup();
+  t.after(() => {
+    stopRecording();
+    return cleanup(ctx);
+  });
+  const ID = "1850123456789012345";
+  fs.mkdirSync(ctx.mockAssets, { recursive: true });
+  fs.writeFileSync(
+    path.join(ctx.mockAssets, "mock-rules.json"),
+    `[{"method":"GET","path":"/api/a","response":{"rc":0,"data":{"id":${ID}}}}]`,
+  );
+
+  startRecording({ sceneName: "雪花", scenesDir: path.join(ctx.mockAssets, "scenes") });
+  await startSwaggerMock();
+  await fetch(`${ctx.base}/api/a`);
+
+  const pushed = () => sent.find((e) => e.channel === "mock-request")?.payload;
+  assert.ok(await waitFor(() => pushed()), "新请求实时推给渲染层");
+  assert.equal(typeof pushed(), "string", "推 JSON 文本：rawJSON 包装过不了结构化克隆");
+  assert.equal(JSON.stringify(parseJsonLossless(pushed()).responseBody), `{"rc":0,"data":{"id":${ID}}}`);
+
+  assert.match(JSON.stringify(await fetchMockHistory()), new RegExp(ID));
+
+  const sceneFile = path.join(ctx.mockAssets, "scenes", "雪花.json");
+  assert.ok(await waitFor(() => fs.existsSync(sceneFile)), "请求要被录成场景规则");
+  assert.match(fs.readFileSync(sceneFile, "utf8"), new RegExp(ID));
 });
 
 test("app 接上命令行起的 mock；app 退出（只断开订阅）后 mock 继续跑", async (t) => {

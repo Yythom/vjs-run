@@ -1,9 +1,14 @@
 import { create } from "zustand";
+import { parseJsonLossless } from "../../../src/mock/json-lossless.js";
 
 /**
  * Mock 请求历史 store。
  * 增量靠 preload 的 mock-request 事件推送（模块加载时接线一次，与 log-store 同套路），
  * 全量在面板打开时通过 loadMockHistory 拉取兜底（覆盖窗口刷新 / 打开面板前的记录）。
+ *
+ * 两路都是 JSON 文本，这里用 parseJsonLossless 解析：请求体 / 响应体里的雪花 ID 带着 rawJSON
+ * 包装，展示（JSON.stringify）和「存入场景 / 生成规则」都按原文输出。rawJSON 不能结构化克隆，
+ * 所以 entry 里的值不要直接放进 IPC 参数或路由 state，先 JSON.stringify。
  */
 
 const MAX_ENTRIES = 300;
@@ -17,7 +22,7 @@ export const useMockHistory = () => useMockHistoryStore((s) => s.entries);
 export async function loadMockHistory() {
   const result = await window.electronAPI.getMockHistory();
   if (!result?.success) return result;
-  useMockHistoryStore.setState({ entries: result.entries || [] });
+  useMockHistoryStore.setState({ entries: parseJsonLossless(result.entriesJson || "[]") });
   return result;
 }
 
@@ -43,6 +48,6 @@ if (
   window.electronAPI?.onMockRequest &&
   !window.__MOCK_HISTORY_WIRED__
 ) {
-  window.electronAPI.onMockRequest(appendEntry);
+  window.electronAPI.onMockRequest((entryJson) => appendEntry(parseJsonLossless(entryJson)));
   window.__MOCK_HISTORY_WIRED__ = true;
 }

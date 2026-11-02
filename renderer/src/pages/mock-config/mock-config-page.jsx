@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
+import { parseJsonLossless } from "../../../../src/mock/json-lossless.js";
 import clsx from "../../utils/clsx";
 import useMockData from "./use-mock-data";
 import MockRuleList from "./mock-rule-list";
@@ -671,8 +672,14 @@ function ScenesMenu({ onApplied, editingScene, onEdit, onExitEdit, confirm }) {
 
 export default function MockConfigPage() {
   const config = useAppConfig();
-  // 请求历史页通过 location.state.draft 传入预填的规则草稿（method/path/status/response）
-  const draft = useLocation().state?.draft || null;
+  // 请求历史页通过 location.state.draft 传入预填的规则草稿（method/path/status/responseJson）。
+  // response 是 JSON 文本（路由 state 要结构化克隆，放不下雪花 ID 的 rawJSON 包装），这里无损还原
+  const draftState = useLocation().state?.draft || null;
+  const draft = useMemo(() => {
+    if (!draftState) return null;
+    const { responseJson, ...rest } = draftState;
+    return responseJson === undefined ? rest : { ...rest, response: parseJsonLossless(responseJson) };
+  }, [draftState]);
   const [selectedKey, setSelectedKey] = useState(draft ? DRAFT_KEY : "");
   // 非空时进入场景编辑模式：列表 / 编辑器读写 scenes/<名字>.json 而非活动规则
   const [editingScene, setEditingScene] = useState(null);

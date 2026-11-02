@@ -69,9 +69,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   getMockRoutes: () => ipcRenderer.invoke("get-mock-routes"),
 
+  // 规则读写都是 JSON 文本（{ rulesJson }），大整数不丢位；必须在渲染层页面里序列化好再传：
+  // 大整数的 rawJSON 包装过不了 contextBridge / 结构化克隆，不能等到这里再 stringify
   getMockRules: () => ipcRenderer.invoke("get-mock-rules"),
 
-  saveMockRules: (rules) => ipcRenderer.invoke("save-mock-rules", { rules }),
+  saveMockRules: (rulesJson) => ipcRenderer.invoke("save-mock-rules", { rulesJson }),
 
   // 根据 swagger schema 生成一份推荐 mock JSON（不写盘，仅返回供用户复制）
   previewMockResponse: ({ method, path }) =>
@@ -90,7 +92,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   executeMockLocalCurl: ({ method, path, params, body }) =>
     ipcRenderer.invoke("execute-mock-local-curl", { method, path, params, body }),
 
-  // 请求历史：全量拉取 / 清空
+  // 请求历史：全量拉取（{ entriesJson }，JSON 文本，同规则读写）/ 清空
   getMockHistory: () => ipcRenderer.invoke("get-mock-history"),
 
   clearMockHistory: () => ipcRenderer.invoke("clear-mock-history"),
@@ -108,9 +110,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   saveMockScene: (name) => ipcRenderer.invoke("save-mock-scene", { name }),
 
-  // 把一批规则写进场景：mode="create" 建新场景，mode="merge" 按 method+path 覆盖已有场景
-  addRulesToMockScene: (name, rules, mode) =>
-    ipcRenderer.invoke("add-rules-to-mock-scene", { name, rules, mode }),
+  // 把一批规则（JSON 文本）写进场景：mode="create" 建新场景，mode="merge" 按 method+path 覆盖已有场景
+  addRulesToMockScene: (name, rulesJson, mode) =>
+    ipcRenderer.invoke("add-rules-to-mock-scene", { name, rulesJson, mode }),
 
   applyMockScene: (name) => ipcRenderer.invoke("apply-mock-scene", { name }),
 
@@ -127,8 +129,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getMockSceneRules: (name) =>
     ipcRenderer.invoke("get-mock-scene-rules", { name }),
 
-  saveMockSceneRules: (name, rules) =>
-    ipcRenderer.invoke("save-mock-scene-rules", { name, rules }),
+  saveMockSceneRules: (name, rulesJson) =>
+    ipcRenderer.invoke("save-mock-scene-rules", { name, rulesJson }),
 
   // 用系统默认应用打开 mock-rules.json；传场景名则打开对应场景文件
   openMockRulesFile: (scene) =>
@@ -224,7 +226,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   /**
    * 监听 mock server 的结构化请求记录推送（请求历史面板实时更新）
    *
-   * @param {Function} callback - 接收单条历史 entry 的回调函数
+   * @param {Function} callback - 接收单条历史 entry 的 JSON 文本（在页面里 parseJsonLossless，
+   *   不能在这里解析：rawJSON 包装过不了 contextBridge）
    * @returns {Function} 调用后取消监听
    */
   onMockRequest: (callback) => {

@@ -15,6 +15,7 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { getConfig } from "../config/store.js";
 import { sendLog, sendMockRequest, sendStatus } from "../ui-channel.js";
+import { parseJsonLossless } from "./json-lossless.js";
 import { handleRecordedEntry } from "./recorder.js";
 import { findLiveMockRuntime, isPidAlive } from "./runtime.js";
 import { cliPaths } from "../cli/user-data.js";
@@ -299,7 +300,8 @@ function handleEvent(block) {
   if (!data) return; // 注释行 / 心跳
   let payload;
   try {
-    payload = JSON.parse(data);
+    // 无损解析：录制会把 responseBody 直接写进场景文件，雪花 ID 不能在这里就被舍入
+    payload = parseJsonLossless(data);
   } catch {
     return;
   }
@@ -319,7 +321,8 @@ export async function fetchMockHistory() {
   if (!current) return [];
   try {
     const res = await fetch(`${current.url}/__mock/history`);
-    return res.ok ? await res.json() : [];
+    // 无损解析（与 vjtools mock history 一致）：结果里可能有 rawJSON 包装，走 IPC 前要 JSON.stringify
+    return res.ok ? parseJsonLossless(await res.text()) : [];
   } catch {
     return [];
   }

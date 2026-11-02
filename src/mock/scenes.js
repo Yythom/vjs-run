@@ -6,6 +6,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { parseJsonLossless } from "./json-lossless.js";
 import { ruleKey, writeRulesFile } from "./rules.js";
 
 export function scenesDirOf(rulesFile) {
@@ -48,12 +49,15 @@ export function listScenes(scenesDir) {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** 读场景规则；文件不存在 / 损坏返回 []（UI 展示用；要据此改写文件的请用 rules.js 的 readRulesFile） */
+/**
+ * 读场景规则；文件不存在 / 损坏返回 []（录制续录、UI 展示用；损坏时必须报错的请用 rules.js 的 readRulesFile）。
+ * 大整数无损读出（录制会拿它整份重写场景文件）：结果里可能有 rawJSON 包装，走 IPC 前先 JSON.stringify
+ */
 export function readSceneRules(scenesDir, name) {
   const file = sceneFilePath(scenesDir, name);
   if (!fs.existsSync(file)) return [];
   try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    const parsed = parseJsonLossless(fs.readFileSync(file, "utf8"));
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];

@@ -11,6 +11,7 @@ import BackendCurlModal from "./backend-curl-modal";
 import RequestSchemaPanel, { ScopeTag, formatExample } from "./request-schema-panel";
 import AnnotatedJson, { CopyJsonButton } from "./annotated-json";
 import { METHODS, prettyJson } from "./utils";
+import { parseJsonLossless } from "../../../../src/mock/json-lossless.js";
 import useModalNav from "../../hooks/use-modal-nav";
 import useResource from "../../hooks/use-resource";
 
@@ -141,7 +142,7 @@ function conditionsToWhen(conditions) {
     let value = cond.value;
     if (cond.scope === "body") {
       try {
-        value = JSON.parse(cond.value); // 2→数字、true→布尔、{"a":1}→对象；失败按字符串
+        value = parseJsonLossless(cond.value); // 2→数字、true→布尔、{"a":1}→对象；失败按字符串
         // 超出安全范围的大整数（雪花 ID）保留原文，否则 1850123456789012345 会被存成 …2200（与 CLI 一致）
         if (Number.isInteger(value) && !Number.isSafeInteger(value)) value = cond.value.trim();
       } catch {
@@ -173,7 +174,7 @@ function valuesToVariant(values) {
     when: conditionsToWhen(values.conditions),
     ...(status ? { status: Number(status) } : {}),
     ...(delay ? { delay: Number(delay) } : {}),
-    response: JSON.parse(values.responseText),
+    response: parseJsonLossless(values.responseText),
   };
 }
 
@@ -219,7 +220,8 @@ function valuesToRule(values) {
   const status = values.status.trim();
   const delay = values.delay.trim();
   const responseText = values.responseText.trim();
-  const response = responseText ? JSON.parse(responseText) : undefined;
+  // 无损解析：粘贴进来的后端响应里有雪花 ID 时按原文保存（与 CLI 一致）
+  const response = responseText ? parseJsonLossless(responseText) : undefined;
   const variants = values.variants.map(valuesToVariant);
 
   return {

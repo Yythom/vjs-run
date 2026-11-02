@@ -69,9 +69,13 @@ export function sendStatus(projectId, status) {
   sendToAllWindows("process-status", { projectId, status });
 }
 
-// Mock server 每处理完一个请求推一条结构化记录（请求历史面板实时更新）
+// Mock server 每处理完一个请求推一条结构化记录（请求历史面板实时更新）。
+// 推 JSON 文本：记录里的大整数（雪花 ID）带着 rawJSON 包装，结构化克隆会直接抛 DataCloneError；
+// 渲染层用 parseJsonLossless 解析（见 mock-history-store.js）
 export function sendMockRequest(entry) {
-  sendToAllWindows("mock-request", entry);
+  // vjtools 后台进程也会调到这里，它没有窗口，省掉序列化
+  if (!windows.size) return;
+  sendToAllWindows("mock-request", JSON.stringify(entry));
 }
 
 // 录制状态变化（开始/停止/新录到一条）推给渲染层

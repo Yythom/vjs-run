@@ -3,6 +3,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { linter } from "@codemirror/lint";
 import { githubLight } from "@uiw/codemirror-theme-github";
+import { parseJsonLossless } from "../../../src/mock/json-lossless.js";
 
 const BASIC_SETUP = {
   lineNumbers: false,
@@ -26,7 +27,8 @@ export default function JsonEditor({
       e.preventDefault();
       e.stopPropagation();
       try {
-        const parsed = JSON.parse(value || "{}");
+        // 无损解析：格式化不能顺手把雪花 ID 舍入
+        const parsed = parseJsonLossless(value || "{}");
         const formatted = JSON.stringify(parsed, null, 2);
         onChange?.(formatted);
       } catch {

@@ -1,4 +1,5 @@
 import useResource from "../../hooks/use-resource";
+import { parseJsonLossless } from "../../../../src/mock/json-lossless.js";
 
 /**
  * mock-config 页面的数据层：读 OpenAPI routes + mock rules。
@@ -7,6 +8,10 @@ import useResource from "../../hooks/use-resource";
  *
  * 传入 editingScene（场景名）时进入场景编辑模式：规则的读写目标
  * 从活动规则文件切换为 scenes/<场景名>.json，routes 不受影响。
+ *
+ * 规则与主进程之间传 JSON 文本：这里用 parseJsonLossless 解析，大整数（雪花 ID）
+ * 带着 rawJSON 包装留在 rules 里，展示（JSON.stringify）和保存时都按原文输出。
+ * 所以 rules 里的值不要 String()、也不要整条传给别的 IPC。
  */
 export default function useMockData({
   config,
@@ -31,7 +36,7 @@ export default function useMockData({
     // 加载完自动选中会让弹框在进页面 / 切回页面时自己弹出来。
     return {
       routes: routeResult?.routes || [],
-      rules: ruleResult?.rules || [],
+      rules: parseJsonLossless(ruleResult?.rulesJson || "[]"),
       rulesFile: ruleResult?.file || "",
     };
   }, [config?.mockSpecPath, config?.mockServiceAddress, editingScene]);
@@ -42,15 +47,16 @@ export default function useMockData({
 
   // 保存后 reload —— 多一次 IPC 但代码更直，不再单独维护 rules state
   const saveRules = async (nextRules) => {
+    const rulesJson = JSON.stringify(nextRules);
     const result = editingScene
-      ? await window.electronAPI.saveMockSceneRules(editingScene, nextRules)
-      : await window.electronAPI.saveMockRules(nextRules);
+      ? await window.electronAPI.saveMockSceneRules(editingScene, rulesJson)
+      : await window.electronAPI.saveMockRules(rulesJson);
     if (!result?.success) {
       onToast?.(`保存失败: ${result?.error || "未知错误"}`, "error");
       return null;
     }
     await reload();
-    return result.rules || nextRules;
+    return nextRules;
   };
 
   return { routes, rules, rulesFile, loading, load: reload, saveRules };

@@ -327,7 +327,7 @@ function SaveToSceneModal({ entries, onClose, onSaved }) {
     setSaving(true);
     const result = await window.electronAPI.addRulesToMockScene(
       sceneName,
-      rules,
+      JSON.stringify(rules),
       mode === "create" ? "create" : "merge",
     );
     setSaving(false);
@@ -624,8 +624,9 @@ function HistoryDetail({ entry }) {
           ...(entry.status && entry.status !== 200 && entry.kind !== "miss"
             ? { status: entry.status }
             : {}),
+          // 传 JSON 文本：路由 state 要结构化克隆，雪花 ID 的 rawJSON 包装会让跳转直接抛错
           ...(entry.responseBody !== undefined
-            ? { response: entry.responseBody }
+            ? { responseJson: JSON.stringify(entry.responseBody) }
             : {}),
         },
       },

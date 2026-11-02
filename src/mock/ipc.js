@@ -43,7 +43,8 @@ import {
   recordAppliedScene,
   renameAppliedScene,
 } from "./applied-scene.js";
-import { isRuleEntry, writeRulesFile } from "./rules.js";
+import { parseJsonLossless } from "./json-lossless.js";
+import { isRuleEntry, readRulesFile, writeRulesFile } from "./rules.js";
 import { recommendResponse, resolveRoute } from "./route-info.js";
 import { mockBaseUrl } from "./runtime.js";
 
@@ -264,22 +265,25 @@ export function registerMockIpc() {
     { routes: [] },
   );
 
+  // 规则编辑器的读 / 写都传 JSON 文本（rulesJson）而不是对象：rawJSON 过不了 IPC，
+  // 改传对象的话大整数（雪花 ID）在主进程就被舍入，编辑器整份写回时把所有规则里的 ID 都改掉。
+  // 渲染层用 parseJsonLossless 解析、JSON.stringify 回传（见 use-mock-data.js）
   ipcSafe(
     "get-mock-rules",
     () => {
       const config = getConfig();
       return {
-        rules: loadMockRules(config.mockRulesFile),
+        rulesJson: JSON.stringify(loadMockRules(config.mockRulesFile, { lossless: true })),
         file: config.mockRulesFile,
       };
     },
-    { rules: [] },
+    { rulesJson: "[]" },
   );
 
   ipcSafe("save-mock-rules", (_, payload = {}) => {
-    const rules = normalizeRulesForSave(payload.rules || []);
+    const rules = normalizeRulesForSave(parseJsonLossless(payload.rulesJson || "[]"));
     writeActiveRules(rules);
-    return { rules, file: getConfig().mockRulesFile };
+    return { file: getConfig().mockRulesFile };
   });
 
   // ── 录制 ────────────────────────────────────────────────────────────────────
@@ -310,7 +314,7 @@ export function registerMockIpc() {
 
   // 把当前活动规则存为命名场景（快照）
   ipcSafe("save-mock-scene", (_, payload = {}) => {
-    const rules = loadMockRules(getConfig().mockRulesFile);
+    const rules = loadMockRules(getConfig().mockRulesFile, { lossless: true });
     const name = writeSceneRules(getScenesDir(), payload.name, rules);
     return { name, count: rules.length };
   });
@@ -328,7 +332,8 @@ export function registerMockIpc() {
       throw new Error(`场景「${name}」正在录制中，请先停止录制再写入`);
     }
 
-    const incoming = normalizeRulesForSave(payload.rules || []);
+    // 规则来自请求历史，传 JSON 文本，响应里的雪花 ID 原样写进场景
+    const incoming = normalizeRulesForSave(parseJsonLossless(payload.rulesJson || "[]"));
     if (!incoming.length) throw new Error("没有可写入的规则");
 
     if (mode === "create") {
@@ -339,8 +344,9 @@ export function registerMockIpc() {
       return { name, added: incoming.length, overwritten: 0, total: incoming.length };
     }
 
+    // 严格读：场景文件损坏时报错，不能当成空场景合并后把它覆盖掉
     const { rules, added, overwritten } = mergeSceneRules(
-      readSceneRules(scenesDir, name),
+      readRulesFile(sceneFilePath(scenesDir, name)),
       incoming,
     );
     writeSceneRules(scenesDir, name, rules);
@@ -348,12 +354,16 @@ export function registerMockIpc() {
   });
 
   // 应用场景：用场景内容覆盖活动规则文件，并记下「当前应用的场景」（见 applied-scene.js）
+  // 严格读（与 vjtools mock rule apply-scene 一致）：场景不存在或文件损坏时报错，
+  // 而不是当成空场景把活动规则清空
   ipcSafe("apply-mock-scene", (_, payload = {}) => {
     const name = sanitizeSceneName(payload.name);
-    const rules = normalizeRulesForSave(readSceneRules(getScenesDir(), name));
+    const sceneFile = sceneFilePath(getScenesDir(), name);
+    if (!fs.existsSync(sceneFile)) throw new Error(`场景不存在：${name}`);
+    const rules = normalizeRulesForSave(readRulesFile(sceneFile));
     writeActiveRules(rules);
     recordAppliedScene(getConfig().mockRulesFile, name);
-    return { rules };
+    return { count: rules.length };
   });
 
   ipcSafe("delete-mock-scene", (_, payload = {}) => {
@@ -406,7 +416,7 @@ export function registerMockIpc() {
     const srcFile = filePaths[0];
     let parsed;
     try {
-      parsed = JSON.parse(fs.readFileSync(srcFile, "utf8"));
+      parsed = parseJsonLossless(fs.readFileSync(srcFile, "utf8"));
     } catch (err) {
       throw new Error(`不是合法 JSON: ${err.message}`, { cause: err });
     }
@@ -421,13 +431,16 @@ export function registerMockIpc() {
   });
 
   // 读场景规则：mock 配置页进入「场景编辑模式」时加载，不影响活动规则
+  // 与 get-mock-rules 一样传 JSON 文本，大整数不丢位
   ipcSafe(
     "get-mock-scene-rules",
     (_, payload = {}) => ({
-      rules: readSceneRules(getScenesDir(), payload.name).filter(isRuleEntry).map(normalizeMockRule),
+      rulesJson: JSON.stringify(
+        readSceneRules(getScenesDir(), payload.name).filter(isRuleEntry).map(normalizeMockRule),
+      ),
       file: sceneFilePath(getScenesDir(), payload.name),
     }),
-    { rules: [] },
+    { rulesJson: "[]" },
   );
 
   // 覆盖写场景规则：场景编辑模式下的保存目标是场景文件本身
@@ -438,9 +451,9 @@ export function registerMockIpc() {
         `场景「${payload.name}」正在录制中，请先停止录制再编辑`,
       );
     }
-    const rules = normalizeRulesForSave(payload.rules || []);
+    const rules = normalizeRulesForSave(parseJsonLossless(payload.rulesJson || "[]"));
     const name = writeSceneRules(getScenesDir(), payload.name, rules);
-    return { rules, name, file: sceneFilePath(getScenesDir(), name) };
+    return { name, file: sceneFilePath(getScenesDir(), name) };
   });
 
   // 接口的请求侧 schema：参数表 + requestBody 采样，供规则编辑器展示并一键
@@ -463,9 +476,12 @@ export function registerMockIpc() {
 
   // 请求历史：窗口刷新 / 面板首次打开时全量拉取；增量靠 mock-request 事件推送
   // 请求历史存在 mock 后台进程里（app、vjtools 命令看到的是同一份）
-  ipcSafe("get-mock-history", async () => ({ entries: await fetchMockHistory() }), {
-    entries: [],
-  });
+  // 传 JSON 文本，大整数不丢位（同 get-mock-rules）；渲染层见 mock-history-store.js
+  ipcSafe(
+    "get-mock-history",
+    async () => ({ entriesJson: JSON.stringify(await fetchMockHistory()) }),
+    { entriesJson: "[]" },
+  );
 
   ipcSafe("clear-mock-history", () => clearMockHistory());
 
