@@ -18,7 +18,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 
 import { isPrivateRequest, startMockServer } from "../src/mock/server.js";
-import { CURL_WRITE_OUT, parseCurlMeta } from "../src/mock/curl-meta.js";
+import { CURL_META_MARK, CURL_WRITE_OUT, parseCurlMeta } from "../src/mock/curl-meta.js";
 
 // ─── 夹具 ────────────────────────────────────────────────────────────────────
 
@@ -1214,5 +1214,237 @@ test("spec 文件改坏了：热更新失败经 onLog 报出来（进日志文�
     }
     assert.ok(logs.some((line) => /spec 重新加载失败，继续使用上一次的路由/.test(line)), logs.join("\n"));
     assert.equal((await get("/__mock/routes").then((r) => r.json())).length, 3, "旧路由还在");
+  });
+});
+
+// ─── 按次返回（规则的 sequence）────────────────────────────────────────────────
+
+test("sequence：第 n 次请求返回第 n 项（各自的 status / delay），用完回到规则顶层", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/users",
+        response: { done: true },
+        sequence: [
+          { response: { step: 1 } },
+          { status: 401, delay: 80, response: { step: 2 } },
+        ],
+      },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get, records }) => {
+    const first = await get("/api/users");
+    assert.equal(first.status, 200);
+    assert.deepEqual(await first.json(), { step: 1 });
+    assert.equal(first.headers.get("x-mock-source"), "rule-sequence");
+    assert.equal(first.headers.get("x-mock-sequence"), "1/2");
+
+    const startedAt = Date.now();
+    const second = await get("/api/users");
+    assert.ok(Date.now() - startedAt >= 80, "第 2 项自己的 delay 要生效");
+    assert.equal(second.status, 401);
+    assert.deepEqual(await second.json(), { step: 2 });
+    assert.equal(second.headers.get("x-mock-sequence"), "2/2");
+
+    for (let i = 0; i < 2; i++) {
+      const after = await get("/api/users");
+      assert.equal(after.status, 200);
+      assert.deepEqual(await after.json(), { done: true });
+      assert.equal(after.headers.get("x-mock-source"), "rule-response");
+      assert.equal(after.headers.get("x-mock-sequence"), null);
+    }
+
+    assert.deepEqual(
+      records.map((r) => [r.source, r.sequence]),
+      [
+        ["rule-sequence", "1/2"],
+        ["rule-sequence", "2/2"],
+        ["rule-response", undefined],
+        ["rule-response", undefined],
+      ],
+    );
+  });
+});
+
+test("sequence：命中变体的请求走变体、不消耗次数", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/users",
+        response: { done: true },
+        sequence: [{ response: { step: 1 } }, { response: { step: 2 } }],
+        variants: [{ name: "vip", when: { query: { t: "1" } }, response: { vip: true } }],
+      },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const bodies = [];
+    for (const query of ["?t=1", "", "?t=1", "", ""]) {
+      bodies.push(await (await get(`/api/users${query}`)).json());
+    }
+    assert.deepEqual(bodies, [{ vip: true }, { step: 1 }, { vip: true }, { step: 2 }, { done: true }]);
+  });
+});
+
+test("sequence：并发请求各拿一项，不会两个请求拿到同一项", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/users",
+        response: { done: true },
+        sequence: [1, 2, 3].map((step) => ({ delay: 50, response: { step } })),
+      },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const results = await Promise.all([1, 2, 3].map(() => get("/api/users").then((r) => r.json())));
+    assert.deepEqual(results.map((r) => r.step).sort(), [1, 2, 3]);
+    assert.deepEqual(await (await get("/api/users")).json(), { done: true });
+  });
+});
+
+test("sequence：swagger 外的路径用完且没有顶层 response → 转发后端（已读的 body 照样送达）", async () => {
+  await withBackend(
+    () => ({ body: JSON.stringify({ from: "backend" }) }),
+    async ({ url, seen }) => {
+      const { specPath, mockRulesFile } = fixture({
+        rules: [{ method: "POST", path: "/outside", sequence: [{ status: 503, response: { busy: true } }] }],
+      });
+      await withServer({ specPath, mockRulesFile, backendBaseUrl: url }, async ({ get }) => {
+        const post = () =>
+          get("/outside", { method: "POST", headers: { "content-type": "application/json" }, body: '{"a":1}' });
+        const first = await post();
+        assert.equal(first.status, 503);
+        assert.equal(first.headers.get("x-mock-source"), "rule-sequence");
+        const second = await post();
+        assert.deepEqual(await second.json(), { from: "backend" });
+        assert.equal(second.headers.get("x-mock-source"), "proxy");
+        assert.equal(seen.length, 1);
+        assert.equal(seen[0].rawBody.toString(), '{"a":1}');
+      });
+    },
+  );
+});
+
+test("sequence：__mockStatus 照样优先于项里的 status，且这次请求也算用掉一项", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [
+      {
+        method: "GET",
+        path: "/api/users",
+        response: { done: true },
+        sequence: [{ status: 401, response: { step: 1 } }, { response: { step: 2 } }],
+      },
+    ],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const forced = await get("/api/users?__mockStatus=500");
+    assert.equal(forced.status, 500);
+    assert.deepEqual(await forced.json(), { step: 1 });
+    assert.deepEqual(await (await get("/api/users")).json(), { step: 2 });
+  });
+});
+
+test("sequence 计数清零：规则文件一改就从头数；POST /__mock/sequence/reset 只给本机、只认 POST", async () => {
+  const rules = [
+    {
+      method: "GET",
+      path: "/api/users",
+      response: { done: true },
+      sequence: [{ response: { step: 1 } }],
+    },
+  ];
+  const { specPath, mockRulesFile } = fixture({ rules });
+  await withServer({ specPath, mockRulesFile }, async ({ base, get }) => {
+    const step = async () => (await (await get("/api/users")).json()).step ?? "done";
+    assert.equal(await step(), 1);
+    assert.equal(await step(), "done");
+
+    // 内容不变、只是重新写盘（app 保存 / apply-scene 都是整份重写）也算改动
+    fs.writeFileSync(mockRulesFile, JSON.stringify(rules));
+    const later = new Date(Date.now() + 2000);
+    fs.utimesSync(mockRulesFile, later, later);
+    assert.equal(await step(), 1);
+    assert.equal(await step(), "done");
+
+    assert.equal((await rawRequest(base, "/__mock/sequence/reset")).status, 405);
+    const fromPage = await rawRequest(base, "/__mock/sequence/reset", {
+      method: "POST",
+      headers: { origin: "http://localhost:5173" },
+    });
+    assert.equal(fromPage.status, 403);
+    assert.equal(await step(), "done");
+
+    assert.equal((await rawRequest(base, "/__mock/sequence/reset", { method: "POST" })).status, 200);
+    assert.equal(await step(), 1);
+    assert.equal(await step(), "done");
+  });
+});
+
+test("parseCurlMeta：还原 x-mock-sequence", () => {
+  const { output, meta } = parseCurlMeta(`{"ok":1}${CURL_META_MARK}\nstatus=401\nsource=rule-sequence\nsequence=2/3`);
+  assert.equal(output, '{"ok":1}');
+  assert.equal(meta.status, 401);
+  assert.equal(meta.source, "rule-sequence");
+  assert.equal(meta.sequence, "2/3");
+});
+
+// ─── 回源的逐跳请求头 / 状态码范围 ─────────────────────────────────────────────
+
+/** 用 node:http 发请求（fetch 自己会补 content-length，造不出 chunked / Expect） */
+function sendRaw(base, requestPath, { method = "POST", headers = {}, body = "", waitContinue = false } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${base}${requestPath}`, { method, headers }, (res) => {
+      let text = "";
+      res.on("data", (chunk) => (text += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text }));
+    });
+    req.on("error", reject);
+    if (waitContinue) req.on("continue", () => req.end(body));
+    else req.end(body);
+  });
+}
+
+test("回源：chunked 请求体、Expect: 100-continue 照常转发（以前这两个头透传给 fetch 被拒收，回源 502）", async () => {
+  await withBackend(null, async ({ url, seen }) => {
+    const { specPath } = fixture();
+    await withServer({ specPath, backendBaseUrl: url }, async ({ base }) => {
+      const body = JSON.stringify({ blob: "x".repeat(200_000) });
+      // 不给 content-length，node:http 就按 chunked 发
+      const chunked = await sendRaw(base, "/outside", { headers: { "content-type": "application/json" }, body });
+      assert.equal(chunked.status, 200, chunked.text);
+      assert.equal(chunked.headers["x-mock-source"], "proxy");
+      // curl 上传超过 1MB 时自动带 Expect: 100-continue
+      const expect = await sendRaw(base, "/outside", {
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), expect: "100-continue" },
+        body,
+        waitContinue: true,
+      });
+      assert.equal(expect.status, 200, expect.text);
+      assert.equal(seen.length, 2);
+      for (const req of seen) {
+        assert.equal(req.rawBody.toString(), body, "请求体字节级送达");
+        assert.equal(req.headers.expect, undefined);
+      }
+    });
+  });
+});
+
+test("状态码只认 200–599：手改文件里的 1xx 当没写；__mockStatus=101 / 999 当没传，请求不挂起也不 500", async () => {
+  const { specPath, mockRulesFile } = fixture({
+    rules: [{ method: "GET", path: "/outside", status: 150, response: { ok: 1 } }],
+  });
+  await withServer({ specPath, mockRulesFile }, async ({ get }) => {
+    const res = await get("/outside");
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: 1 });
+    for (const status of ["101", "999", "abc"]) {
+      const forced = await get(`/outside?__mockStatus=${status}`);
+      assert.equal(forced.status, 200, `__mockStatus=${status}`);
+    }
+    assert.equal((await get("/outside?__mockStatus=418")).status, 418);
   });
 });

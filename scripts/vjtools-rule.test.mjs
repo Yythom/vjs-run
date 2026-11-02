@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -181,7 +181,7 @@ test("校验失败均非 0 退出并带原因", () => {
     [["set", "--method", "GET POST", "--path", "/api/a"], "method 不支持：GET POST"],
     [["set", "--method", "GET", "--path", "/api/a", "--delay", "600001"], "delay 最多 600000 毫秒"],
     [["set", "--method", "GET", "--path", "/api/a", "--status", "abc"], "status 必须是整数"],
-    [["set", "--method", "GET", "--path", "/api/a", "--status", "2000"], "status 必须在 100–599 之间"],
+    [["set", "--method", "GET", "--path", "/api/a", "--status", "2000"], "status 必须在 200–599 之间"],
     [["set", "--method", "GET", "--path", "/api/a", "--status"], "--status 需要一个整数值"],
     [["set", "--method", "GET", "--path", "/api/a", "--delay", "-1"], "delay 必须是大于等于 0 的整数"],
     [["set", "--method", "GET", "--path", "/api/a", "--delay"], "--delay 需要一个毫秒数"],
@@ -340,6 +340,54 @@ test("list 展示变体摘要（●启用 ○停用）；--scene 下 set-variant
   assert.equal(fs.existsSync(rulesFile(ud)), false); // 活动规则未被创建
   const out = run(ud, ["list", "--scene", "联调"]).out;
   assert.match(out, /▸ 变体×2：●命中 ○停用/);
+});
+
+// ─── 按次返回（sequence）─────────────────────────────────────────────────────
+
+test("set-sequence：stdin 整个数组整体替换；规则不存在 / 没有 stdin / 项写错都报错且不写盘", () => {
+  const ud = freshUserData();
+  const target = ["--method", "GET", "--path", "/api/a"];
+  const missing = run(ud, ["set-sequence", ...target], '[{"response":1}]');
+  assert.notEqual(missing.code, 0);
+  assert.match(missing.err, /未找到规则.*先用 set 创建/s);
+
+  run(ud, ["set", ...target], '{"done":true}');
+  const ok = run(ud, ["set-sequence", ...target], '[{"response":{"step":1}},{"status":401,"delay":300,"response":{"step":2}}]');
+  assert.equal(ok.code, 0, ok.err);
+  assert.match(ok.out, /前 2 次依次返回/);
+  let rule = readJson(rulesFile(ud))[0];
+  assert.deepEqual(rule.sequence, [{ response: { step: 1 } }, { status: 401, delay: 300, response: { step: 2 } }]);
+  assert.deepEqual(rule.response, { done: true });
+
+  const noStdin = run(ud, ["set-sequence", ...target]);
+  assert.notEqual(noStdin.code, 0);
+  assert.match(noStdin.err, /需要从 stdin 传入 JSON 数组/);
+  const bare = run(ud, ["set-sequence", ...target], '[{"rc":0}]');
+  assert.notEqual(bare.code, 0);
+  assert.match(bare.err, /sequence 第 1 项缺少 response/);
+  assert.equal(readJson(rulesFile(ud))[0].sequence.length, 2, "报错时不改文件");
+
+  // 整体替换，不逐项合并
+  run(ud, ["set-sequence", ...target], '[{"response":{"only":1}}]');
+  assert.deepEqual(readJson(rulesFile(ud))[0].sequence, [{ response: { only: 1 } }]);
+});
+
+test("set（规则级）不丢已有 sequence；set-sequence 传 [] 清空后字段消失；list 展示摘要", () => {
+  const ud = freshUserData();
+  const target = ["--method", "GET", "--path", "/api/a"];
+  run(ud, ["set", ...target], '{"done":1}');
+  run(ud, ["set-sequence", ...target], '[{"response":1},{"status":401,"delay":300,"response":2}]');
+  run(ud, ["set", ...target, "--status", "201"], '{"done":2}');
+  const rule = readJson(rulesFile(ud))[0];
+  assert.equal(rule.sequence.length, 2);
+  assert.equal(rule.status, 201);
+
+  assert.match(run(ud, ["list"]).out, /▸ 按次返回×2：#1 → #2\[401\]\+300ms → 顶层/);
+
+  const cleared = run(ud, ["set-sequence", ...target], "[]");
+  assert.equal(cleared.code, 0, cleared.err);
+  assert.match(cleared.out, /已清空按次返回/);
+  assert.equal("sequence" in readJson(rulesFile(ud))[0], false);
 });
 
 // ─── 场景 ────────────────────────────────────────────────────────────────────
@@ -590,6 +638,40 @@ test("--file / MOCK_RULES_FILE 覆盖活动规则文件路径", () => {
   });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(readJson(viaEnv).length, 1);
+});
+
+// 规则文件和 config.json 都可能被几个进程同时写（app + 命令行，或几个命令行）。以前共用一个固定的 .tmp：
+// 互相截断，或者一方 rename 时另一方已经把它挪走，抛 ENOENT 中途退出（改之前 40 个进程里 30 来个报错）
+test("写盘并发：8 个进程同时连写规则文件 / config.json，不报错、不写坏、不残留 .tmp", async () => {
+  const ud = freshUserData();
+  const targets = [
+    {
+      module: new URL("../src/mock/rules.js", import.meta.url).href,
+      file: rulesFile(ud),
+      write: (file, k) => `m.writeRulesFile(${JSON.stringify(file)}, [{ method: "GET", path: "/a", response: "x".repeat(${k} * 3000 + i) }])`,
+    },
+    {
+      module: new URL("../src/cli/config.js", import.meta.url).href,
+      file: path.join(ud, "config.json"),
+      write: (file, k) => `m.patchRawConfig(${JSON.stringify(file)}, { mockPort: 3000 + i, pad: "x".repeat(${k} * 3000) })`,
+    },
+  ];
+  for (const target of targets) {
+    const results = await Promise.all(
+      Array.from({ length: 8 }, (_, k) =>
+        new Promise((resolve) => {
+          const code = `const m = await import(${JSON.stringify(target.module)});\nfor (let i = 0; i < 60; i++) ${target.write(target.file, k + 1)};`;
+          const child = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: ["ignore", "ignore", "pipe"] });
+          let err = "";
+          child.stderr.on("data", (chunk) => (err += chunk));
+          child.on("close", (exitCode) => resolve({ exitCode, err }));
+        }),
+      ),
+    );
+    for (const { exitCode, err } of results) assert.equal(exitCode, 0, err);
+    assert.doesNotThrow(() => readJson(target.file));
+    assert.deepEqual(fs.readdirSync(path.dirname(target.file)).filter((f) => f.endsWith(".tmp")), []);
+  }
 });
 
 test("写盘原子性：不残留 .tmp 文件", () => {

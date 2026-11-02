@@ -24,10 +24,11 @@ import { unwrapRawJson } from "./json-lossless.js";
 
 const VARIANT_NAME_MAX = 60;
 
-// 合法 HTTP 状态码：范围外的值 res.writeHead 会抛 ERR_HTTP_INVALID_STATUS_CODE，
-// 请求变成 500。保存路径（规则顶层 + 变体）都用它把关。
+// 能当最终响应的 HTTP 状态码：599 以上 res.writeHead 会抛 ERR_HTTP_INVALID_STATUS_CODE，请求变成 500；
+// 1xx 是「信息性」状态码，不能当最终响应——101 前端收到一个没有 body 的 101，其余 1xx 直接把连接挂断。
+// 保存路径（规则顶层 / 变体 / sequence）、读取路径（手改的文件）和请求控制参数都用它把关。
 export function isValidHttpStatus(status) {
-  return Number.isInteger(status) && status >= 100 && status <= 599;
+  return Number.isInteger(status) && status >= 200 && status <= 599;
 }
 
 // 延迟上限：模拟超时用不着更久，写成 999999999 这类值请求会被挂几天
@@ -112,7 +113,7 @@ export function normalizeVariantLoose(variant) {
   const out = { name, enabled: variant.enabled !== false, when, response: variant.response };
 
   const status = Number(variant.status);
-  if (variant.status !== undefined && Number.isInteger(status)) out.status = status;
+  if (variant.status !== undefined && isValidHttpStatus(status)) out.status = status;
   const delay = Number(variant.delay);
   if (variant.delay !== undefined && Number.isInteger(delay) && delay >= 0) out.delay = delay;
 
@@ -143,7 +144,7 @@ export function normalizeVariantStrict(variant, label) {
     const status = Number(variant.status);
     if (!Number.isInteger(status)) throw new Error(`${label}的 status 必须是整数`);
     if (!isValidHttpStatus(status)) {
-      throw new Error(`${label}的 status 必须在 100–599 之间：${status}`);
+      throw new Error(`${label}的 status 必须在 200–599 之间：${status}`);
     }
     out.status = status;
   }

@@ -332,3 +332,12 @@ export async function clearMockHistory() {
   if (!current) return;
   await fetch(`${current.url}/__mock/history`, { method: "DELETE" }).catch(() => {});
 }
+
+// 按次返回（规则 sequence）的计数也在后台进程内存里；mock 没在跑就不用清，下次启动本来就从头开始。
+// app 开着时在终端 vjtools mock start 起的、app 还没接上的，先接上再清——否则提示「已清零」其实没清
+export async function resetMockSequence() {
+  const target = current ?? (await refreshMockStatus()).running;
+  if (!target) return;
+  const res = await fetch(`${target.url}/__mock/sequence/reset`, { method: "POST" }).catch(() => null);
+  if (!res?.ok) throw new Error(`清零失败：${res ? `HTTP ${res.status}` : "连接不上 mock"}`);
+}

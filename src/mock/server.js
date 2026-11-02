@@ -6,7 +6,7 @@ import cors from "cors";
 import chokidar from "chokidar";
 import { parse as parseCookie } from "cookie";
 import { mockFromSchema, tunePayloadForRequest } from "./data.js";
-import { selectVariant } from "./variant-match.js";
+import { isValidHttpStatus, selectVariant } from "./variant-match.js";
 import { isRuleEntry, normalizeMockRule } from "./rules.js";
 import { parseJsonLossless } from "./json-lossless.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
@@ -46,23 +46,25 @@ const corsMiddleware = cors({
     "x-mock-source",
     "x-mock-rule",
     "x-mock-variant",
+    "x-mock-sequence",
   ],
   optionsSuccessStatus: 204,
 });
 
 // 把「本次响应是谁给的」写进响应头：curl 调试面板、浏览器 devtools 都能直接看到
-// 走的是 mock 还是回源、命中哪条规则、命中哪个变体。
+// 走的是 mock 还是回源、命中哪条规则、命中哪个变体、是按次返回的第几项（x-mock-sequence: 2/3）。
 //
 // 三个值都必须 encodeURIComponent：HTTP 头只允许 latin1，setHeader 遇到中文会抛
 // ERR_INVALID_CHAR，被外层 catch 兜成 500——本来能正常返回的请求反而挂掉。
 // source 看着像枚举，其实 override 命中时是 `file:<绝对路径>`，用户目录或
 // mockDataDir 含中文就会踩到；variantName 是用户自己起的名字，中文更是常态。
-function setMockMetaHeaders(res, { source, rulePath, variantName }) {
+function setMockMetaHeaders(res, { source, rulePath, variantName, sequenceStep }) {
   if (res.headersSent) return;
   res.setHeader("x-mock-source", encodeURIComponent(source));
   if (rulePath) res.setHeader("x-mock-rule", encodeURIComponent(rulePath));
   if (variantName)
     res.setHeader("x-mock-variant", encodeURIComponent(variantName));
+  if (sequenceStep) res.setHeader("x-mock-sequence", sequenceStep);
 }
 
 async function startMockServer({
@@ -165,6 +167,19 @@ function createMockServer({
     } catch {}
   };
 
+  // 按次返回（规则的 sequence）：每条规则已经用掉了几项。键是规则对象——规则按 mtime 缓存，
+  // 规则文件一改就解析出新对象，计数自然从头开始；/__mock/sequence/reset 换一张新表即全部清零。
+  // 必须在 await sleep(delay) 之前同步取项，并发请求才不会拿到同一项
+  let sequenceUsed = new WeakMap();
+  const takeSequenceItem = (rule) => {
+    const sequence = rule?.sequence;
+    if (!sequence?.length) return undefined;
+    const used = sequenceUsed.get(rule) ?? 0;
+    if (used >= sequence.length) return undefined;
+    sequenceUsed.set(rule, used + 1);
+    return { ...sequence[used], step: `${used + 1}/${sequence.length}` };
+  };
+
   return http.createServer(async (req, res) => {
     try {
       await runMiddleware(req, res, corsMiddleware);
@@ -200,11 +215,22 @@ function createMockServer({
         return;
       }
 
-      // 请求历史 / 事件流里有完整的请求体、响应体（可能带登录 token），只给本机程序用
+      // 请求历史 / 事件流里有完整的请求体、响应体（可能带登录 token），只给本机程序用；
+      // 按次返回的清零也只给本机，免得局域网里连着同一个 mock 的人互相把计数清掉
       if (PRIVATE_PATHS.has(requestUrl.pathname) && !isPrivateRequest(req)) {
         sendJsonPretty(res, 403, {
-          error: "只允许本机程序访问（vjtools app / vjtools 命令 / curl），浏览器页面和其它机器不能读取",
+          error: "只允许本机程序访问（vjtools app / vjtools 命令 / curl），浏览器页面和其它机器不能访问",
         });
+        return;
+      }
+
+      if (requestUrl.pathname === "/__mock/sequence/reset") {
+        if (req.method !== "POST") {
+          sendJsonPretty(res, 405, { error: "只支持 POST" });
+          return;
+        }
+        sequenceUsed = new WeakMap();
+        sendJsonPretty(res, 200, { ok: true });
         return;
       }
 
@@ -269,7 +295,9 @@ function createMockServer({
         let consumedRawBody;
         if (
           customRule &&
-          (customRule.response !== undefined || customRule.variants?.length)
+          (customRule.response !== undefined ||
+            customRule.variants?.length ||
+            customRule.sequence?.length)
         ) {
           const rawBody = await readRawBody(req);
           consumedRawBody = rawBody;
@@ -279,27 +307,31 @@ function createMockServer({
             headers: req.headers,
             body,
           });
-          // 只有变体、都没命中、又无顶层 response：与今天一样不认此规则，落回 proxy/404
-          const effectiveResponse = variant ? variant.response : customRule.response;
+          // 变体优先；没命中变体才按次取 sequence，用完回到顶层 response
+          const step = variant ? undefined : takeSequenceItem(customRule);
+          const picked = variant ?? step;
+          // 没有可用的变体 / sequence 项、又无顶层 response：不认此规则，落回 proxy/404
+          const effectiveResponse = picked ? picked.response : customRule.response;
           if (effectiveResponse !== undefined) {
-            const ruleDelay = variant?.delay ?? customRule.delay;
+            const ruleDelay = picked?.delay ?? customRule.delay;
             const requestControls = getRequestControls(req, requestUrl, {
               delay: typeof ruleDelay === "number" ? ruleDelay : delay,
               forcedStatus,
             });
             await sleep(requestControls.delay);
-            // 与 swagger 路由一致：请求控制参数（__mockStatus/x-mock-status）＞ 命中变体 ＞ 规则顶层
+            // 与 swagger 路由一致：请求控制参数（__mockStatus/x-mock-status）＞ 变体 / sequence 项 ＞ 规则顶层
             const status =
-              requestControls.status || Number(variant?.status ?? customRule.status) || 200;
-            const mockSource = variant ? "rule-variant" : "rule-custom";
+              requestControls.status || Number(picked?.status ?? customRule.status) || 200;
+            const mockSource = variant ? "rule-variant" : step ? "rule-sequence" : "rule-custom";
             setMockMetaHeaders(res, {
               source: mockSource,
               rulePath: customRule.path,
               variantName: variant?.name,
+              sequenceStep: step?.step,
             });
             const responseText = sendJson(res, status, effectiveResponse);
             logRequest(
-              `MOCK:${mockSource}${variant ? `(${variant.name})` : ""}`,
+              `MOCK:${mockSource}${variant ? `(${variant.name})` : step ? `(${step.step})` : ""}`,
               req.method,
               status,
               Date.now() - requestStart,
@@ -318,6 +350,7 @@ function createMockServer({
               status,
               durationMs: Date.now() - requestStart,
               ...(variant ? { variant: variant.name } : {}),
+              ...(step ? { sequence: step.step } : {}),
               requestBody: capForRecord(body).value,
               responseBody: cappedResponse.value,
               responseTruncated: cappedResponse.truncated,
@@ -375,7 +408,10 @@ function createMockServer({
             body,
           })
         : undefined;
-      const ruleDelay = variant?.delay ?? mockRule?.delay;
+      // 变体优先；没命中变体才按次取 sequence（有规则就一定走 mock，不会白白用掉一项）
+      const step = mockRule && !variant ? takeSequenceItem(mockRule) : undefined;
+      const picked = variant ?? step;
+      const ruleDelay = picked?.delay ?? mockRule?.delay;
       const requestControls = getRequestControls(req, requestUrl, {
         delay: typeof ruleDelay === "number" ? ruleDelay : delay,
         forcedStatus,
@@ -429,8 +465,8 @@ function createMockServer({
 
       await sleep(requestControls.delay);
 
-      // 优先级：请求控制参数（__mockStatus/x-mock-*）＞ 命中变体 ＞ 规则顶层
-      const ruleStatus = variant?.status ?? mockRule?.status;
+      // 优先级：请求控制参数（__mockStatus/x-mock-*）＞ 变体 / sequence 项 ＞ 规则顶层
+      const ruleStatus = picked?.status ?? mockRule?.status;
       const response = selectResponse(
         route.operation.responses || {},
         requestControls.status || (ruleStatus ? Number(ruleStatus) : undefined),
@@ -445,7 +481,7 @@ function createMockServer({
         body,
         controls: requestControls,
       };
-      const effectiveResponse = variant ? variant.response : mockRule?.response;
+      const effectiveResponse = picked ? picked.response : mockRule?.response;
       const payload =
         effectiveResponse !== undefined
           ? effectiveResponse
@@ -460,13 +496,15 @@ function createMockServer({
               });
       const mockSource = variant
         ? "rule-variant"
-        : mockRule?.response !== undefined
-          ? "rule-response"
-          : mockRule?.status
-            ? "rule-control"
-            : overridePayload.found
-              ? `file:${overridePayload.filePath}`
-              : "openapi-sample";
+        : step
+          ? "rule-sequence"
+          : mockRule?.response !== undefined
+            ? "rule-response"
+            : mockRule?.status
+              ? "rule-control"
+              : overridePayload.found
+                ? `file:${overridePayload.filePath}`
+                : "openapi-sample";
 
       // rulePath 只在真有规则命中时才发：openapi-sample / file: override 这些
       // 来源压根没有「规则」，拿 route.fullPath 顶上会让 x-mock-rule 变成
@@ -475,10 +513,11 @@ function createMockServer({
         source: mockSource,
         rulePath: mockRule?.path,
         variantName: variant?.name,
+        sequenceStep: step?.step,
       });
       const responseText = sendPayload(res, response.status, payload, contentType);
       logRequest(
-        `MOCK:${mockSource}${variant ? `(${variant.name})` : ""}`,
+        `MOCK:${mockSource}${variant ? `(${variant.name})` : step ? `(${step.step})` : ""}`,
         req.method,
         response.status,
         Date.now() - requestStart,
@@ -502,6 +541,7 @@ function createMockServer({
           status: response.status,
           durationMs: Date.now() - requestStart,
           ...(variant ? { variant: variant.name } : {}),
+          ...(step ? { sequence: step.step } : {}),
           requestBody: capForRecord(body).value,
           responseBody: cappedResponse.value,
           responseTruncated: cappedResponse.truncated,
@@ -1356,12 +1396,28 @@ function resolveBackendTargetUrl(requestUrl, backendBaseUrl) {
   return baseUrl;
 }
 
+// 回源不透传的请求头：host / connection / content-length 由 fetch 自己管理；其余是只对前端到 mock
+// 这一段连接有效的逐跳头。transfer-encoding / keep-alive / upgrade / expect 透传过去 fetch 会直接拒收，
+// 回源变成 502——请求体走 chunked 编码（Node 脚本、流式上传）、curl 上传超过 1MB 自动带的
+// Expect: 100-continue 都会踩到；te / trailer / proxy-connection 同属逐跳头，一并去掉
+const PROXY_SKIP_REQUEST_HEADERS = new Set([
+  "host",
+  "connection",
+  "content-length",
+  "transfer-encoding",
+  "keep-alive",
+  "upgrade",
+  "expect",
+  "te",
+  "trailer",
+  "proxy-connection",
+]);
+
 function proxyHeaders(headers, pathname) {
   // cookie@1.x parse 行为与原手写版一致：同名 cookie 保留首次出现、
   // value 仅在含 % 时 decodeURIComponent、解码失败回退原值。
   const cookies = parseCookie(getHeaderValue(headers, "cookie") || "");
-  // host / connection / content-length 都由 fetch 自己管理，无需透传
-  const skip = new Set(["host", "connection", "content-length"]);
+  const skip = PROXY_SKIP_REQUEST_HEADERS;
 
   const incomingAuthorization = getHeaderValue(headers, "authorization");
   const incomingMgmtauth = getHeaderValue(headers, "mgmtauth");
@@ -1423,7 +1479,7 @@ function getHeaderValue(headers, name) {
 
 // ─── 本机专用接口 ──────────────────────────────────────────────────────────────
 
-const PRIVATE_PATHS = new Set(["/__mock/history", "/__mock/events"]);
+const PRIVATE_PATHS = new Set(["/__mock/history", "/__mock/events", "/__mock/sequence/reset"]);
 
 function isLoopbackAddress(address = "") {
   return address === "::1" || address.startsWith("127.") || address.startsWith("::ffff:127.");
@@ -1508,7 +1564,8 @@ function truncateLogValue(value, maxLength = 2000) {
 function getRequestControls(req, requestUrl, defaults = {}) {
   return {
     code: requestUrl.searchParams.get("__mockCode") || req.headers["x-mock-code"],
-    status: numberOrUndefined(
+    // 同样只认 200–599：__mockStatus=101 / 999 这类值当没传，不让请求挂起或变成 500
+    status: httpStatusOrUndefined(
       requestUrl.searchParams.get("__mockStatus") ||
         req.headers["x-mock-status"] ||
         defaults.forcedStatus,
@@ -1522,9 +1579,9 @@ function getRequestControls(req, requestUrl, defaults = {}) {
   };
 }
 
-function numberOrUndefined(value) {
+function httpStatusOrUndefined(value) {
   const number = Number(value);
-  return Number.isFinite(number) && number > 0 ? number : undefined;
+  return isValidHttpStatus(number) ? number : undefined;
 }
 
 function numberOrDefault(value, fallback) {

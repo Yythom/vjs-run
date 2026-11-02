@@ -320,8 +320,8 @@ function parseLimit(raw, fallback) {
 function describeSource(entry) {
   if (entry.kind !== "mock") return entry.kind;
   const source = entry.source ? `:${entry.source}` : "";
-  const variant = entry.variant ? `(${entry.variant})` : "";
-  return `mock${source}${variant}`;
+  const detail = entry.variant ? `(${entry.variant})` : entry.sequence ? `(${entry.sequence})` : "";
+  return `mock${source}${detail}`;
 }
 
 function queryString(query) {
@@ -383,5 +383,32 @@ export async function history(values) {
     );
   }
   console.log("— 最新在上；看单条的请求体 / 响应体：vjtools mock history --id <编号>");
+  return 0;
+}
+
+// ─── reset-sequence ──────────────────────────────────────────────────────────
+
+/** 按次返回的计数清零：所有规则的 sequence 下一次请求都从第 1 项开始 */
+export async function resetSequence() {
+  const paths = cliPaths();
+  const running = await detectRunningMockLenient(paths);
+  // 计数只在运行中的 mock 内存里，没在跑就谈不上清零：下次启动本来就从头开始
+  if (!running) {
+    console.log("mock 未在运行，不用清零：下次启动后按次返回从第 1 项开始。");
+    return 0;
+  }
+  if (running.owner === "other") {
+    throw new CliError(`这个数据目录的 mock 没在运行，端口上的是${ownerLabel(running)}。`, NOT_RUNNING_EXIT_CODE);
+  }
+
+  const res = await fetch(`${running.url}/__mock/sequence/reset`, { method: "POST" }).catch(() => null);
+  if (!res?.ok) {
+    throw new CliError(
+      res?.status === 404
+        ? "当前运行的 mock 不支持按次返回（旧版本），用 vjtools mock restart 换成新版本。"
+        : `清零失败：${res ? `HTTP ${res.status}` : "连接失败"}`,
+    );
+  }
+  console.log("✔ 已清零：所有规则的按次返回下一次请求从第 1 项开始");
   return 0;
 }

@@ -1,12 +1,15 @@
 // mock 规则的唯一实现：字段规整 / 校验、按 method+path 定位与增删改、规则文件读写。
 // app（server.js 读取、service.js 保存、ipc.js 场景）和 vjtools CLI（vjtools mock rule）都用这里。
 //
-// 规则结构：{ enabled, method, path, status?, delay?, response?, variants? }
+// 规则结构：{ enabled, method, path, status?, delay?, response?, sequence?, variants? }
+// 取哪份返回：命中的变体 ＞ sequence 里还没用完的项（按次依次取）＞ 顶层 response。
+// sequence 每一项与规则顶层「返回什么」那部分同构：{ status?, delay?, response }。
 // 给规则加字段时，只需要改本文件的两个规整函数（读取用的 Loose、保存用的 Strict），
 // 两者都是按字段重建对象，漏改哪一个，新字段就会在那条路径上被静默丢弃。
 //
 // 纯 node 模块，不能 import electron / config store。
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { parseJsonLossless } from "./json-lossless.js";
@@ -40,6 +43,26 @@ export function isRuleEntry(rule) {
   return typeof rule === "string" || (rule !== null && typeof rule === "object" && !Array.isArray(rule));
 }
 
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// sequence 读取路径：缺 response 的项静默丢弃（与变体一致），status / delay 不合法的只丢那个字段
+function normalizeSequenceLoose(sequence) {
+  if (!Array.isArray(sequence)) return [];
+  return sequence
+    .filter((item) => isPlainObject(item) && item.response !== undefined)
+    .map((item) => {
+      const status = Number(item.status);
+      const delay = Number(item.delay);
+      return {
+        ...(item.status !== undefined && isValidHttpStatus(status) ? { status } : {}),
+        ...(item.delay !== undefined && Number.isInteger(delay) && delay >= 0 ? { delay } : {}),
+        response: item.response,
+      };
+    });
+}
+
 /** 读取路径（加载热路径 / 编辑器展示）：宽松，非法变体静默丢弃，手改文件不至于整条规则失效 */
 export function normalizeMockRule(rule) {
   // 字符串简写只给得出 path、给不出 method，因此不再是可命中的规则
@@ -55,17 +78,21 @@ export function normalizeMockRule(rule) {
   const variants = Array.isArray(rule.variants)
     ? rule.variants.map(normalizeVariantLoose).filter(Boolean)
     : [];
+  const sequence = normalizeSequenceLoose(rule.sequence);
 
   const method = String(rule.method ?? "").trim().toUpperCase();
   if (!method || method === "*") warnMissingMethod(rule.path);
+  // 手改文件写出的 1xx / 999 这类状态码当没写：不然请求要么挂起、要么 500
+  const status = Number(rule.status);
 
   return {
     method,
     path: rule.path,
     response: rule.response,
-    status: rule.status,
+    status: rule.status !== undefined && isValidHttpStatus(status) ? status : undefined,
     delay: rule.delay,
     enabled: rule.enabled !== false,
+    ...(sequence.length ? { sequence } : {}),
     ...(variants.length ? { variants } : {}),
   };
 }
@@ -79,7 +106,7 @@ export function parseRuleStatus(value, label = "") {
   if (!hasValue(value)) return undefined;
   const status = Number(value);
   if (!Number.isInteger(status)) throw new Error(`${label}status 必须是整数：${value}`);
-  if (!isValidHttpStatus(status)) throw new Error(`${label}status 必须在 100–599 之间：${value}`);
+  if (!isValidHttpStatus(status)) throw new Error(`${label}status 必须在 200–599 之间：${value}`);
   return status;
 }
 
@@ -91,6 +118,25 @@ export function parseRuleDelay(value, label = "") {
   }
   if (delay > MAX_DELAY_MS) throw new Error(`${label}delay 最多 ${MAX_DELAY_MS} 毫秒（10 分钟）：${value}`);
   return delay;
+}
+
+// sequence 保存路径：每一项必须是 { status?, delay?, response }。最常见的写错是把响应体直接
+// 放进数组（少包了一层 response），报错里点明；空数组视为没有 sequence
+function normalizeSequenceStrict(sequence, ruleLabel) {
+  if (!Array.isArray(sequence)) throw new Error(`${ruleLabel}的 sequence 必须是数组`);
+  return sequence.map((item, index) => {
+    const label = `${ruleLabel}的 sequence 第 ${index + 1} 项`;
+    const shape = '每一项写成 { "response": <响应体>, "status": 可选, "delay": 可选 }';
+    if (!isPlainObject(item)) throw new Error(`${label}必须是对象（${shape}）`);
+    if (item.response === undefined) throw new Error(`${label}缺少 response（${shape}）`);
+    const status = parseRuleStatus(item.status, `${label}的 `);
+    const delay = parseRuleDelay(item.delay, `${label}的 `);
+    return {
+      ...(status !== undefined ? { status } : {}),
+      ...(delay !== undefined ? { delay } : {}),
+      response: item.response,
+    };
+  });
 }
 
 /**
@@ -130,6 +176,10 @@ export function normalizeRuleStrict(rule, label = "") {
     source.variants !== undefined && source.variants !== null
       ? normalizeVariantsStrict(source.variants, label || "该规则")
       : [];
+  const sequence =
+    source.sequence !== undefined && source.sequence !== null
+      ? normalizeSequenceStrict(source.sequence, label || "该规则")
+      : [];
 
   return {
     enabled: source.enabled !== false,
@@ -138,6 +188,7 @@ export function normalizeRuleStrict(rule, label = "") {
     ...(status !== undefined ? { status } : {}),
     ...(delay !== undefined ? { delay } : {}),
     ...(source.response !== undefined ? { response: source.response } : {}),
+    ...(sequence.length ? { sequence } : {}),
     ...(variants.length ? { variants } : {}),
   };
 }
@@ -218,10 +269,19 @@ export function readRulesFile(file) {
   throw new Error(`规则文件顶层必须是数组：${file}`);
 }
 
-/** 原子写入：先写 .tmp 再 rename，mock server 的 watcher / mtime 缓存不会读到半个文件 */
+/**
+ * 原子写入：先写 .tmp 再 rename，mock server 的 watcher / mtime 缓存不会读到半个文件。
+ * 临时文件名带进程号 + 随机串：app 和命令行（或几个命令行）同时写同一个文件时各写各的，
+ * 共用一个 .tmp 会互相截断写成坏 JSON，或者 rename 时另一方已经把它挪走（ENOENT）
+ */
 export function writeRulesFile(file, rules) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(rules, null, 2)}\n`, "utf-8");
-  fs.renameSync(tmp, file);
+  const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(rules, null, 2)}\n`, "utf-8");
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }

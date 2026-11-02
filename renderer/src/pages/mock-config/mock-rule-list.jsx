@@ -118,11 +118,21 @@ const RuleListItem = memo(function RuleListItem({
         </span>
         
         {/* Modern micro-interaction action badges */}
-        <div className="relative shrink-0 flex items-center justify-end h-5 w-24">
-          <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1.5 transition-all duration-250 group-hover:opacity-0 group-hover:scale-95 group-hover:pointer-events-none">
+        {/* 徽标层占位（不绝对定位）：变体、按次两个徽标同时出现时把槽位撑宽、让路径省略，不会被挤成两行；
+            悬停按钮层仍叠在上面，min-w-24 给「快速配置」留够位置 */}
+        <div className="relative shrink-0 flex items-center justify-end h-5 min-w-24">
+          <div className="flex items-center gap-1.5 transition-all duration-250 group-hover:opacity-0 group-hover:scale-95 group-hover:pointer-events-none">
             {Array.isArray(item.rule?.variants) && item.rule.variants.length > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-md border text-violet-600 bg-violet-50/50 border-violet-100 font-medium">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md border text-violet-600 bg-violet-50/50 border-violet-100 font-medium whitespace-nowrap">
                 {item.rule.variants.length} 变体
+              </span>
+            )}
+            {Array.isArray(item.rule?.sequence) && item.rule.sequence.length > 0 && (
+              <span
+                title={`按次返回 ${item.rule.sequence.length} 项`}
+                className="text-[10px] px-1.5 py-0.5 rounded-md border text-sky-600 bg-sky-50/50 border-sky-100 font-medium whitespace-nowrap"
+              >
+                按次 {item.rule.sequence.length}
               </span>
             )}
             {!hasRule && (

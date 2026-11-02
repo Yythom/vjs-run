@@ -698,6 +698,11 @@ function HistoryDetail({ entry }) {
             变体 <span className="text-violet-700">{entry.variant}</span>
           </span>
         )}
+        {entry.sequence && (
+          <span>
+            按次返回 <span className="text-violet-700">第 {entry.sequence} 项</span>
+          </span>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-4">

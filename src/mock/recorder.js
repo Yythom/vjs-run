@@ -101,9 +101,10 @@ export function handleRecordedEntry(entry) {
     path: entry.matchedPath || entry.path,
     response: entry.responseBody,
   };
-  // 录制只产出顶层 response，不生成变体；但会话内同 key 已录到的变体要保留，
-  // 避免重复请求把手工配置的 variants 覆盖掉
+  // 录制只产出顶层 response，不生成变体 / sequence；但会话内同 key 已有的要保留，
+  // 避免重复请求把手工配置的 variants / sequence 覆盖掉
   const prev = session.rules.get(ruleKey(rule));
+  if (prev?.sequence) rule.sequence = prev.sequence;
   if (prev?.variants) rule.variants = prev.variants;
   session.rules.set(ruleKey(rule), rule);
   try {

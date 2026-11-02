@@ -4,6 +4,7 @@
 // 整体 normalize 会把 CLI 不认识的新字段（app 新版加的）静默丢掉。app 监听 config.json，
 // 自己会 normalize 一遍。字段默认值与 normalize.js 保持一致。
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -55,10 +56,16 @@ export function readMockConfig(configFile) {
 export function patchRawConfig(configFile, updates) {
   const next = { ...readRawConfig(configFile), ...updates };
   fs.mkdirSync(path.dirname(configFile), { recursive: true });
-  const tmp = `${configFile}.tmp`;
-  // electron-store 默认用 tab 缩进，保持一致免得 app 和 CLI 来回改格式
-  fs.writeFileSync(tmp, `${JSON.stringify(next, null, "\t")}\n`);
-  fs.renameSync(tmp, configFile);
+  // 临时文件名各进程独立：几个 vjtools mock config 同时跑时不会抢同一个 .tmp（见 rules.js 的 writeRulesFile）
+  const tmp = `${configFile}.${process.pid}-${randomUUID()}.tmp`;
+  try {
+    // electron-store 默认用 tab 缩进，保持一致免得 app 和 CLI 来回改格式
+    fs.writeFileSync(tmp, `${JSON.stringify(next, null, "\t")}\n`);
+    fs.renameSync(tmp, configFile);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
   return next;
 }
 

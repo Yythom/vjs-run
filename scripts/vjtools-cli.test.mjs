@@ -899,3 +899,36 @@ test("启动锁：读不出 pid 的新锁不当残留立刻删（等它写完 / 
   assert.equal(waited.code, 0, waited.err);
   assert.ok(Date.now() - began >= 900, "持有者释放之前不能抢锁");
 });
+
+test("reset-sequence：没在跑时直接说明、退出码 0；运行中清零后下一次请求从第 1 项开始，history 标出第几项", async (t) => {
+  const ctx = await setup();
+  t.after(() => cleanup(ctx));
+
+  const idle = await run(ctx, ["mock", "reset-sequence"]);
+  assert.equal(idle.code, 0, idle.err);
+  assert.match(idle.out, /mock 未在运行，不用清零/);
+
+  await run(ctx, ["mock", "rule", "set", "--method", "GET", "--path", "/api/users"], '{"done":true}');
+  await run(
+    ctx,
+    ["mock", "rule", "set-sequence", "--method", "GET", "--path", "/api/users"],
+    '[{"response":{"step":1}},{"response":{"step":2}}]',
+  );
+  assert.equal((await run(ctx, ["mock", "start"])).code, 0);
+
+  const step = async () => {
+    const res = await fetch(`${ctx.base}/api/users`);
+    return [res.headers.get("x-mock-sequence"), await res.json()];
+  };
+  assert.deepEqual(await step(), ["1/2", { step: 1 }]);
+  assert.deepEqual(await step(), ["2/2", { step: 2 }]);
+  assert.deepEqual(await step(), [null, { done: true }]);
+
+  const reset = await run(ctx, ["mock", "reset-sequence"]);
+  assert.equal(reset.code, 0, reset.err);
+  assert.match(reset.out, /已清零/);
+  assert.deepEqual(await step(), ["1/2", { step: 1 }]);
+
+  const history = await run(ctx, ["mock", "history", "-l", "1"]);
+  assert.match(history.out, /mock:rule-sequence\(1\/2\)/);
+});

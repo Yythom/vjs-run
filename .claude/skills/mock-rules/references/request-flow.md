@@ -6,10 +6,10 @@
 
 1. `/__mock/*` 调试接口 → 直接响应（见文末）。
 2. 路径**在 swagger spec 里**：
-   请求控制参数 ＞ 命中的变体 ＞ 规则顶层 `response` ＞ `mock-data/` override 文件 ＞ swagger schema 生成样本。
+   请求控制参数 ＞ 命中的变体 ＞ 还没用完的 `sequence` 项 ＞ 规则顶层 `response` ＞ `mock-data/` override 文件 ＞ swagger schema 生成样本。
    但先过 `shouldUseMock` 闸门：只有 `mockAll` 开着，或存在启用的规则 / override 文件 / 任一请求控制参数时才走 mock；
    否则有后端就**透传**，没后端则返回 **502**（故意暴露配置问题，而不是静默给一份假数据）。
-3. 路径**不在 spec 里**（后端独有接口、录制来的接口）：只认**带 `response` 的规则**（或有变体命中）。
+3. 路径**不在 spec 里**（后端独有接口、录制来的接口）：只认**带 `response` 的规则**（或有变体命中、或还有没用完的 `sequence` 项）。
    命中即返回；否则有后端就透传，没后端返回 **404 `No mock route matched`**。
    所以只带 `status` / `delay`、不带 `response` 的规则，对 spec 外的路径不生效。
 4. 同一请求能命中多条启用的规则时，**路径最具体的赢**：字面段优先于 `{param}` 段（与 swagger 路由同一套打分），
@@ -23,14 +23,16 @@
 |---|---|
 | `proxy` | 回源后端（没命中 mock） |
 | `rule-variant` | 命中规则的变体 |
+| `rule-sequence` | 规则的按次返回（`sequence`）里的某一项 |
 | `rule-custom` | spec 外路径的自定义规则 |
 | `rule-response` | 规则顶层 `response` |
 | `rule-control` | 规则只改了 status / delay，body 来自 swagger 样本 |
 | `file:<路径>` | `mock-data/` override 文件 |
 | `openapi-sample` | swagger schema 生成的样本 |
 
-命中规则时还有 `x-mock-rule`（规则 path），命中变体时还有 `x-mock-variant`（变体名）。
-透传另保留 `x-mock-proxy: true`（与 `x-mock-source: proxy` 等价，旧的判断依然可用）。
+命中规则时还有 `x-mock-rule`（规则 path），命中变体时还有 `x-mock-variant`（变体名），
+按次返回时还有 `x-mock-sequence`（`2/3` 表示共 3 项、这次是第 2 项）。
+透传另带 `x-mock-proxy: true`（与 `x-mock-source: proxy` 等价）。
 
 这三个头的值做过 `encodeURIComponent`：curl 里中文变体名长成 `%E6%9C%AA%E7%99%BB%E5%BD%95`、
 `file:` 前缀长成 `file%3A%2F…`——**不是头的值写错了**，`node -p 'decodeURIComponent("…")'` 解一下即可。
@@ -48,9 +50,9 @@
 
 | query | header | 作用 |
 |---|---|---|
-| `__mockStatus=500` | `x-mock-status: 500` | 强制 HTTP 状态码（须 > 0） |
+| `__mockStatus=500` | `x-mock-status: 500` | 强制 HTTP 状态码（200–599，范围外的当没传） |
 | `__mockDelay=3000` | `x-mock-delay: 3000` | 强制响应延迟毫秒（≥0，覆盖规则的 `delay`） |
-| `__mockCode=ERR_X` | `x-mock-code: ERR_X` | 强制信封里的业务 `code` |
+| `__mockCode=ERR_X` | `x-mock-code: ERR_X` | 按 swagger 里声明了这个业务 `code` 的那个响应返回（状态码、生成的数据都按它）；没有哪个响应声明它时只是触发 mock，`code` 不会变；命中规则时 body 仍是规则写的 |
 | `__mockEmpty=1` | `x-mock-empty: 1` | 让 swagger 生成的列表 / 分页数据返回空（`total=0`） |
 
 这几个 header 已在 CORS `allowedHeaders` 白名单里，跨域直接可用。
@@ -68,7 +70,7 @@ mock-data/<去掉开头斜杠的完整路径>/<m>.json     # 如 mock-data/api/u
 mock-data/<spec 文件名去扩展名>/<openapi 路径>.<m>.json
 ```
 
-override 命中时同样走信封化，但**不做**分页 / 长度调整（按「用户手写」对待）。
+override 命中时会套业务信封（规则见 rule-format.md「只有 mock 自己生成的数据才套业务信封」），但**不做**分页 / 长度调整。
 日常优先用规则 / 场景；只有需要长期固化一份大数据、或规则里塞不下时才用它。
 
 ## 录制（只能在 vjtools app 里开关）
@@ -77,7 +79,7 @@ override 命中时同样走信封化，但**不做**分页 / 长度调整（按�
 
 - 默认真实后端（proxy）和已命中规则（mock）的响应都录，开了「排除 mock」只录 proxy。
 - 录制期间不碰活动规则、透传照常走后端，重复请求会持续刷新场景内容。
-- 只写规则顶层 response，不生成也不清掉变体；录完「应用」即可回放。
+- 只写规则顶层 response，不生成也不清掉变体和 `sequence`；录完「应用」即可回放。
 
 「先录一遍真实接口、再用 `set-variant` 加分支」是很顺的组合。正在录制的场景不要用命令行写，原因见 SKILL.md「与 vjtools app 共存」。
 
@@ -92,9 +94,10 @@ curl -fsS "$BASE/__mock/rules"           # server 此刻实际生效的规则数
 curl -fsS "$BASE/__mock/routes"          # swagger 解析出的全部路由（确认某 path 算不算「spec 内」）
 curl -fsS "$BASE/__mock/search?q=user"   # 按关键词搜路由；命令行版是 vjtools mock routes user
 curl -fsS "$BASE/__mock/history"         # 最近 300 条请求记录；命令行版是 vjtools mock history
+curl -fsS -X POST "$BASE/__mock/sequence/reset"   # 按次返回计数清零；命令行版是 vjtools mock reset-sequence
 ```
 
-`/__mock/history` 和 `/__mock/events` 里有完整的请求体 / 响应体，**只给本机程序用**：浏览器页面（带 `Origin` 头）
+`/__mock/history` 和 `/__mock/events` 里有完整的请求体 / 响应体，`/__mock/sequence/reset` 会清掉所有人的计数，三者**只给本机程序用**：浏览器页面（带 `Origin` 头）
 和局域网里的其它机器访问会得到 403。本机用 curl、`vjtools` 命令或 vjtools app 访问不受影响。
 
 `/__mock/ui` 是给人看的浏览器调试页，你用不上，但可以让用户去开。

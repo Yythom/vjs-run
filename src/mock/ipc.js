@@ -20,6 +20,7 @@ import {
   getMockRouteMetas,
   normalizeRulesForSave,
   refreshMockStatus,
+  resetMockSequence,
   startSwaggerMock,
   stopMockService,
 } from "./service.js";
@@ -234,7 +235,7 @@ export function registerMockIpc() {
       const { output, meta } = parseCurlMeta(await runCurl(args));
       const summary = meta
         ? `HTTP ${meta.status}${meta.source ? ` · ${meta.source}` : ""}${
-            meta.variant ? `(${meta.variant})` : ""
+            meta.variant ? `(${meta.variant})` : meta.sequence ? `(${meta.sequence})` : ""
           } · ${meta.timeMs}ms`
         : "";
       sendLog(
@@ -484,6 +485,9 @@ export function registerMockIpc() {
   );
 
   ipcSafe("clear-mock-history", () => clearMockHistory());
+
+  // 按次返回的计数清零：所有规则的 sequence 下一次请求从第 1 项开始
+  ipcSafe("reset-mock-sequence", () => resetMockSequence());
 
   // 用系统默认应用打开 mock-rules.json（方便直接用编辑器改）；
   // 传 { scene } 时打开对应场景文件

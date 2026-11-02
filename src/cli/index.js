@@ -6,7 +6,7 @@
 
 import { Command, Option } from "commander";
 import { logs, restart, serve, start, status, stop } from "./mock-daemon.js";
-import { config, describe, gen, history, init, routes, sample } from "./mock-tools.js";
+import { config, describe, gen, history, init, resetSequence, routes, sample } from "./mock-tools.js";
 import { createRuleCommand } from "./rule.js";
 import { CliError, cliVersion } from "./util.js";
 
@@ -144,6 +144,14 @@ export function buildProgram() {
     .option("--json", "以 JSON 格式输出")
     .action(async (opts) => {
       const code = await history(opts);
+      if (typeof code === "number") process.exitCode = code;
+    });
+
+  mock
+    .command("reset-sequence")
+    .description("按次返回的计数清零：所有规则的 sequence 下一次请求从第 1 项开始")
+    .action(async () => {
+      const code = await resetSequence();
       if (typeof code === "number") process.exitCode = code;
     });
 

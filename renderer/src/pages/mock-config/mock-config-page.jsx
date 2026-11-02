@@ -805,13 +805,14 @@ export default function MockConfigPage() {
 
   let selectedItem = allItems.find((item) => item.key === selectedKey) || null;
   if (selectedKey === DRAFT_KEY && draft) {
-    // 草稿命中已有规则（同 method+path）时把已有变体带上，避免一次保存把变体清空
+    // 草稿命中已有规则（同 method+path）时把已有变体 / 按次返回带上，避免一次保存把它们清空
     const existingForDraft = lookupRule(draft.method || "GET", draft.path);
     selectedItem = {
       key: DRAFT_KEY,
       rule: {
         enabled: true,
         ...(existingForDraft?.variants ? { variants: existingForDraft.variants } : {}),
+        ...(existingForDraft?.sequence ? { sequence: existingForDraft.sequence } : {}),
         ...draft,
       },
       route: null,
@@ -830,11 +831,14 @@ export default function MockConfigPage() {
     const clashed =
       newKey !== editingKey && rules.find((rule) => ruleKey(rule) === newKey);
     if (clashed) {
-      const variantCount = Array.isArray(clashed.variants) ? clashed.variants.length : 0;
+      const extras = [
+        clashed.variants?.length && `${clashed.variants.length} 个变体`,
+        clashed.sequence?.length && `${clashed.sequence.length} 项按次返回`,
+      ].filter(Boolean);
       const ok = await confirm({
         title: "覆盖已有规则？",
         message:
-          `${newKey} 已经有一条规则${variantCount ? `（含 ${variantCount} 个变体）` : ""}。\n\n` +
+          `${newKey} 已经有一条规则${extras.length ? `（含 ${extras.join("、")}）` : ""}。\n\n` +
           `继续保存会用当前内容整条替换它，原规则不可恢复。`,
         confirmText: "覆盖",
         danger: true,

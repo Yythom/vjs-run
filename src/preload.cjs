@@ -97,6 +97,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   clearMockHistory: () => ipcRenderer.invoke("clear-mock-history"),
 
+  // 按次返回（规则 sequence）的计数清零
+  resetMockSequence: () => ipcRenderer.invoke("reset-mock-sequence"),
+
   // 录制：把代理到后端的真实响应固化成 mock 场景
   getMockRecording: () => ipcRenderer.invoke("get-mock-recording"),
 

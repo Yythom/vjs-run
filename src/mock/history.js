@@ -15,6 +15,7 @@ let entries = [];
  *     matchedPath, status, durationMs, source, variant?, requestBody,
  *     responseBody, responseTruncated }
  *   variant：命中 mock 规则「变体」时的变体名（source 为 "rule-variant"）
+ *   sequence：按次返回时是第几项，形如 "2/3"（source 为 "rule-sequence"）
  */
 export function recordMockRequest(entry) {
   const full = { id: ++seq, ts: Date.now(), ...entry };

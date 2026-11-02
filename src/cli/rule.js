@@ -10,6 +10,7 @@
 // set 按 method+path 幂等定位：命中则覆盖，未命中则追加，绝不动其它规则。
 // set-variant 按 (规则, --name) 幂等定位；变体必须挂在已有规则上，规则顶层
 // response 是「无变体命中」时的兜底。变体按数组顺序 first-match。
+// set-sequence 整体替换规则的 sequence（按次返回）：没命中变体的请求依次取一项，用完回到顶层 response。
 
 import fs from "node:fs";
 import path from "node:path";
@@ -296,6 +297,12 @@ const COMMANDS = {
         const summary = r.variants.map((v) => `${v.enabled === false ? "○" : "●"}${v.name}`).join(" ");
         console.log(`    ▸ 变体×${r.variants.length}：${summary}`);
       }
+      if (Array.isArray(r.sequence) && r.sequence.length) {
+        const summary = r.sequence
+          .map((item, i) => `#${i + 1}${item?.status ? `[${item.status}]` : ""}${item?.delay ? `+${item.delay}ms` : ""}`)
+          .join(" → ");
+        console.log(`    ▸ 按次返回×${r.sequence.length}：${summary} → 顶层`);
+      }
     }
   },
 
@@ -319,12 +326,13 @@ const COMMANDS = {
     const index = findRuleIndex(rules, method, rulePath);
     const existing = index >= 0 ? rules[index] : {};
 
-    // 没传的字段保留原值；variants 只由 set-variant / rm-variant 管理，这里原样带上。
+    // 没传的字段保留原值；variants 只由 set-variant / rm-variant 管理、sequence 只由 set-sequence 管理，这里原样带上。
     // 来自历史时状态码跟着那条真实响应走（200 就不写），不沿用旧值
     const next = normalizeRuleStrict({
       method,
       path: rulePath,
       variants: existing.variants,
+      sequence: existing.sequence,
       response: response !== undefined ? response : existing.response,
       status:
         flags.status !== undefined
@@ -346,7 +354,7 @@ const COMMANDS = {
     // 没收到 stdin 也照常保存（只改状态码 / 延迟是正常用法），但要说清楚，免得以为数据传进去了
     if (response === undefined) {
       if (next.response !== undefined) console.log("  stdin 没有输入：response 沿用原值");
-      else if (!next.variants?.length) console.log(await noResponseHint(method, rulePath));
+      else if (!next.variants?.length && !next.sequence?.length) console.log(await noResponseHint(method, rulePath));
     }
     console.log(`  → ${ctx.target}${ctx.applyHint}`);
   },
@@ -394,6 +402,33 @@ const COMMANDS = {
     rules[index] = normalizeRuleStrict(updated);
     writeRulesFile(ctx.target, rules);
     console.log(`✔ 已${created ? "新增" : "更新"}变体：${name}（${method} ${rulePath}）`);
+    console.log(`  → ${ctx.target}${ctx.applyHint}`);
+  },
+
+  // stdin 传整个数组，整体替换（不做逐项合并）；传 [] 清空。每一项与规则顶层同构：{ status?, delay?, response }
+  async "set-sequence"(flags, ctx) {
+    const { method, rulePath } = requireTarget(flags);
+    const rules = readRulesFile(ctx.target);
+    const index = findRuleOrFail(
+      rules,
+      method,
+      rulePath,
+      "\n  sequence 挂在已有规则上（用完回到规则顶层 response）：先用 set 创建",
+    );
+    const sequence = await readJsonStdin();
+    if (sequence === undefined) {
+      throw new CliError(
+        '需要从 stdin 传入 JSON 数组，如 [{"response":{...}},{"status":401,"response":{...}}]；传 [] 清空',
+      );
+    }
+    rules[index] = normalizeRuleStrict({ ...rules[index], sequence });
+    writeRulesFile(ctx.target, rules);
+    const count = rules[index].sequence?.length ?? 0;
+    console.log(
+      count
+        ? `✔ 已设置按次返回：前 ${count} 次依次返回 sequence 里的项，之后回到规则顶层（${method} ${rulePath}）`
+        : `✔ 已清空按次返回（${method} ${rulePath}）`,
+    );
     console.log(`  → ${ctx.target}${ctx.applyHint}`);
   },
 
@@ -622,6 +657,13 @@ export function createRuleCommand(CommandClass = Command) {
     .option("--when-header [pair]", "header 条件（key=value）", collectRepeatable)
     .option("--when-body [pair]", "body 条件（path=value）", collectRepeatable)
     .action(exec(COMMANDS["set-variant"]));
+
+  rule
+    .command("set-sequence")
+    .description("按次返回：stdin 传 JSON 数组，第 n 次请求返回第 n 项，用完回到规则顶层；传 [] 清空")
+    .option("-p, --path [path]", "规则路径")
+    .option("-m, --method [method]", "请求方法")
+    .action(exec(COMMANDS["set-sequence"]));
 
   rule
     .command("rm-variant")

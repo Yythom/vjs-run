@@ -178,6 +178,7 @@ const MODE_CONFIG = {
 const SOURCE_LABEL = {
   proxy: "回源后端（没有命中任何 mock 规则）",
   "rule-variant": "命中规则变体",
+  "rule-sequence": "命中规则的按次返回",
   "rule-custom": "命中自定义规则",
   "rule-response": "命中规则的兜底 response",
   "rule-control": "命中规则（只改了 status/delay）",
@@ -222,6 +223,11 @@ function ResultMetaStrip({ meta }) {
       {meta.variant && (
         <span className="px-1.5 py-0.5 rounded border border-violet-200 bg-violet-50/60 text-violet-700 font-medium">
           变体：{meta.variant}
+        </span>
+      )}
+      {meta.sequence && (
+        <span className="px-1.5 py-0.5 rounded border border-violet-200 bg-violet-50/60 text-violet-700 font-medium">
+          第 {meta.sequence} 项
         </span>
       )}
       {meta.rule && (

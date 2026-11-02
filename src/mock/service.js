@@ -19,6 +19,7 @@ export {
   fetchMockHistory,
   isMockRunning,
   refreshMockStatus,
+  resetMockSequence,
 } from "./daemon-client.js";
 
 export async function startSwaggerMock() {

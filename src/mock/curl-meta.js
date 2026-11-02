@@ -18,6 +18,7 @@ export const CURL_WRITE_OUT = [
   "source=%header{x-mock-source}",
   "rule=%header{x-mock-rule}",
   "variant=%header{x-mock-variant}",
+  "sequence=%header{x-mock-sequence}",
 ].join("\n");
 
 function safeDecode(value) {
@@ -54,6 +55,7 @@ export function parseCurlMeta(raw) {
       source: fields.source || "",
       rule: fields.rule || "",
       variant: fields.variant || "",
+      sequence: fields.sequence || "",
     },
   };
 }

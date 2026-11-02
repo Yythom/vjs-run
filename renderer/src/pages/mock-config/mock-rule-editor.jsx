@@ -20,9 +20,9 @@ const statusText = z.string().refine(
     const trimmed = v.trim();
     if (trimmed === "") return true;
     const status = Number(trimmed);
-    return Number.isInteger(status) && status >= 100 && status <= 599;
+    return Number.isInteger(status) && status >= 200 && status <= 599;
   },
-  { message: "HTTP status 必须是 100–599 的整数" },
+  { message: "HTTP status 必须是 200–599 的整数" },
 );
 
 const delayText = z.string().refine(
@@ -32,6 +32,21 @@ const delayText = z.string().refine(
   },
   { message: "延时必须是大于等于 0 的整数" },
 );
+
+// 必填的 JSON 文本（变体 / 按次返回的每一项都必须给出响应）
+const requiredJsonText = (message) =>
+  z.string().refine(
+    (v) => {
+      if (!v.trim()) return false;
+      try {
+        JSON.parse(v);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { message },
+  );
 
 // 变体的匹配条件：一行 = 作用域 + key + 期望值（等值匹配）
 const conditionSchema = z.object({
@@ -49,19 +64,15 @@ const variantSchema = z.object({
   status: statusText,
   delay: delayText,
   // 变体 response 必填（规则顶层才是兜底）
-  responseText: z.string().refine(
-    (v) => {
-      if (!v.trim()) return false;
-      try {
-        JSON.parse(v);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    { message: "变体 Response 必须是合法 JSON（必填）" },
-  ),
+  responseText: requiredJsonText("变体 Response 必须是合法 JSON（必填）"),
   conditions: z.array(conditionSchema).min(1, "至少要一个匹配条件"),
+});
+
+// 按次返回的一项：与规则顶层「返回什么」同构（Status / Delay / Response）
+const sequenceItemSchema = z.object({
+  status: statusText,
+  delay: delayText,
+  responseText: requiredJsonText("Response 必须是合法 JSON（必填）"),
 });
 
 const ruleSchema = z
@@ -85,6 +96,7 @@ const ruleSchema = z
       },
       { message: "Response JSON 格式错误" },
     ),
+    sequence: z.array(sequenceItemSchema),
     variants: z.array(variantSchema),
   })
   .superRefine((values, ctx) => {
@@ -178,6 +190,24 @@ function valuesToVariant(values) {
   };
 }
 
+function sequenceItemToValues(item) {
+  return {
+    status: item.status === undefined ? "" : String(item.status),
+    delay: item.delay === undefined ? "" : String(item.delay),
+    responseText: prettyJson(item.response),
+  };
+}
+
+function valuesToSequenceItem(values) {
+  const status = values.status.trim();
+  const delay = values.delay.trim();
+  return {
+    ...(status ? { status: Number(status) } : {}),
+    ...(delay ? { delay: Number(delay) } : {}),
+    response: parseJsonLossless(values.responseText),
+  };
+}
+
 // 表单的 Method 只提供 METHODS 里的选项。规则里存着别的值时（手改文件写错、
 // 早期留下的 "*"），select 会掉到第一项显示成 GET，而 RHF 内部还留着原值——
 // 界面和「保存后写进去的东西」就对不上了。先归一，保证所见即所存。
@@ -200,6 +230,7 @@ function ruleToValues(rule, route) {
         message: "success",
         data: {},
       }),
+      sequence: [],
       variants: [],
     };
   }
@@ -210,6 +241,7 @@ function ruleToValues(rule, route) {
     status: rule.status === undefined ? "" : String(rule.status),
     delay: rule.delay === undefined ? "" : String(rule.delay),
     responseText: prettyJson(rule.response),
+    sequence: Array.isArray(rule.sequence) ? rule.sequence.map(sequenceItemToValues) : [],
     variants: Array.isArray(rule.variants) ? rule.variants.map(variantToValues) : [],
   };
 }
@@ -222,6 +254,7 @@ function valuesToRule(values) {
   const responseText = values.responseText.trim();
   // 无损解析：粘贴进来的后端响应里有雪花 ID 时按原文保存（与 CLI 一致）
   const response = responseText ? parseJsonLossless(responseText) : undefined;
+  const sequence = values.sequence.map(valuesToSequenceItem);
   const variants = values.variants.map(valuesToVariant);
 
   return {
@@ -231,6 +264,7 @@ function valuesToRule(values) {
     ...(status ? { status: Number(status) } : {}),
     ...(delay ? { delay: Number(delay) } : {}),
     ...(response !== undefined ? { response } : {}),
+    ...(sequence.length ? { sequence } : {}),
     ...(variants.length ? { variants } : {}),
   };
 }
@@ -249,12 +283,16 @@ function PreviewUrl({ control, mockBaseUrl }) {
 }
 
 function FallbackResponseTitle({ control }) {
-  const variants = useWatch({ control, name: "variants" });
-  return (
-    <div className="text-xs font-bold text-slate-700">
-      {variants?.length ? "Response JSON（兜底：无变体命中时返回）" : "Response JSON"}
-    </div>
-  );
+  const [variants, sequence] = useWatch({ control, name: ["variants", "sequence"] });
+  const hint =
+    variants?.length && sequence?.length
+      ? "（兜底：无变体命中、且按次返回用完后返回）"
+      : variants?.length
+        ? "（兜底：无变体命中时返回）"
+        : sequence?.length
+          ? "（按次返回用完后返回）"
+          : "";
+  return <div className="text-xs font-bold text-slate-700">Response JSON{hint}</div>;
 }
 
 /**
@@ -800,6 +838,145 @@ function VariantsSection({ control, register, errors, onVariantCurl, requestSche
   );
 }
 
+function SequenceItemCard({ control, register, errors, index, count, onMove, onRemove }) {
+  const itemErrors = errors.sequence?.[index];
+  const message =
+    itemErrors?.status?.message || itemErrors?.delay?.message || itemErrors?.responseText?.message;
+  const moveClass =
+    "shrink-0 px-1.5 py-0.5 rounded-md border border-slate-200 bg-white text-[10px] text-slate-500 hover:bg-slate-50 font-semibold cursor-pointer transition-colors duration-150 disabled:opacity-30 disabled:cursor-not-allowed";
+
+  return (
+    <div className="border border-slate-200 rounded-xl bg-white shadow-sm shrink-0 border-l-4 border-l-sky-400">
+      <div className="px-4 py-2.5 flex items-center gap-3 border-b border-slate-100 bg-slate-50/40 flex-wrap">
+        <span className="text-xs font-bold text-slate-600 shrink-0">第 {index + 1} 次</span>
+        <input
+          {...register(`sequence.${index}.status`)}
+          placeholder="Status"
+          className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-all w-16 shrink-0 text-center font-medium outline-none"
+        />
+        <input
+          {...register(`sequence.${index}.delay`)}
+          placeholder="Delay"
+          className="bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/20 transition-all w-16 shrink-0 text-center font-medium outline-none"
+        />
+        {message && <span className="text-[11px] text-red-600 font-medium">{message}</span>}
+        <div className="flex gap-1.5 ml-auto shrink-0 items-center">
+          <button type="button" onClick={() => onMove(index, index - 1)} disabled={index === 0} title="上移" className={moveClass}>
+            ↑
+          </button>
+          <button type="button" onClick={() => onMove(index, index + 1)} disabled={index === count - 1} title="下移" className={moveClass}>
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={onRemove}
+            className="shrink-0 px-2 py-0.5 rounded-md border border-red-200 bg-red-500/5 text-[10px] text-red-600 hover:bg-red-500/10 hover:text-red-700 font-semibold cursor-pointer transition-colors duration-150"
+          >
+            删除
+          </button>
+        </div>
+      </div>
+      <div className="px-4 py-3 bg-white">
+        <div className="h-[140px] border border-slate-200 rounded-lg overflow-hidden bg-slate-50/20 shadow-inner">
+          <Controller
+            name={`sequence.${index}.responseText`}
+            control={control}
+            render={({ field }) => (
+              <JsonEditor value={field.value} onChange={field.onChange} height="100%" />
+            )}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 按次返回：没命中变体的第 n 次请求返回第 n 项，用完回到下方 Response。
+ * 计数在 mock 后台进程里：保存规则会自动从头数，不改规则想重测时点「重新计数」。
+ */
+function SequenceSection({ control, register, errors, getValues }) {
+  const { fields, append, remove, move } = useFieldArray({ control, name: "sequence" });
+  const [open, setOpen] = useState(fields.length > 0);
+
+  // 新增默认复制上一项（轮询常见的是连续几次相同的「处理中」）；第一项从下方 Response 复制一份改
+  const addItem = () => {
+    const items = getValues("sequence");
+    const last = items[items.length - 1];
+    append(
+      last
+        ? { ...last }
+        : {
+            status: "",
+            delay: "",
+            responseText:
+              getValues("responseText").trim() ||
+              prettyJson({ rc: 0, code: "SUCCESS", message: "success", data: {} }),
+          },
+    );
+    setOpen(true);
+  };
+
+  const resetCount = async () => {
+    const result = await window.electronAPI.resetMockSequence();
+    if (result?.success) toast.success("已重新计数，下一次请求从第 1 项开始");
+    else toast.error(result?.error || "重新计数失败");
+  };
+
+  return (
+    <div className="border border-slate-200/70 rounded-xl bg-white shadow-sm shrink-0 p-3.5 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="text-xs font-bold text-slate-700 inline-flex items-center gap-1.5 cursor-pointer hover:text-slate-900 transition-colors outline-none"
+        >
+          <span className={clsx("inline-block transition-transform duration-200", open && "rotate-90")}>▸</span>
+          按次返回 ({fields.length})
+        </button>
+        <span className="text-[11px] text-slate-400 truncate">
+          第 n 次请求返回第 n 项，用完回到下方 Response；命中变体的请求不计次，保存规则后从头数
+        </span>
+        <div className="ml-auto flex items-center gap-1.5 shrink-0">
+          {fields.length > 0 && (
+            <button
+              type="button"
+              onClick={resetCount}
+              title="不改规则也能让下一次请求从第 1 项开始（mock 重启、保存规则也会从头数）"
+              className="px-2.5 py-1 rounded-lg border text-xs font-semibold bg-white text-slate-600 border-slate-200 hover:bg-slate-50 cursor-pointer transition-colors duration-150"
+            >
+              重新计数
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={addItem}
+            className="px-2.5 py-1 rounded-lg border text-xs font-semibold bg-sky-500/5 text-sky-600 border-sky-200/60 hover:bg-sky-500/10 cursor-pointer transition-colors duration-150"
+          >
+            + 添加一次
+          </button>
+        </div>
+      </div>
+      {open && fields.length > 0 && (
+        <div className="flex flex-col gap-3 pt-1">
+          {fields.map((field, index) => (
+            <SequenceItemCard
+              key={field.id}
+              control={control}
+              register={register}
+              errors={errors}
+              index={index}
+              count={fields.length}
+              onMove={move}
+              onRemove={() => remove(index)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Editor 自治：内部持有表单状态 (react-hook-form + zod)。
  * 父组件只传初始 rule/route 和 onSubmit/onDelete。
@@ -1041,6 +1218,12 @@ export default function MockRuleEditor({
             errors={errors}
             onVariantCurl={handleVariantCurl}
             requestSchema={requestSchema}
+          />
+          <SequenceSection
+            control={control}
+            register={register}
+            errors={errors}
+            getValues={getValues}
           />
           <ResponseSection
             control={control}
