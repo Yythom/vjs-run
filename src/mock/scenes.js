@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseJsonLossless } from "./json-lossless.js";
+import { stripBom } from "./json-text.js";
 import { ruleKey, writeRulesFile } from "./rules.js";
 
 export function scenesDirOf(rulesFile) {
@@ -35,7 +36,7 @@ export function listScenes(scenesDir) {
       const file = path.join(scenesDir, f);
       let ruleCount = 0;
       try {
-        const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+        const parsed = JSON.parse(stripBom(fs.readFileSync(file, "utf8")));
         ruleCount = Array.isArray(parsed) ? parsed.length : 0;
       } catch {
         // 损坏的场景文件按 0 条展示，应用时会报错

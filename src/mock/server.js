@@ -9,6 +9,7 @@ import { mockFromSchema, tunePayloadForRequest } from "./data.js";
 import { isValidHttpStatus, selectVariant } from "./variant-match.js";
 import { isRuleEntry, normalizeMockRule } from "./rules.js";
 import { parseJsonLossless } from "./json-lossless.js";
+import { stripBom } from "./json-text.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
 
 const HTTP_METHODS = new Set([
@@ -644,7 +645,8 @@ function watchOpenApiSources(specPath, state, serviceAddress = "", onLog) {
 }
 
 async function loadOpenApiSpec(specPath) {
-  const raw = fs.readFileSync(path.resolve(specPath), "utf8");
+  // PowerShell 5.1 写出的 spec 常带 UTF-8 BOM，JSON.parse 不认（YAML 解析器能容忍，统一剥掉更省心）
+  const raw = stripBom(fs.readFileSync(path.resolve(specPath), "utf8"));
   const ext = path.extname(specPath).toLowerCase();
 
   if (ext === ".yaml" || ext === ".yml") {
@@ -1138,7 +1140,8 @@ function readJsonByMtime(filePath, parse, cacheKey = filePath) {
   const cached = jsonFileCache.get(cacheKey);
   if (cached && cached.mtimeMs === stat.mtimeMs) return cached.value;
 
-  const value = parse(fs.readFileSync(filePath, "utf8"));
+  // 用户手改的规则 / mock-data 文件可能在 Windows 上带 BOM
+  const value = parse(stripBom(fs.readFileSync(filePath, "utf8")));
   jsonFileCache.set(cacheKey, { mtimeMs: stat.mtimeMs, value });
   return value;
 }

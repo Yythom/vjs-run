@@ -7,6 +7,8 @@
 // 要参与比较 / String() 先过 unwrapRawJson。
 // 运行时没有 JSON.rawJSON（Node < 21）时退回普通 JSON.parse。纯模块，不依赖 node / electron。
 
+import { stripBom } from "./json-text.js";
+
 // 带 reviver 的 JSON.parse 每个值都要回调一次，比原生慢 7～8 倍；而大多数数据里根本没有大整数
 // （雪花 ID 以字符串返回的也算）。所以先原生解析、遍历一遍看有没有被舍入的整数（遍历只占解析的一成多），
 // 没有就直接用；有才带 reviver 重新解析一次。
@@ -26,9 +28,11 @@ function hasUnsafeInteger(root) {
 }
 
 export function parseJsonLossless(text) {
-  const plain = JSON.parse(text);
+  // 剥掉 PowerShell 5.1 写文件带的 BOM（见 json-text.js）
+  const json = stripBom(text);
+  const plain = JSON.parse(json);
   if (typeof JSON.rawJSON !== "function" || !hasUnsafeInteger(plain)) return plain;
-  return JSON.parse(text, (key, value, context) =>
+  return JSON.parse(json, (key, value, context) =>
     // 顶层就是一个数字时不包：调用方拿到的应该是普通值
     key !== "" &&
     typeof value === "number" &&

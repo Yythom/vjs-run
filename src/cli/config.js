@@ -9,6 +9,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { DEFAULT_CONFIG } from "../config/defaults.js";
+import { stripBom } from "../mock/json-text.js";
 import { normalizeBackendBaseUrl } from "../url-utils.js";
 import { CliError } from "./util.js";
 
@@ -26,7 +27,7 @@ export function readRawConfig(configFile) {
   if (!fs.existsSync(configFile)) return {};
   let raw;
   try {
-    raw = JSON.parse(fs.readFileSync(configFile, "utf8"));
+    raw = JSON.parse(stripBom(fs.readFileSync(configFile, "utf8")));
   } catch (err) {
     throw new CliError(`config.json 不是合法 JSON：${configFile}\n  ${err.message}`);
   }

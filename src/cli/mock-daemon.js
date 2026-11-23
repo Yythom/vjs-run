@@ -45,16 +45,25 @@ export const NOT_RUNNING_EXIT_CODE = 3;
  */
 export function ownerLabel(running) {
   if (running.owner === "cli") {
-    return running.startedBy === "app" ? "vjtools app（后台进程）" : "命令行（vjtools mock start）";
+    if (running.startedBy === "app") return "vjtools app（后台进程）";
+    // serve 前台运行不写日志文件（identity 里 logFile 为 null），别标成 mock start
+    return running.logFile === null
+      ? "命令行（vjtools mock serve 前台运行）"
+      : "命令行（vjtools mock start）";
   }
   if (running.owner === "app") return "旧版 vjtools app（在 app 进程里运行）";
   if (running.owner === "other") return `另一个数据目录的 vjtools（${running.userDataDir}）`;
   return "未知来源（端口上有 mock，但没有运行记录，可能是旧版 vjtools app）";
 }
 
-/** 别的数据目录的 mock 怎么停：给出带 VJTOOLS_USER_DATA_DIR 的命令 */
+/** 别的数据目录的 mock 怎么停：给出当前平台能直接跑的命令 */
 export function otherDataDirHint(running) {
-  return `它属于另一个数据目录，请在那边操作：VJTOOLS_USER_DATA_DIR='${running.userDataDir}' vjtools mock stop`;
+  const dir = running.userDataDir;
+  const command =
+    process.platform === "win32"
+      ? `$env:VJTOOLS_USER_DATA_DIR='${dir}'; vjtools mock stop`
+      : `VJTOOLS_USER_DATA_DIR='${dir}' vjtools mock stop`;
+  return `它属于另一个数据目录，请在那边操作：${command}`;
 }
 
 // 同一个规则文件才是同一个数据目录（/tmp 与 /private/tmp 这类软链按真实路径比）
@@ -107,9 +116,14 @@ export function detectRunningMockLenient(paths) {
 }
 
 function portInUseMessage(port) {
+  // lsof 只有 macOS / Linux 有；Windows 上给 netstat（最后一列的 pid 再用 tasklist 查进程名）
+  const finder =
+    process.platform === "win32"
+      ? `netstat -ano | findstr :${port}`
+      : `lsof -nP -iTCP:${port} -sTCP:LISTEN`;
   return (
     `端口 ${port} 已被占用。\n` +
-    `  · 查看占用者：lsof -nP -iTCP:${port} -sTCP:LISTEN\n` +
+    `  · 查看占用者：${finder}\n` +
     "  · 或换个端口：vjtools mock config --port <端口>"
   );
 }

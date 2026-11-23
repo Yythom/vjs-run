@@ -32,6 +32,11 @@ test("没有大整数的文本：结果与 JSON.parse 完全相同，不带 rawJ
   }
 });
 
+test("UTF-8 BOM 前缀不影响解析（Windows PowerShell 5.1 写文件会带 BOM）", () => {
+  const text = `﻿{"id":1850123456789012345,"list":[1,2]}`;
+  assert.equal(JSON.stringify(parseJsonLossless(text)), `{"id":1850123456789012345,"list":[1,2]}`);
+});
+
 test("嵌套很深、没有大整数的 JSON 走快路径（带 reviver 时 V8 内部递归会爆栈，改动前也一样）", () => {
   const deep = `${"[".repeat(5000)}{"id":1}${"]".repeat(5000)}`;
   assert.throws(() => slowPath(deep), RangeError);
