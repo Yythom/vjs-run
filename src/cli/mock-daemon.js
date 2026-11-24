@@ -59,9 +59,11 @@ export function ownerLabel(running) {
 /** 别的数据目录的 mock 怎么停：给出当前平台能直接跑的命令 */
 export function otherDataDirHint(running) {
   const dir = running.userDataDir;
+  // PowerShell 的 $env: 对整个窗口生效（不像 POSIX 的 VAR=x cmd 只管这一条），
+  // 不清掉的话这个窗口里之后的 vjtools 命令都会悄悄操作那个数据目录
   const command =
     process.platform === "win32"
-      ? `$env:VJTOOLS_USER_DATA_DIR='${dir}'; vjtools mock stop`
+      ? `$env:VJTOOLS_USER_DATA_DIR='${dir}'; vjtools mock stop; Remove-Item Env:VJTOOLS_USER_DATA_DIR`
       : `VJTOOLS_USER_DATA_DIR='${dir}' vjtools mock stop`;
   return `它属于另一个数据目录，请在那边操作：${command}`;
 }
