@@ -11,6 +11,11 @@ const DEFAULT_APP_CONFIG = {
   mockVjToken: "",
   sidebarWidth: 248,
   watchedPorts: [3000, 3001, 5173, 3002],
+  rangeTest: {
+    provider: "magpie",
+    model: "commandcode/deepseek/deepseek-v4.1-flash-fast[1m]",
+    recordsDir: "~/test-records",
+  },
 };
 
 /**

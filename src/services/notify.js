@@ -28,3 +28,21 @@ export function notifyProcessCrash(name, message) {
     console.error("[notify]", err);
   }
 }
+
+/** 改动测试台：线程一轮结束（出好清单 / 跑完 / 失败 / 等回答）时提醒，点了把窗口唤到前台 */
+export function notifyRangeTest(title, body) {
+  if (!Notification.isSupported()) return;
+  try {
+    const notification = new Notification({ title, body });
+    notification.on("click", () => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win) return;
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    });
+    notification.show();
+  } catch (err) {
+    console.error("[notify]", err);
+  }
+}

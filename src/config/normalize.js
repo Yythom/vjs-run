@@ -115,5 +115,20 @@ export function normalizeConfig(raw = {}) {
     mockVjToken: String(raw.mockVjToken || "").trim(),
     sidebarWidth: normalizeSidebarWidth(raw.sidebarWidth),
     watchedPorts,
+    rangeTest: normalizeRangeTest(raw.rangeTest),
+  };
+}
+
+// 改动测试台设置：三项都是字符串，留空就回默认（provider 和 model 要成对才有意义）
+export function normalizeRangeTest(raw = {}) {
+  const def = DEFAULT_CONFIG.rangeTest;
+  const pick = (v, fallback) => String(v ?? "").trim() || fallback;
+  const provider = pick(raw?.provider, "");
+  const model = pick(raw?.model, "");
+  const paired = provider && model;
+  return {
+    provider: paired ? provider : def.provider,
+    model: paired ? model : def.model,
+    recordsDir: pick(raw?.recordsDir, def.recordsDir),
   };
 }

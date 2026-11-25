@@ -36,4 +36,12 @@ export const DEFAULT_CONFIG = {
 
   // 端口占用查看器默认监听的端口
   watchedPorts: [3000, 3001, 5173, 3002],
+
+  // 改动测试台：把 commit-range-test 派给 T3 Code 跑。provider / model 是 T3 里的
+  // provider 实例 id 和模型 slug；recordsDir 和 skill 的产物目录约定一致
+  rangeTest: {
+    provider: "magpie",
+    model: "commandcode/deepseek/deepseek-v4.1-flash-fast[1m]",
+    recordsDir: "~/test-records",
+  },
 };

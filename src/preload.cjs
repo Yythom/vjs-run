@@ -251,6 +251,45 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("mock-recording", handler);
   },
 
+  // ── 改动测试台（commit-range-test 派给 T3 Code 跑）──────────────────────────────
+
+  // 发起前的候选范围：{ repoPath, branch, head, ahead: { ref, base, count } | null, commits, fetchError }
+  rangeTestCandidates: (payload) => ipcRenderer.invoke("range-test-candidates", payload),
+  // 所有记录（~/test-records/<仓库>/<主题>/）：{ records, recordsDir }
+  rangeTestList: () => ipcRenderer.invoke("range-test-list"),
+  // 发起：{ repoKey, range: { kind, count?, from?, to? }, topic, provider?, model? } → { dir, threadId }
+  //（provider / model 不传就用「T3 设置」里的默认值）
+  rangeTestStart: (payload) => ipcRenderer.invoke("range-test-start", payload),
+  // 详情：{ dir } → { record, status, statusError, thread, threadError }
+  rangeTestDetail: (payload) => ipcRenderer.invoke("range-test-detail", payload),
+  // 改动块核对（慢，按需调）：{ dir } → { check }
+  rangeTestCheck: (payload) => ipcRenderer.invoke("range-test-check", payload),
+  // 确认点回复：{ dir, reply: { confirm, removals, edits, questions, groups, sites, note } }
+  rangeTestReply: (payload) => ipcRenderer.invoke("range-test-reply", payload),
+  // 开测之后的下一步：{ dir, kind: "continue" | "fix-evidence" | "check-offline" | "regress" | "new-thread", commits?, provider?, model? }
+  //（provider / model 只对 new-thread 有效：原线程的模型改不了）
+  rangeTestContinue: (payload) => ipcRenderer.invoke("range-test-continue", payload),
+  // 回归可选的修复提交：{ dir } → { testedHead, commits }
+  rangeTestFixCommits: (payload) => ipcRenderer.invoke("range-test-fix-commits", payload),
+  // 常用 dev 端口的占用情况：→ { ports: [{ port, pid, command, cwd }], note }
+  rangeTestPorts: () => ipcRenderer.invoke("range-test-ports"),
+  // commit-range-test 是否装好、带不带 --json：→ { installed, hasJson, path }
+  rangeTestSkill: () => ipcRenderer.invoke("range-test-skill"),
+  // T3 里能选的 provider 和模型：→ { providers: [{ id, driver, name, enabled, loadsClaudeSkills, models }], error, defaults }
+  rangeTestModels: () => ipcRenderer.invoke("range-test-models"),
+  // 在浏览器里打开 T3 线程
+  rangeTestOpenThread: (payload) => ipcRenderer.invoke("range-test-open-thread", payload),
+  // 读证据里引用的截图（只限产物目录内）：{ dir, path } → { dataUrl }
+  rangeTestAsset: (payload) => ipcRenderer.invoke("range-test-asset", payload),
+  // 在访达里定位一个文件：{ path }
+  rangeTestReveal: (payload) => ipcRenderer.invoke("range-test-reveal", payload),
+  // 产物文件或线程状态变了：{ dir, kind: "files" | "thread" | "thread-error", thread?, error? }
+  onRangeTestChanged: (callback) => {
+    const handler = (_, data) => callback(data);
+    ipcRenderer.on("range-test-changed", handler);
+    return () => ipcRenderer.removeListener("range-test-changed", handler);
+  },
+
   // ── 自动升级 ──────────────────────────────────────────────────────────────────
 
   // 手动检查更新

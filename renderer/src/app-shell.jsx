@@ -23,6 +23,9 @@ const EnvCheckPage = lazy(() => import("./pages/env-check-page"));
 const PortCheckerPage = lazy(() => import("./pages/port-checker-page"));
 const CleanupPage = lazy(() => import("./pages/cleanup-page"));
 const CodecPage = lazy(() => import("./pages/codec-page"));
+const RangeTestListPage = lazy(() => import("./pages/range-test/range-test-list-page"));
+const RunDetailPage = lazy(() => import("./pages/range-test/run-detail-page"));
+const NewRunModal = lazy(() => import("./pages/range-test/new-run-modal"));
 const RepoEditorModal = lazy(loadRepoEditorModal);
 const CleanModal = lazy(loadCleanModal);
 
@@ -41,6 +44,10 @@ function MainRoutes() {
       <Route path="/mock-config" element={<MockConfigPage />} />
       <Route path="/mock-history" element={<MockHistoryPage />} />
       <Route path="/swagger-convert" element={<SwaggerConvertPage />} />
+
+      {/* 改动测试台 */}
+      <Route path="/range-test" element={<RangeTestListPage />} />
+      <Route path="/range-test/run" element={<RunDetailPage />} />
 
       {/* 工具与配置页 */}
       <Route path="/settings" element={<SettingsPage />} />
@@ -67,6 +74,7 @@ function ModalRoutes() {
       <Route path="/repos/new" element={<RepoEditorModal />} />
       <Route path="/repos/:key/edit" element={<RepoEditorModal />} />
       <Route path="/repos/:key/clean" element={<CleanModal />} />
+      <Route path="/range-test/new" element={<NewRunModal />} />
       <Route path="*" element={null} />
     </Routes>
   );

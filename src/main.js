@@ -21,6 +21,7 @@ import { initStore } from "./config/store.js";
 import { ensureUserMockAssets } from "./mock/user-assets.js";
 import { registerContextMenu } from "./services/context-menu.js";
 import { createWindow } from "./services/window.js";
+import { stopRangeTestWatchers } from "./services/range-test/index.js";
 import { cliShimPath, writeCliShim } from "./services/cli-shim.js";
 import { attachIfRunning, detachMock } from "./mock/service.js";
 import { registerAllIpc } from "./ipc/index.js";
@@ -141,4 +142,6 @@ app.on("before-quit", () => {
   stopAllProcesses();
   // mock 后台进程不随 app 退出：AI / 终端可能还在用，下次打开 app 会自动接上
   detachMock();
+  // 改动测试台的文件监听和线程轮询；T3 里的线程不受影响，下次打开 app 会重新接上
+  stopRangeTestWatchers();
 });
